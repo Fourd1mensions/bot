@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
 
-project(cmake-template
+project(discord-bot
   VERSION 0.0.1
   LANGUAGES CXX
 )
@@ -25,10 +25,10 @@ include(Deps.cmake)
 SetupDependencies()
 
 set(MAIN_SOUCES
-  "src/main.cpp"
-  "src/requests.cpp"
-  "src/bot.cpp"
-  "src/osu.cpp"
+  src/main.cpp
+  src/requests.cpp
+  src/bot.cpp
+  src/osu.cpp
 )
 
 find_package(fmt REQUIRED)
