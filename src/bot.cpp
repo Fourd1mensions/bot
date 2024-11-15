@@ -286,7 +286,7 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
   }
   if (event.command.get_command_name() == "update_token") {
     auto invoker_id = event.command.usr.id.str();
-    if (invoker_id != "403958611367297024" || invoker_id != "249958340690575360") {
+    if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
       event.reply(dpp::message("<:FRICK:1241513672480653475>"));
       return;
     }
