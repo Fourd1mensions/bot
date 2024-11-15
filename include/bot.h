@@ -1,9 +1,11 @@
 #pragma once
 
-#include "requests.h"
-#include "osu.h"
+#include <tbb/tbb.h>
 
-#include "snowflake.h"
+#include <requests.h>
+#include <osu.h>
+
+#include <snowflake.h>
 #include <dpp/dpp.h>
 #include <dpp/unicode_emoji.h>
 #include <spdlog/spdlog.h>
