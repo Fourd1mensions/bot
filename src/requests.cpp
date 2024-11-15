@@ -29,15 +29,17 @@ std::string Request::read_config(const std::string_view key) {
 }
 
 bool Request::save_tokens() {
-  std::fstream file("config.json");
+  std::fstream file("config.json", std::ios::in);
   if (!file.is_open())
     return false;
   try {
     nlohmann::json config = nlohmann::json::parse(file);
+    file.close();
     config["AUTH_CODE"] = tokens.auth_code;
     config["ACCESS_TOKEN"] = tokens.access_token;
     config["REFRESH_TOKEN"] = tokens.refresh_token;
     config["EXPIRES_IN"] = tokens.expires_in;
+    file.open("config.json", std::ios::out | std::ios::trunc);
     file << config.dump(4);
     return true;
   } catch (json::exception e) {
