@@ -75,10 +75,31 @@ bool Request::set_tokens(const std::string_view grant_type) {
     tokens.expires_in = j.value("expires_in", 86399);
     save_tokens();
     fmt::print("get access_key success\n");
-    is_refresh_needed = false;
     return true;
   }
   fmt::print("get access_key failed\n");
+  return false;
+}
+
+bool Request::check_token() {
+  std::string test = get_user("peppy");
+  if (!test.empty()) {
+    spdlog::info("Test request is success");
+    return true;
+  }
+  spdlog::warn("Test request failed, trying to refresh token...");
+  if (set_tokens("refresh_token")) {
+    spdlog::info("Refresh token is success");
+    return true;
+  }
+  spdlog::warn("Refresh token is failed, trying to use auth code...");
+  if (set_tokens("authorization_code")) {
+    spdlog::info("Refresh token by code is success");
+    return true;
+  }
+  spdlog::error(
+      "Refresh token by code is failed. Please update authentification code and restart bot");
+  is_refresh_needed = true;
   return false;
 }
 
@@ -91,7 +112,11 @@ std::string Request::get_userid_v1(const std::string_view username) {
   return std::string(r.text.substr(pos, endpos - pos));
 }
 
-std::string Request::get_user(const std::string_view username) {
+std::string Request::get_user(const std::string_view username) const {
+  if (is_refresh_needed) {
+    spdlog::error("get_user failed, token is dead");
+    return "";
+  }
   cpr::Response r =
       cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/@{}/osu",
                                     username)},
@@ -102,12 +127,16 @@ std::string Request::get_user(const std::string_view username) {
     spdlog::info("get_user success");
     return r.text;
   }
-  spdlog::info("get_user fail");
+  spdlog::info("get_user failed, status: {}", r.status_code);
   return "";
 }
 
 std::string Request::get_user_score(const std::string_view beatmap,
-                                    const std::string_view user) {
+                                    const std::string_view user) const {
+  if (is_refresh_needed) {
+    spdlog::error("get_user_score failed, token is dead");
+    return "";
+  }
   cpr::Response r =
       cpr::Get(cpr::Url{fmt::format(
                    "https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}",
@@ -123,7 +152,11 @@ std::string Request::get_user_score(const std::string_view beatmap,
   return "";
 }
 
-std::string Request::get_beatmap(const std::string_view beatmap) {
+std::string Request::get_beatmap(const std::string_view beatmap) const {
+  if (is_refresh_needed) {
+    spdlog::error("get_beatmap failed, token is dead");
+    return "";
+  }
   cpr::Response r = cpr::Get(
       cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap)},
       cpr::Header{{"Authorization", "Bearer " + tokens.access_token},
@@ -133,6 +166,6 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
     spdlog::info("get_beatmap success");
     return r.text;
   }
-  spdlog::info("get_beatmap failed");
+  spdlog::info("get_beatmap failed, status: {}", r.status_code);
   return "";
 }

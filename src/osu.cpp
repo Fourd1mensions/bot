@@ -29,7 +29,7 @@ void Score::from_json (const json& j) {
         username = score_j.at("user").value("username", "");     
         from_json_mods(score_j);
     } catch (const json::exception& e) {
-        spdlog::error("Failed to parse score. {}", e.what());
+        spdlog::error("Failed to parse score: {}", e.what());
     }
 }
 
@@ -55,7 +55,7 @@ std::string Score::to_string(const uint32_t beatmap_combo) const {
     return result;
 }
 
-std::string Score::get_header() {
+std::string Score::get_header() const{
     
     std::string result = fmt::format(
         "{} `{:.0f}pp` +{}", 
@@ -64,7 +64,7 @@ std::string Score::get_header() {
     return result;
 }
 
-std::string Score::get_body(const uint32_t beatmap_combo) {
+std::string Score::get_body(const uint32_t beatmap_combo) const{
     auto ISO8601_to_UNIX = [](const std::string& datetime) {
         std::tm tm = {};
         std::istringstream ss(datetime);
@@ -107,9 +107,8 @@ void Beatmap::from_json (const json& j) {
         beatmap_url = j.at("url").get<std::string>();
         image_url = j.at("beatmapset").at("covers").at("list").get<std::string>();
     } catch (json::exception e) {
-        spdlog::warn("Failed to parse beatmap. {}", e.what());
+        spdlog::error("Failed to parse beatmap: {}", e.what());
     }
-
 }
 
 std::string Beatmap::to_string () const {
@@ -129,4 +128,22 @@ std::string Beatmap::get_image_url() const {
 
 uint32_t Beatmap::get_max_combo() const {
     return max_combo;
+}
+
+Score::Score(const std::string& json_str) {
+    try {
+        json json = json::parse(json_str);
+        from_json(json);
+    } catch (const json::exception& e) {
+        spdlog::error("Failed to parse score: {}", e.what()); 
+    }
+}
+
+Beatmap::Beatmap(const std::string& json_str) {
+    try {
+        json json = json::parse(json_str);
+        from_json(json);
+    } catch (const json::exception& e) {
+        spdlog::error("Failed to parse beatmap: {}", e.what()); 
+    }
 }

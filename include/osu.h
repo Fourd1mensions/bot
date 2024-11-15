@@ -1,12 +1,8 @@
 #pragma once
 
-#include "nlohmann/json.hpp"
-#include <cstdint>
-#include <string>
+#include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
-
-
 
 class Score {
 private:
@@ -27,26 +23,21 @@ private:
 
 public:
     std::string to_string(const uint32_t beatmap_combo) const;
-    std::string get_header();
-    std::string get_body(const uint32_t beatmap_combo);
+    std::string get_header() const;
+    std::string get_body(const uint32_t beatmap_combo) const;
     std::string get_created_at() const;
-
     inline auto get_pp() const {
         return pp;
     }
-
     inline auto get_total_score() const {
         return total_score;
     }
-
+    
     Score(const json& json) {
         from_json(json);
     }
 
-    Score(const std::string& json_str) {
-        json json = json::parse(json_str);
-        from_json(json);
-    }
+    Score(const std::string& json_str);
 };
 
 class Beatmap {
@@ -74,8 +65,5 @@ public:
         from_json(json);
     }
 
-    Beatmap(const std::string& json_str) {
-        json json = json::parse(json_str);
-        from_json(json);
-    }
+    Beatmap(const std::string& json_str);
 };

@@ -11,23 +11,10 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
 #include <regex>
 #include <thread>
 #include <type_traits>
-
-// test
-std::string page_content(const std::vector<std::string> &v, size_t page,
-                         size_t items_per_page = 5) {
-  std::stringstream ss;
-  size_t start = page * items_per_page;
-  size_t end = std::min((size_t)v.size(), start + items_per_page);
-  for (size_t i = start; i < end; ++i) {
-    ss << v[i] << "\n";
-  }
-  return ss.str();
-}
 
 template <typename T> T Random::get_real(T min, T max) {
   static_assert(std::is_floating_point<T>::value,
@@ -47,30 +34,16 @@ bool Random::get_bool() {
   return distr(_gen);
 }
 
-void Temp_data::delayed_del(const dpp::snowflake &msg_id) {
-  std::jthread([this, msg_id]() {
-    std::this_thread::sleep_for(std::chrono::seconds(30));
-    map.erase(msg_id);
-  }).detach();
-}
-
-void Temp_data::add_temp(const dpp::snowflake &msg_id, const Beatmap &beatmap,
-                         std::vector<Score> &scores) {
-  Data data(beatmap, scores);
-  map[msg_id] = data;
-  delayed_del(msg_id);
-}
-
-void Bot::write_cbid_map(const std::string &msg,
+void Bot::update_chat_map(const std::string &msg,
                          const std::string &channel_id) {
   std::regex url_reg(
       R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
   std::smatch m;
   if (std::regex_search(msg, m, url_reg) && m.size() > 2)
-    channel_beatmapid_map[channel_id] = m.str(2);
+    chat_map[channel_id] = m.str(2);
 }
 
-void Bot::to_json_un_map() {
+void Bot::write_map_json() {
   std::lock_guard<std::mutex> lock(mutex);
   json j(disid_userid_map);
   std::ofstream file("map.json");
@@ -80,7 +53,7 @@ void Bot::to_json_un_map() {
   }
 }
 
-auto Bot::from_json_un_map(const dpp::snowflake &guild_id) {
+auto Bot::read_map_json(const dpp::snowflake &guild_id) {
   std::unordered_map<std::string, std::string> result;
   std::ifstream file("map.json");
   if (!file.is_open()) {
@@ -102,38 +75,13 @@ auto Bot::from_json_un_map(const dpp::snowflake &guild_id) {
 }
 
 void Bot::handle_button_click(const dpp::button_click_t &event) {
-  dpp::snowflake user_id = event.command.usr.id;
-  size_t current_page = user_page_map[user_id];
-  size_t total_pages = temp.map[event.command.message_id].scores.size();
-  if (event.custom_id == "next_page" && current_page < total_pages - 1) {
-    current_page++;
-  } else if (event.custom_id == "prev_page" && current_page > 0) {
-    current_page--;
-  }
-  auto back_button = dpp::component()
-                         .set_type(dpp::cot_button)
-                         .set_emoji(dpp::unicode_emoji::arrow_left)
-                         .set_style(dpp::cos_secondary)
-                         .set_id("prev_page")
-                         .set_disabled(current_page == 0);
-  auto next_button = dpp::component()
-                         .set_type(dpp::cot_button)
-                         .set_emoji(dpp::unicode_emoji::arrow_right)
-                         .set_style(dpp::cos_secondary)
-                         .set_id("next_page")
-                         .set_disabled(current_page == total_pages - 1);
-  dpp::message m = dpp::message(event.command.channel_id,
-                                "**Свойства молочка пачули**\n\n" +
-                                    page_content(content, current_page, 1));
-  m.add_component(
-      dpp::component().add_component(back_button).add_component(next_button));
-  event.reply(dpp::ir_update_message, m);
+
 }
 
 void Bot::create_lb_message(const dpp::message_create_t &event) {
   std::string beatmap_id;
-  auto beatmap_it = channel_beatmapid_map.find(event.msg.channel_id.str());
-  if (beatmap_it == channel_beatmapid_map.end()) {
+  auto beatmap_it = chat_map.find(event.msg.channel_id.str());
+  if (beatmap_it == chat_map.end()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and "
                              "use the command again."));
     return;
@@ -141,8 +89,9 @@ void Bot::create_lb_message(const dpp::message_create_t &event) {
   beatmap_id = beatmap_it->second;
   std::string response_beatmap = request.get_beatmap(beatmap_id);
   if (response_beatmap.empty()) {
-    spdlog::warn("Unable to send request");
+    spdlog::error("Unable to send request");
     event.reply(dpp::message("Peppy didn't respond"));
+    return;
   }
   Beatmap beatmap(response_beatmap);
   std::vector<Score> scores;
@@ -156,7 +105,7 @@ void Bot::create_lb_message(const dpp::message_create_t &event) {
   // force tbb parallelization ???
   tbb::parallel_for_each(std::begin(disid_userid_map),
                          std::end(disid_userid_map), [&](const auto &pair) {
-                           spdlog::info("for_each");
+                           //spdlog::info("for_each");
                            const auto &[dis_id, user_id] = pair;
                            std::string score_j =
                                request.get_user_score(beatmap_id, user_id);
@@ -198,68 +147,13 @@ void Bot::create_lb_message(const dpp::message_create_t &event) {
 
 void Bot::handle_message(const dpp::message_create_t &event) {
   fmt::print("{}: {}\n", event.msg.author.username, event.msg.content);
-  write_cbid_map(event.raw_event, event.msg.channel_id.str());
+  update_chat_map(event.raw_event, event.msg.channel_id.str());
   if (event.msg.content.find("!lb") == 0) {
     std::jthread(&Bot::create_lb_message, this, std::move(event)).detach();
   }
 }
 
 void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
-  if (event.command.get_command_name() == "pages") {
-    size_t total_pages = content.size();
-    dpp::snowflake user_id = event.command.usr.id;
-    user_page_map[user_id] = 0;
-    auto back_button = dpp::component()
-                           .set_type(dpp::cot_button)
-                           .set_emoji(dpp::unicode_emoji::arrow_left)
-                           .set_style(dpp::cos_secondary)
-                           .set_id("prev_page")
-                           .set_disabled(true);
-    auto next_button = dpp::component()
-                           .set_type(dpp::cot_button)
-                           .set_label("")
-                           .set_emoji(dpp::unicode_emoji::arrow_right)
-                           .set_style(dpp::cos_secondary)
-                           .set_id("next_page")
-                           .set_disabled(total_pages <= 1);
-    dpp::message m(event.command.channel_id, "**Свойства молочка пачули**\n\n" +
-                                                 page_content(content, 0, 1));
-    m.add_component(
-        dpp::component().add_component(back_button).add_component(next_button));
-    event.reply(m);
-  }
-  if (event.command.get_command_name() == "patchouli") {
-
-    dpp::embed embed =
-        dpp::embed()
-            .set_color(dpp::colors::cream)
-            .set_title("Основные свойства молочка пачули")
-            .add_field("Увлажнение и питание",
-                       "Молочко пачули отлично увлажняет и питает кожу, "
-                       "благодаря чему она становится более мягкой, эластичной "
-                       "и здоровой на вид.")
-            .add_field("Антисептические и антибактериальные свойства",
-                       "Эфирное масло пачули обладает природными "
-                       "антисептическими и антибактериальными свойствами, что "
-                       "помогает в борьбе с кожными инфекциями и воспалениями.")
-            .add_field("Антивозрастное действие",
-                       "Благодаря своим регенерирующим и антиоксидантным "
-                       "свойствам, молочко пачули способствует замедлению "
-                       "процессов старения кожи, способствует разглаживанию "
-                       "морщин и повышению упругости кожи.")
-            .add_field("Восстановление и регенерация",
-                       "Молочко пачули помогает в восстановлении поврежденной "
-                       "кожи, способствует заживлению мелких порезов и ссадин.")
-            .add_field("Успокаивающее воздействие",
-                       "Аромат пачули обладает успокаивающими и расслабляющими "
-                       "свойствами, что может снизить уровень стресса и "
-                       "улучшить общее самочувствие.")
-            .set_timestamp(time(0));
-
-    dpp::message msg(event.command.channel_id, embed);
-
-    event.reply(msg);
-  }
   if (event.command.get_command_name() == "гандон") {
     float_t f = rand.get_real(0.0f, 100.0f);
     dpp::embed embed =
@@ -312,7 +206,7 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
     } catch (json::exception e) {
     }
     disid_userid_map[key] = fmt::to_string(j.value("id", 0));
-    to_json_un_map();
+    write_map_json();
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
   if (event.command.get_command_name() == "score") {
@@ -326,8 +220,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
     user = user_it->second;
     std::string beatmap_id;
     auto beatmap_it =
-        channel_beatmapid_map.find(event.command.channel_id.str());
-    if (beatmap_it == channel_beatmapid_map.end()) {
+        chat_map.find(event.command.channel_id.str());
+    if (beatmap_it == chat_map.end()) {
       event.reply(dpp::message("Can't find the map. Please send the map link "
                                "and use the command again."));
       return;
@@ -356,8 +250,6 @@ void Bot::ready_event(const dpp::ready_t &event) {
   if (dpp::run_once<struct register_bot_commands>()) {
     // bot.global_bulk_command_delete();
     bot.global_command_create(
-        dpp::slashcommand("patchouli", "Information", bot.me.id));
-    bot.global_command_create(
         dpp::slashcommand("гандон", "Проверка", bot.me.id));
     bot.global_command_create(dpp::slashcommand("pages", "test", bot.me.id));
     bot.global_command_create(
@@ -371,14 +263,11 @@ void Bot::ready_event(const dpp::ready_t &event) {
             .add_option(dpp::command_option(dpp::co_string, "username",
                                             "Your osu! profile username",
                                             true)));
-    bot.global_command_create(
-        dpp::slashcommand("score", "Displays your score", bot.me.id));
-    // bot.message_create(dpp::message(1217055390261317662, "Hello, world!"));
+    /*bot.global_command_create(
+        dpp::slashcommand("score", "Displays your score", bot.me.id));*/
   }
-  disid_userid_map = from_json_un_map(1030424871173361704);
+  disid_userid_map = read_map_json(1030424871173361704);
 }
-
-void Bot::start() { bot.start(dpp::st_wait); }
 
 Bot::Bot(const std::string &token) : bot(token) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
@@ -391,4 +280,6 @@ Bot::Bot(const std::string &token) : bot(token) {
     std::jthread(&Bot::handle_slashcommand, this, std::move(event)).detach();
   });
   bot.on_ready([this](const dpp::ready_t &event) { ready_event(event); });
+
+  bot.start(dpp::st_wait);
 }
