@@ -40,7 +40,7 @@ function(SetupDependencies)
     "libcpr/cpr"
     OPTIONS
     "CPR_BUILD_TESTS OFF"
-    "CPR_FORCE_USE_SYSTEM_CURL ON"
+    "CPR_USE_SYSTEM_CURL ON"
   )
 endif()
 
