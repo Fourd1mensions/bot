@@ -35,7 +35,7 @@ bool Random::get_bool() {
 }
 
 void Bot::update_chat_map(const std::string &msg,
-                         const std::string &channel_id) {
+                          const std::string &channel_id) {
   std::regex url_reg(
       R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
   std::smatch m;
@@ -74,9 +74,7 @@ auto Bot::read_map_json(const dpp::snowflake &guild_id) {
   return result;
 }
 
-void Bot::handle_button_click(const dpp::button_click_t &event) {
-
-}
+void Bot::handle_button_click(const dpp::button_click_t &event) {}
 
 void Bot::create_lb_message(const dpp::message_create_t &event) {
   std::string beatmap_id;
@@ -105,7 +103,7 @@ void Bot::create_lb_message(const dpp::message_create_t &event) {
   // force tbb parallelization ???
   tbb::parallel_for_each(std::begin(disid_userid_map),
                          std::end(disid_userid_map), [&](const auto &pair) {
-                           //spdlog::info("for_each");
+                           // spdlog::info("for_each");
                            const auto &[dis_id, user_id] = pair;
                            std::string score_j =
                                request.get_user_score(beatmap_id, user_id);
@@ -180,7 +178,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
   }
   if (event.command.get_command_name() == "update_token") {
     auto invoker_id = event.command.usr.id.str();
-    if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
+    if (invoker_id != "403958611367297024" &&
+        invoker_id != "249958340690575360") {
       event.reply(dpp::message("<:FRICK:1241513672480653475>"));
       return;
     }
@@ -219,8 +218,7 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
     }
     user = user_it->second;
     std::string beatmap_id;
-    auto beatmap_it =
-        chat_map.find(event.command.channel_id.str());
+    auto beatmap_it = chat_map.find(event.command.channel_id.str());
     if (beatmap_it == chat_map.end()) {
       event.reply(dpp::message("Can't find the map. Please send the map link "
                                "and use the command again."));
@@ -246,9 +244,11 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t &event) {
   }
 }
 
-void Bot::ready_event(const dpp::ready_t &event) {
+void Bot::ready_event(const dpp::ready_t &event, bool delete_commands) {
   if (dpp::run_once<struct register_bot_commands>()) {
-    // bot.global_bulk_command_delete();
+    if (delete_commands)
+      bot.global_bulk_command_delete();
+
     bot.global_command_create(
         dpp::slashcommand("гандон", "Проверка", bot.me.id));
     bot.global_command_create(dpp::slashcommand("pages", "test", bot.me.id));
@@ -269,7 +269,7 @@ void Bot::ready_event(const dpp::ready_t &event) {
   disid_userid_map = read_map_json(1030424871173361704);
 }
 
-Bot::Bot(const std::string &token) : bot(token) {
+Bot::Bot(const std::string &token, bool delete_commands) : bot(token) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
   bot.on_log(dpp::utility::cout_logger());
   bot.on_button_click(
@@ -279,7 +279,9 @@ Bot::Bot(const std::string &token) : bot(token) {
   bot.on_slashcommand([this](const dpp::slashcommand_t &event) {
     std::jthread(&Bot::handle_slashcommand, this, std::move(event)).detach();
   });
-  bot.on_ready([this](const dpp::ready_t &event) { ready_event(event); });
+  bot.on_ready([this, delete_commands](const dpp::ready_t &event) {
+    ready_event(event, delete_commands);
+  });
 
   bot.start(dpp::st_wait);
 }

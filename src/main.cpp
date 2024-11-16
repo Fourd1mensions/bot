@@ -1,12 +1,18 @@
-#include <tbb/tbb.h>
 #include <bot.h>
 #include <requests.h>
+#include <tbb/tbb.h>
 
-int main() {
-    std::locale::global(std::locale("en_US.UTF-8"));
+int main(const int argc, const char **argv) {
+  std::locale::global(std::locale("en_US.UTF-8"));
 
-    std::string key = Request::read_config("DISCORD_TOKEN"); 
-    Bot bot(key);
+  bool delete_commands = false;
+  for (const std::string_view param : std::views::counted(argv, argc)) {
+    if (param == "--delete")
+      delete_commands = true;
+  }
 
-    return EXIT_SUCCESS;
+  std::string key = Request::read_config("DISCORD_TOKEN");
+  Bot bot(key, delete_commands);
+
+  return EXIT_SUCCESS;
 }

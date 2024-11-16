@@ -1,8 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <string>
 #include <thread>
-#include <chrono>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -23,10 +23,11 @@ private:
   bool is_refresh_needed = false;
 
   bool save_tokens();
+
 public:
   static std::string read_config(const std::string_view key);
   // "authorization_code" or "refresh_token"
-  bool set_tokens(const std::string_view grant_type); 
+  bool set_tokens(const std::string_view grant_type);
   bool check_token();
 
   std::string get_user(const std::string_view username) const;
@@ -35,7 +36,7 @@ public:
   std::string get_userid_v1(const std::string_view username);
   std::string get_beatmap(const std::string_view beatmap) const;
 
-  Request() { 
+  Request() {
     tokens.api_v1_key = read_config("API_V1_KEY");
     tokens.client_id = read_config("CLIENT_ID");
     tokens.client_secret = read_config("CLIENT_SECRET");
@@ -44,11 +45,11 @@ public:
     tokens.refresh_token = read_config("REFRESH_TOKEN");
 
     std::jthread([&]() {
-      while(true) {
-        if(!check_token()) break;
+      while (true) {
+        if (!check_token())
+          break;
         std::this_thread::sleep_for(std::chrono::seconds(300));
       }
     }).detach();
-
   }
 };

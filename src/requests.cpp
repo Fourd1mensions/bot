@@ -97,8 +97,8 @@ bool Request::check_token() {
     spdlog::info("Refresh token by code is success");
     return true;
   }
-  spdlog::error(
-      "Refresh token by code is failed. Please update authentification code and restart bot");
+  spdlog::error("Refresh token by code is failed. Please update "
+                "authentification code and restart bot");
   is_refresh_needed = true;
   return false;
 }
