@@ -3,11 +3,11 @@
 #include "fmt/format.h"
 #include "spdlog/spdlog.h"
 
-void Score::from_json(const json &j) {
-  auto from_json_mods = [this](const json &j) {
+void Score::from_json(const json& j) {
+  auto from_json_mods = [this](const json& j) {
     if (j.contains("mods") && j["mods"].is_array()) {
-      const json &mods_j = j.at("mods");
-      for (const auto &mod : mods_j) {
+      const json& mods_j = j.at("mods");
+      for (const auto& mod : mods_j) {
         mods += mod.get<std::string>();
       }
     }
@@ -15,22 +15,20 @@ void Score::from_json(const json &j) {
       mods = "NM";
   };
   try {
-    const json &score_j = j.at("score");
-    total_score = score_j.value("score", 0);
-    rank = score_j.value("rank", "");
-    accuracy = score_j.value("accuracy", 0.0);
-    created_at = score_j.value("created_at", "");
-    max_combo = score_j.value("max_combo", 0);
+    const json& score_j = j.at("score");
+    total_score         = score_j.value("score", 0);
+    rank                = score_j.value("rank", "");
+    accuracy            = score_j.value("accuracy", 0.0);
+    created_at          = score_j.value("created_at", "");
+    max_combo           = score_j.value("max_combo", 0);
     score_j.at("pp").is_null() ? pp = 0 : pp = score_j.value("pp", 0.0);
     count_miss = score_j.at("statistics").value("count_miss", 0);
-    count_50 = score_j.at("statistics").value("count_50", 0);
-    count_100 = score_j.at("statistics").value("count_100", 0);
-    count_300 = score_j.at("statistics").value("count_300", 0);
-    username = score_j.at("user").value("username", "");
+    count_50   = score_j.at("statistics").value("count_50", 0);
+    count_100  = score_j.at("statistics").value("count_100", 0);
+    count_300  = score_j.at("statistics").value("count_300", 0);
+    username   = score_j.at("user").value("username", "");
     from_json_mods(score_j);
-  } catch (const json::exception &e) {
-    spdlog::error("Failed to parse score: {}", e.what());
-  }
+  } catch (const json::exception& e) { spdlog::error("Failed to parse score: {}", e.what()); }
 }
 
 std::string Score::to_string(const uint32_t beatmap_combo) const {
@@ -55,11 +53,11 @@ std::string Score::to_string(const uint32_t beatmap_combo) const {
   else if (rank == "XH")
     emoji_id = "<:RankingSSH:1304449533006057544>";
 
-  std::string result = fmt::format(
-      "**{}  •  {:.2f}pp  •  {} ({:.2f}%)  +{}**\n{:L}  **•**  x{}/{}  **•**  "
-      "[{}/{}/{}/{}]",
-      username, pp, emoji_id, accuracy * 100, mods, total_score, max_combo,
-      beatmap_combo, count_300, count_100, count_50, count_miss);
+  std::string result =
+      fmt::format("**{}  •  {:.2f}pp  •  {} ({:.2f}%)  +{}**\n{:L}  **•**  x{}/{}  **•**  "
+                  "[{}/{}/{}/{}]",
+                  username, pp, emoji_id, accuracy * 100, mods, total_score, max_combo,
+                  beatmap_combo, count_300, count_100, count_50, count_miss);
   return result;
 }
 
@@ -70,8 +68,8 @@ std::string Score::get_header() const {
 }
 
 std::string Score::get_body(const uint32_t beatmap_combo) const {
-  auto ISO8601_to_UNIX = [](const std::string &datetime) {
-    std::tm tm = {};
+  auto ISO8601_to_UNIX = [](const std::string& datetime) {
+    std::tm            tm = {};
     std::istringstream ss(datetime);
     ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
     return std::mktime(&tm) - timezone;
@@ -100,54 +98,54 @@ std::string Score::get_body(const uint32_t beatmap_combo) const {
 
   return std::string(fmt::format("**▸**{}({:.2f}%) • {:L} • **x{}/{}** • "
                                  "[{}/{}/{}/{}]\n**▸** Score set {}",
-                                 emoji_id, accuracy * 100, total_score,
-                                 max_combo, beatmap_combo, count_300, count_100,
-                                 count_50, count_miss, time));
+                                 emoji_id, accuracy * 100, total_score, max_combo, beatmap_combo,
+                                 count_300, count_100, count_50, count_miss, time));
 }
 
-std::string Score::get_created_at() const { return created_at; }
+std::string Score::get_created_at() const {
+  return created_at;
+}
 
-void Beatmap::from_json(const json &j) {
+void Beatmap::from_json(const json& j) {
   try {
-    beatmap_id = j.at("id").get<int>();
-    beatmapset_id = j.at("beatmapset_id").get<int>();
+    beatmap_id        = j.at("id").get<int>();
+    beatmapset_id     = j.at("beatmapset_id").get<int>();
     difficulty_rating = j.at("difficulty_rating").get<double>();
-    max_combo = j.at("max_combo").get<int>();
-    artist = j.at("beatmapset").at("artist").get<std::string>();
-    title = j.at("beatmapset").at("title").get<std::string>();
-    version = j.at("version").get<std::string>();
-    beatmap_url = j.at("url").get<std::string>();
-    image_url = j.at("beatmapset").at("covers").at("list").get<std::string>();
-  } catch (json::exception e) {
-    spdlog::error("Failed to parse beatmap: {}", e.what());
-  }
+    max_combo         = j.at("max_combo").get<int>();
+    artist            = j.at("beatmapset").at("artist").get<std::string>();
+    title             = j.at("beatmapset").at("title").get<std::string>();
+    version           = j.at("version").get<std::string>();
+    beatmap_url       = j.at("url").get<std::string>();
+    image_url         = j.at("beatmapset").at("covers").at("list").get<std::string>();
+  } catch (json::exception e) { spdlog::error("Failed to parse beatmap: {}", e.what()); }
 }
 
 std::string Beatmap::to_string() const {
-  return fmt::format("{} - {} [{}] {}★", artist, title, version,
-                     difficulty_rating);
+  return fmt::format("{} - {} [{}] {}★", artist, title, version, difficulty_rating);
 }
 
-std::string Beatmap::get_beatmap_url() const { return beatmap_url; }
+std::string Beatmap::get_beatmap_url() const {
+  return beatmap_url;
+}
 
-std::string Beatmap::get_image_url() const { return image_url; }
+std::string Beatmap::get_image_url() const {
+  return image_url;
+}
 
-uint32_t Beatmap::get_max_combo() const { return max_combo; }
+uint32_t Beatmap::get_max_combo() const {
+  return max_combo;
+}
 
-Score::Score(const std::string &json_str) {
+Score::Score(const std::string& json_str) {
   try {
     json json = json::parse(json_str);
     from_json(json);
-  } catch (const json::exception &e) {
-    spdlog::error("Failed to parse score: {}", e.what());
-  }
+  } catch (const json::exception& e) { spdlog::error("Failed to parse score: {}", e.what()); }
 }
 
-Beatmap::Beatmap(const std::string &json_str) {
+Beatmap::Beatmap(const std::string& json_str) {
   try {
     json json = json::parse(json_str);
     from_json(json);
-  } catch (const json::exception &e) {
-    spdlog::error("Failed to parse beatmap: {}", e.what());
-  }
+  } catch (const json::exception& e) { spdlog::error("Failed to parse beatmap: {}", e.what()); }
 }

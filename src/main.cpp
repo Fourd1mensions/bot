@@ -2,7 +2,7 @@
 #include <requests.h>
 #include <tbb/tbb.h>
 
-int main(const int argc, const char **argv) {
+int main(const int argc, const char** argv) {
   std::locale::global(std::locale("en_US.UTF-8"));
 
   bool delete_commands = false;
@@ -12,7 +12,7 @@ int main(const int argc, const char **argv) {
   }
 
   std::string key = Request::read_config("DISCORD_TOKEN");
-  Bot bot(key, delete_commands);
+  Bot         bot(key, delete_commands);
 
   return EXIT_SUCCESS;
 }
