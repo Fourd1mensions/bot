@@ -6,5 +6,6 @@
   "AUTH_CODE": "",
   "ACCESS_TOKEN": "",
   "EXPIRES_IN": "",
-  "REFRESH_TOKEN": ""
+  "REFRESH_TOKEN": "",
+  "REDIRECT_URI": ""
 }
