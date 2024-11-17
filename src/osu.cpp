@@ -1,7 +1,7 @@
-#include "osu.h"
+#include <osu.h>
 
-#include "fmt/format.h"
-#include "spdlog/spdlog.h"
+#include <fmt/format.h>
+#include <spdlog/spdlog.h>
 
 void Score::from_json(const json& j) {
   auto from_json_mods = [this](const json& j) {

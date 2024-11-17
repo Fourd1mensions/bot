@@ -2,17 +2,18 @@
 
 #include <tbb/tbb.h>
 
+#include <random>
+#include <unordered_map>
+
 #include <osu.h>
 #include <requests.h>
 
 #include <dpp/dpp.h>
 #include <dpp/unicode_emoji.h>
+#include <dpp/snowflake.h>
 #include <fmt/core.h>
-#include <snowflake.h>
 #include <spdlog/spdlog.h>
 
-#include <random>
-#include <unordered_map>
 
 class Random {
 private:

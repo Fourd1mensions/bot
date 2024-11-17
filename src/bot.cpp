@@ -1,12 +1,11 @@
 #include <bot.h>
 
-#include <colors.h>
+#include <dpp/colors.h>
 #include <dpp/cluster.h>
 #include <exception.h>
 #include <fmt/base.h>
 #include <fmt/format.h>
-#include <message.h>
-#include <requests.h>
+#include <dpp/message.h>
 #include <snowflake.h>
 #include <spdlog/spdlog.h>
 
