@@ -1,5 +1,4 @@
 #include <bot.h>
-#include <oneapi/tbb/global_control.h>
 #include <requests.h>
 #include <tbb/tbb.h>
 
