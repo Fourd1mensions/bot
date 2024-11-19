@@ -14,7 +14,6 @@
 #include <fmt/core.h>
 #include <spdlog/spdlog.h>
 
-
 class Random {
 private:
   std::random_device _rd;
@@ -32,10 +31,11 @@ public:
 
 class Bot {
 private:
-  dpp::cluster bot;
-  Random       rand;
-  Request      request;
-  std::mutex   mutex;
+  dpp::cluster    bot;
+  Random          rand;
+  Request         request;
+  std::mutex      mutex;
+  tbb::task_arena arena;
 
   // Contains channel_id: last_beatmap_id
   std::unordered_map<std::string, std::string> chat_map;

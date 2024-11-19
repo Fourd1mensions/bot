@@ -98,17 +98,19 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   }*/
   std::mutex m;
   // force tbb parallelization ???
-  tbb::parallel_for_each(std::begin(disid_userid_map), std::end(disid_userid_map),
-                         [&](const auto& pair) {
-                           // spdlog::info("for_each");
-                           const auto& [dis_id, user_id] = pair;
-                           std::string score_j = request.get_user_score(beatmap_id, user_id);
-                           if (!score_j.empty()) {
-                             Score                       score(score_j);
-                             std::lock_guard<std::mutex> lock(m);
-                             scores.push_back(std::move(score));
-                           }
-                         });
+  arena.execute([&]() {
+    tbb::parallel_for_each(std::begin(disid_userid_map), std::end(disid_userid_map),
+                           [&](const auto& pair) {
+                             // spdlog::info("for_each");
+                             const auto& [dis_id, user_id] = pair;
+                             std::string score_j = request.get_user_score(beatmap_id, user_id);
+                             if (!score_j.empty()) {
+                               Score                       score(score_j);
+                               std::lock_guard<std::mutex> lock(m);
+                               scores.push_back(std::move(score));
+                             }
+                           });
+  });
   if (scores.empty()) {
     event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
     return;
@@ -253,7 +255,7 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
   disid_userid_map = read_map_json(1030424871173361704);
 }
 
-Bot::Bot(const std::string& token, bool delete_commands) : bot(token) {
+Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
   bot.on_log(dpp::utility::cout_logger());
   bot.on_button_click([this](const dpp::button_click_t& event) { handle_button_click(event); });
