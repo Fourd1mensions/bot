@@ -35,10 +35,10 @@ bool Request::save_config() {
   try {
     nlohmann::json config = nlohmann::json::parse(file);
     file.close();
-    config["AUTH_CODE"] = this->config.auth_code;
-    config["ACCESS_TOKEN"] = this->config.access_token;
+    config["AUTH_CODE"]     = this->config.auth_code;
+    config["ACCESS_TOKEN"]  = this->config.access_token;
     config["REFRESH_TOKEN"] = this->config.refresh_token;
-    config["EXPIRES_IN"] = this->config.expires_in;
+    config["EXPIRES_IN"]    = this->config.expires_in;
     file.open("config.json", std::ios::out | std::ios::trunc);
     file << config.dump(4);
     return true;
@@ -63,16 +63,15 @@ bool Request::set_tokens(const std::string_view grant_type) {
                            {"refresh_token", config.refresh_token},
                            {"redirect_uri", config.redirect_uri}};
   }
-  cpr::Response r = cpr::Post(
-      cpr::Url{"https://osu.ppy.sh/oauth/token"},
-      cpr::Header{{"Accept", "application/json"},
-                  {"Content-Type", "application/x-www-form-urlencoded"}},
-      payload);
+  cpr::Response r = cpr::Post(cpr::Url{"https://osu.ppy.sh/oauth/token"},
+                              cpr::Header{{"Accept", "application/json"},
+                                          {"Content-Type", "application/x-www-form-urlencoded"}},
+                              payload);
   if (r.status_code == 200) {
-    auto j = json::parse(r.text);
-    config.access_token = j.value("access_token", "");
+    auto j               = json::parse(r.text);
+    config.access_token  = j.value("access_token", "");
     config.refresh_token = j.value("refresh_token", "");
-    config.expires_in = j.value("expires_in", 86399);
+    config.expires_in    = j.value("expires_in", 86399);
     save_config();
     fmt::print("get access_key success\n");
     return true;
@@ -104,11 +103,10 @@ bool Request::check_token() {
 }
 
 std::string Request::get_userid_v1(const std::string_view username) {
-  cpr::Response r = cpr::Get(
-      cpr::Url{"http://osu.ppy.sh/api/get_user"},
-      cpr::Parameters{{"k", config.api_v1_key}, {"u", username.data()}});
-  size_t pos = r.text.find_first_of("0123456789");
-  size_t endpos = r.text.find_first_not_of("0123456789", pos);
+  cpr::Response r      = cpr::Get(cpr::Url{"http://osu.ppy.sh/api/get_user"},
+                                  cpr::Parameters{{"k", config.api_v1_key}, {"u", username.data()}});
+  size_t        pos    = r.text.find_first_of("0123456789");
+  size_t        endpos = r.text.find_first_not_of("0123456789", pos);
   return std::string(r.text.substr(pos, endpos - pos));
 }
 
@@ -118,8 +116,7 @@ std::string Request::get_user(const std::string_view username) const {
     return "";
   }
   cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/@{}/osu",
-                                        username)},
+      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/@{}/osu", username)},
                cpr::Header{{"Authorization", "Bearer " + config.access_token},
                            {"Content-Type", "application/json"},
                            {"Accept", "application/json"}});
@@ -135,21 +132,22 @@ std::string Request::get_user_score(const std::string_view beatmap,
                                     const std::string_view user) const {
   if (is_refresh_needed) {
     spdlog::error("get_user_score failed, token is dead");
-    return "";
+    return {};
   }
-  cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format(
-                   "https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}",
-                   beatmap, user)},
-               cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                           {"Content-Type", "application/json"},
-                           {"Accept", "application/json"}});
-  if (r.status_code == 200) {
-    spdlog::info("get_user_score success");
-    return r.text;
+
+  cpr::Response r = cpr::Get(
+      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}", beatmap, user)},
+      cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                  {"Content-Type", "application/json"},
+                  {"Accept", "application/json"}});
+
+  const auto status_code = r.status_code;
+  switch (status_code) {
+    case 200: spdlog::info("Found score for {} on {}", user, beatmap); return r.text;
+    case 404: spdlog::warn("No scores found for {}", user); break;
+    default: spdlog::error("get_user_score failed, status: {}", status_code); break;
   }
-  spdlog::info("get_user_score failed, status: {}", r.status_code);
-  return "";
+  return {};
 }
 
 std::string Request::get_beatmap(const std::string_view beatmap) const {
@@ -157,11 +155,11 @@ std::string Request::get_beatmap(const std::string_view beatmap) const {
     spdlog::error("get_beatmap failed, token is dead");
     return "";
   }
-  cpr::Response r = cpr::Get(
-      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap)},
-      cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                  {"Content-Type", "application/json"},
-                  {"Accept", "application/json"}});
+  cpr::Response r =
+      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap)},
+               cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                           {"Content-Type", "application/json"},
+                           {"Accept", "application/json"}});
   if (r.status_code == 200) {
     spdlog::info("get_beatmap success");
     return r.text;
