@@ -50,7 +50,8 @@ bool Request::save_config() {
 
 bool Request::set_tokens(const std::string_view grant_type) {
   cpr::Payload payload{};
-  if (grant_type == "auth_code") {
+  spdlog::info("Requesting new {}", grant_type);
+  if (grant_type == "authorization_code") {
     payload = cpr::Payload{{"client_id", config.client_id},
                            {"client_secret", config.client_secret},
                            {"grant_type", grant_type.data()},
@@ -63,6 +64,7 @@ bool Request::set_tokens(const std::string_view grant_type) {
                            {"refresh_token", config.refresh_token},
                            {"redirect_uri", config.redirect_uri}};
   }
+
   cpr::Response r = cpr::Post(cpr::Url{"https://osu.ppy.sh/oauth/token"},
                               cpr::Header{{"Accept", "application/json"},
                                           {"Content-Type", "application/x-www-form-urlencoded"}},
@@ -73,10 +75,10 @@ bool Request::set_tokens(const std::string_view grant_type) {
     config.refresh_token = j.value("refresh_token", "");
     config.expires_in    = j.value("expires_in", 86399);
     save_config();
-    fmt::print("get access_key success\n");
+    spdlog::info("Got ACCESS_TOKEN!");
     return true;
   }
-  fmt::print("get access_key failed, code: {}\n", r.status_code);
+  spdlog::error("Failed to retrieve ACCESS_TOKEN ({}): {}", r.status_code, r.text);
   return false;
 }
 
