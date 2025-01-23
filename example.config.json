@@ -7,5 +7,6 @@
   "ACCESS_TOKEN": "",
   "EXPIRES_IN": "",
   "REFRESH_TOKEN": "",
-  "REDIRECT_URI": ""
+  "REDIRECT_URI": "",
+  "GUILD_ID": ""
 }
