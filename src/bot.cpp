@@ -1,3 +1,5 @@
+#include "dispatcher.h"
+#include "requests.h"
 #include <bot.h>
 
 #include <dpp/colors.h>
@@ -44,7 +46,7 @@ void Bot::update_chat_map(const std::string& msg, const std::string& channel_id)
 
 void Bot::write_map_json() {
   std::lock_guard<std::mutex> lock(mutex);
-  json                        j(disid_userid_map);
+  json                        j(disid_osuid_map);
   std::ofstream               file("map.json");
   if (file.is_open()) {
     file << j.dump(4);
@@ -99,7 +101,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   std::mutex m;
   // force tbb parallelization ???
   arena.execute([&]() {
-    tbb::parallel_for_each(std::begin(disid_userid_map), std::end(disid_userid_map),
+    tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
                            [&](const auto& pair) {
                              // spdlog::info("for_each");
                              const auto& [dis_id, user_id] = pair;
@@ -148,6 +150,10 @@ void Bot::handle_message(const dpp::message_create_t& event) {
   }
 }
 
+void Bot::handle_member_remove(const dpp::guild_member_remove_t& event) {
+  disid_osuid_map.erase(event.removed.id.str());
+}
+
 void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
   if (event.command.get_command_name() == "гандон") {
     float_t    f     = rand.get_real(0.0f, 100.0f);
@@ -194,28 +200,26 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     try {
       u_from_req = j.at("username").get<std::string>();
     } catch (json::exception e) {}
-    disid_userid_map[key] = fmt::to_string(j.value("id", 0));
+    disid_osuid_map[key] = fmt::to_string(j.value("id", 0));
     write_map_json();
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
   if (event.command.get_command_name() == "score") {
-    std::string user;
-    auto        user_it = disid_userid_map.find(event.command.usr.id.str());
-    if (user_it == disid_userid_map.end()) {
+    auto        user_it = disid_osuid_map.find(event.command.usr.id.str());
+    if (user_it == disid_osuid_map.end()) {
       event.reply(dpp::message("Please /set your osu username before using this command."));
       return;
     }
-    user = user_it->second;
-    std::string beatmap_id;
+    std::string user = user_it->second;
     auto        beatmap_it = chat_map.find(event.command.channel_id.str());
     if (beatmap_it == chat_map.end()) {
       event.reply(dpp::message("Can't find the map. Please send the map link "
                                "and use the command again."));
       return;
     }
-    beatmap_id                   = beatmap_it->second;
-    std::string response_beatmap = request.get_beatmap(beatmap_id);
-    std::string response_score   = request.get_user_score(beatmap_id, user);
+    std::string beatmap_id        = beatmap_it->second;
+    std::string response_beatmap  = request.get_beatmap(beatmap_id);
+    std::string response_score    = request.get_user_score(beatmap_id, user);
     if (response_score.empty()) {
       event.reply(dpp::message("Can't find score on this map."));
       return;
@@ -252,19 +256,27 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
     /*bot.global_command_create(
         dpp::slashcommand("score", "Displays your score", bot.me.id));*/
   }
-  disid_userid_map = read_map_json(1030424871173361704);
+  guild_id = Request::read_config("GUILD_ID");
+  disid_osuid_map = read_map_json(guild_id);
 }
 
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
   bot.on_log(dpp::utility::cout_logger());
-  bot.on_button_click([this](const dpp::button_click_t& event) { handle_button_click(event); });
-  bot.on_message_create([this](const dpp::message_create_t& event) { handle_message(event); });
+  bot.on_button_click([this](const dpp::button_click_t& event) {
+    handle_button_click(event);
+  });
+  bot.on_message_create([this](const dpp::message_create_t& event) {
+    handle_message(event);
+  });
+  bot.on_guild_member_remove([this](const dpp::guild_member_remove_t& event) {
+    handle_member_remove(event);
+  });
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     std::jthread(&Bot::handle_slashcommand, this, std::move(event)).detach();
   });
-  bot.on_ready(
-      [this, delete_commands](const dpp::ready_t& event) { ready_event(event, delete_commands); });
-
+  bot.on_ready([this, delete_commands](const dpp::ready_t& event) {
+    ready_event(event, delete_commands);
+  });
   bot.start(dpp::st_wait);
 }

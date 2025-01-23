@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dispatcher.h"
 #include <tbb/tbb.h>
 
 #include <random>
@@ -31,6 +32,7 @@ public:
 
 class Bot {
 private:
+  std::string     guild_id;
   dpp::cluster    bot;
   Random          rand;
   Request         request;
@@ -40,7 +42,7 @@ private:
   // Contains channel_id: last_beatmap_id
   std::unordered_map<std::string, std::string> chat_map;
   // Loads from map.json on bot start, filled via slashcommand /set
-  std::unordered_map<std::string, std::string> disid_userid_map;
+  std::unordered_map<std::string, std::string> disid_osuid_map;
 
   void update_chat_map(const std::string& msg, const std::string& channel_id);
   void write_map_json();
@@ -51,6 +53,7 @@ private:
 
   void handle_button_click(const dpp::button_click_t& event);
   void handle_message(const dpp::message_create_t& event);
+  void handle_member_remove(const dpp::guild_member_remove_t& event);
   void handle_slashcommand(const dpp::slashcommand_t& event);
   void ready_event(const dpp::ready_t& event, bool);
 
