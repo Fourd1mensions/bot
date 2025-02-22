@@ -1,8 +1,6 @@
 #pragma once
 
-#include "dispatcher.h"
 #include <tbb/tbb.h>
-
 #include <random>
 #include <unordered_map>
 
@@ -10,6 +8,7 @@
 #include <requests.h>
 
 #include <dpp/dpp.h>
+#include <dpp/dispatcher.h>
 #include <dpp/unicode_emoji.h>
 #include <dpp/snowflake.h>
 #include <fmt/core.h>
