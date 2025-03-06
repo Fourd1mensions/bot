@@ -152,6 +152,15 @@ std::string Request::get_user_score(const std::string_view beatmap,
   return {};
 }
 
+auto Request::get_user_scores(const std::string_view beatmap, 
+                              const std::string_view user) const {
+  if (is_refresh_needed) {
+    spdlog::error("get_user_score failed, token is dead");
+    return;
+  }
+  
+}
+
 std::string Request::get_beatmap(const std::string_view beatmap) const {
   if (is_refresh_needed) {
     spdlog::error("get_beatmap failed, token is dead");
