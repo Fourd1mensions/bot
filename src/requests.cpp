@@ -23,7 +23,7 @@ std::string Request::read_config(const std::string_view key) {
   try {
     return j.value(key, "");
   } catch (json::exception e) {
-    fmt::print("{}", e.what());
+    spdlog::warn("{}", e.what());
     return "";
   }
 }
