@@ -150,6 +150,12 @@ void Bot::handle_message(const dpp::message_create_t& event) {
   }
 }
 
+void Bot::handle_member_add(const dpp::guild_member_add_t& event) {
+  if (!event.added.get_user()->is_bot()) { 
+    bot.guild_member_add_role(guild_id, event.added.get_user()->id, autorole_id);
+  }
+}
+
 void Bot::handle_member_remove(const dpp::guild_member_remove_t& event) {
   disid_osuid_map.erase(event.removed.id.str());
 }
@@ -235,28 +241,44 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
             .add_field("Your best score on map", score.to_string(beatmap.get_max_combo()));
     event.reply(embed);
   }
+  if (event.command.get_command_name() == "autorole_switch") {
+    if (give_autorole) {
+      give_autorole = false;
+      event.reply("Giving autorole switched to off");
+    }
+    else {
+      give_autorole = true;
+      event.reply("Giving autorole switched to on");
+    }
+  }
 }
 
 void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
   if (dpp::run_once<struct register_bot_commands>()) {
-    if (delete_commands)
-      bot.global_bulk_command_delete();
+    if (delete_commands) bot.global_bulk_command_delete();
 
     bot.global_command_create(dpp::slashcommand("гандон", "Проверка", bot.me.id));
     bot.global_command_create(dpp::slashcommand("pages", "test", bot.me.id));
     bot.global_command_create(dpp::slashcommand("avatar", "Display osu! profile avatar", bot.me.id)
                                   .add_option(dpp::command_option(dpp::co_string, "username",
-                                                                  "osu! profile username", true)));
+                                                                  "osu! profile username", true))
+    );
     bot.global_command_create(
-        dpp::slashcommand("update_token", "If peppy doesn't respond", bot.me.id));
+        dpp::slashcommand("update_token", "If peppy doesn't respond", bot.me.id)
+    );
     bot.global_command_create(
         dpp::slashcommand("set", "Set osu username", bot.me.id)
             .add_option(dpp::command_option(dpp::co_string, "username",
-                                            "Your osu! profile username", true)));
+                                            "Your osu! profile username", true))
+    );
+    bot.global_command_create(
+        dpp::slashcommand("autorole_switch", "Manage autorole issuance", bot.me.id)
+    );
     /*bot.global_command_create(
         dpp::slashcommand("score", "Displays your score", bot.me.id));*/
   }
   guild_id = Request::read_config("GUILD_ID");
+  autorole_id = Request::read_config("AUTOROLE_ID");
   disid_osuid_map = read_map_json(guild_id);
 }
 
@@ -268,6 +290,9 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
   });
   bot.on_message_create([this](const dpp::message_create_t& event) {
     handle_message(event);
+  });
+  bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
+
   });
   bot.on_guild_member_remove([this](const dpp::guild_member_remove_t& event) {
     handle_member_remove(event);

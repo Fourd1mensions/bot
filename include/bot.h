@@ -31,7 +31,9 @@ public:
 
 class Bot {
 private:
-  std::string     guild_id;
+  bool            give_autorole;
+  dpp::snowflake  guild_id,
+                  autorole_id;
   dpp::cluster    bot;
   Random          rand;
   Request         request;
@@ -52,6 +54,7 @@ private:
 
   void handle_button_click(const dpp::button_click_t& event);
   void handle_message(const dpp::message_create_t& event);
+  void handle_member_add(const dpp::guild_member_add_t& event);
   void handle_member_remove(const dpp::guild_member_remove_t& event);
   void handle_slashcommand(const dpp::slashcommand_t& event);
   void ready_event(const dpp::ready_t& event, bool);
