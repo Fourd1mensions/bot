@@ -31,7 +31,7 @@ public:
 
 class Bot {
 private:
-  bool            give_autorole;
+  bool            give_autorole = true;
   dpp::snowflake  guild_id,
                   autorole_id;
   dpp::cluster    bot;
