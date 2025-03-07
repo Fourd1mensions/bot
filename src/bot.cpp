@@ -242,6 +242,11 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     event.reply(embed);
   }
   if (event.command.get_command_name() == "autorole_switch") {
+    auto invoker_id = event.command.usr.id.str();
+    if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
+      event.reply(dpp::message("<:FRICK:1241513672480653475>"));
+      return;
+    }
     if (give_autorole) {
       give_autorole = false;
       event.reply("Giving autorole switched to off");
@@ -292,7 +297,7 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
     handle_message(event);
   });
   bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
-
+    handle_member_add(event);
   });
   bot.on_guild_member_remove([this](const dpp::guild_member_remove_t& event) {
     handle_member_remove(event);
