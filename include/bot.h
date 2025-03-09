@@ -47,7 +47,8 @@ private:
 
   void update_chat_map(const std::string& msg, const std::string& channel_id);
   void write_map_json();
-  auto read_map_json(const dpp::snowflake& guild_id);
+  auto read_map_json(const dpp::snowflake& guild_id)
+      -> std::unordered_map<std::string, std::string>;
   void create_lb_message(const dpp::message_create_t& event);
 
   // Handle events

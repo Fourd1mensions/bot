@@ -54,21 +54,28 @@ void Bot::write_map_json() {
   }
 }
 
-auto Bot::read_map_json(const dpp::snowflake& guild_id) {
+auto Bot::read_map_json(const dpp::snowflake& guild_id)
+    -> std::unordered_map<std::string, std::string> {
   std::unordered_map<std::string, std::string> result;
   std::ifstream                                file("map.json");
   if (!file.is_open()) {
     spdlog::error("Failed to open map.json, cannot load users");
-    return result;
+    return {};
   }
   json j = json::parse(file, nullptr, false);
   file.close();
+  if (j.is_discarded()) {
+    spdlog::error("Failed to parse map.json!");
+    return {};
+  }
   for (const auto& [id, username] : j.items()) {
     try {
       if (bot.guild_get_member_sync(guild_id, id).user_id == id.c_str()) {
-        result[id] = username;
+        result[id] = username.get<std::string>();
       }
-    } catch (dpp::exception e) { spdlog::error("Failed to parse map.json"); }
+    } catch (const dpp::exception& dpp_ex) {
+      spdlog::error("Failed to fetch {} data ({})", username.get<std::string>(), dpp_ex.what());
+    }
   }
   return result;
 }
@@ -211,21 +218,21 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
   if (event.command.get_command_name() == "score") {
-    auto        user_it = disid_osuid_map.find(event.command.usr.id.str());
+    auto user_it = disid_osuid_map.find(event.command.usr.id.str());
     if (user_it == disid_osuid_map.end()) {
       event.reply(dpp::message("Please /set your osu username before using this command."));
       return;
     }
-    std::string user = user_it->second;
+    std::string user       = user_it->second;
     auto        beatmap_it = chat_map.find(event.command.channel_id.str());
     if (beatmap_it == chat_map.end()) {
       event.reply(dpp::message("Can't find the map. Please send the map link "
                                "and use the command again."));
       return;
     }
-    std::string beatmap_id        = beatmap_it->second;
-    std::string response_beatmap  = request.get_beatmap(beatmap_id);
-    std::string response_score    = request.get_user_score(beatmap_id, user);
+    std::string beatmap_id       = beatmap_it->second;
+    std::string response_beatmap = request.get_beatmap(beatmap_id);
+    std::string response_score   = request.get_user_score(beatmap_id, user);
     if (response_score.empty()) {
       event.reply(dpp::message("Can't find score on this map."));
       return;
@@ -305,8 +312,7 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     std::jthread(&Bot::handle_slashcommand, this, std::move(event)).detach();
   });
-  bot.on_ready([this, delete_commands](const dpp::ready_t& event) {
-    ready_event(event, delete_commands);
-  });
+  bot.on_ready(
+      [this, delete_commands](const dpp::ready_t& event) { ready_event(event, delete_commands); });
   bot.start(dpp::st_wait);
 }
