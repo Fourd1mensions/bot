@@ -15,10 +15,10 @@ private:
   std::string rank;
   std::string created_at;
   std::string username;
-
+  
+  public:
+  bool        is_empty = true;
   void        from_json(const json& j);
-
-public:
   std::string to_string(const uint32_t beatmap_combo) const;
   std::string get_header() const;
   std::string get_body(const uint32_t beatmap_combo) const;
@@ -29,7 +29,8 @@ public:
   inline auto get_total_score() const {
     return total_score;
   }
-
+  Score() {
+  }
   Score(const json& json) {
     from_json(json);
   }

@@ -28,6 +28,7 @@ void Score::from_json(const json& j) {
     count_300  = score_j.at("statistics").value("count_300", 0);
     username   = score_j.at("user").value("username", "");
     from_json_mods(score_j);
+    is_empty = false;
   } catch (const json::exception& e) { spdlog::error("Failed to parse score: {}", e.what()); }
 }
 
