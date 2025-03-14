@@ -15,12 +15,12 @@ void Score::from_json(const json& j) {
       mods = "NM";
   };
   try {
-    const json& score_j = j.at("score");
+    const json& score_j = j.contains("score") && j["score"].is_object() ? j.at("score") : j;
     total_score         = score_j.value("score", 0);
     rank                = score_j.value("rank", "");
     accuracy            = score_j.value("accuracy", 0.0);
     created_at          = score_j.value("created_at", "");
-    max_combo           = score_j.value("max_combo", 0);
+    max_combo           = score_j.value("max_combo", 0);  
     score_j.at("pp").is_null() ? pp = 0 : pp = score_j.value("pp", 0.0);
     count_miss = score_j.at("statistics").value("count_miss", 0);
     count_50   = score_j.at("statistics").value("count_50", 0);
