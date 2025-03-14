@@ -30,10 +30,9 @@ public:
   bool check_token();
 
   std::string get_user(const std::string_view username) const;
-  std::string get_user_score(const std::string_view beatmap,
-                             const std::string_view user) const;
-  auto get_user_scores(const std::string_view beatmap,
-                       const std::string_view user) const;
+  std::string get_user_beatmap_score(const std::string_view beatmap,
+                                     const std::string_view user,
+                                     const bool all = false) const;
   std::string get_userid_v1(const std::string_view username);
   std::string get_beatmap(const std::string_view beatmap) const;
 

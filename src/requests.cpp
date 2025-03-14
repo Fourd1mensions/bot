@@ -129,16 +129,17 @@ std::string Request::get_user(const std::string_view username) const {
   spdlog::info("get_user failed, status: {}", r.status_code);
   return "";
 }
-
-std::string Request::get_user_score(const std::string_view beatmap,
-                                    const std::string_view user) const {
+// if all=false returns single score that peppy wants, else - all user scores on map 
+std::string Request::get_user_beatmap_score(const std::string_view beatmap,
+                                    const std::string_view user,
+                                    const bool all) const {
   if (is_refresh_needed) {
     spdlog::error("get_user_score failed, token is dead");
     return {};
   }
 
   cpr::Response r = cpr::Get(
-      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}", beatmap, user)},
+      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}", beatmap, user, all? "/all" : "")},
       cpr::Header{{"Authorization", "Bearer " + config.access_token},
                   {"Content-Type", "application/json"},
                   {"Accept", "application/json"}});
@@ -150,15 +151,6 @@ std::string Request::get_user_score(const std::string_view beatmap,
     default: spdlog::error("get_user_score failed, status: {}", status_code); break;
   }
   return {};
-}
-
-auto Request::get_user_scores(const std::string_view beatmap, 
-                              const std::string_view user) const {
-  if (is_refresh_needed) {
-    spdlog::error("get_user_score failed, token is dead");
-    return;
-  }
-  
 }
 
 std::string Request::get_beatmap(const std::string_view beatmap) const {
