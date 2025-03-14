@@ -17,6 +17,8 @@
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
 
+namespace stdr = std::ranges;
+
 template <typename T>
 T Random::get_real(T min, T max) {
   static_assert(std::is_floating_point<T>::value, "Type must be a floating-point type");
@@ -87,9 +89,9 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   auto        beatmap_it = chat_map.find(event.msg.channel_id.str());
   if (beatmap_it == chat_map.end()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and "
-                             "use the command again."));
+                                  "use the command again."));
     return;
-  }
+  } 
   beatmap_id                   = beatmap_it->second;
   std::string response_beatmap = request.get_beatmap(beatmap_id);
   if (response_beatmap.empty()) {
@@ -98,34 +100,36 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
     return;
   }
   Beatmap            beatmap(response_beatmap);
-  std::vector<Score> scores;
-  /*for (const auto& [dis_id, user_id]: disid_userid_map) {
-      //spdlog::info("for");
-      std::string score_j = request.get_user_score(beatmap_id, user_id);
-      if (score_j.empty()) continue;
-      scores.push_back(Score(score_j));
-  }*/
-  std::mutex m;
+  std::vector<Score> scores(disid_osuid_map.size());
   // force tbb parallelization ???
   arena.execute([&]() {
     tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
                            [&](const auto& pair) {
-                             // spdlog::info("for_each");
                              const auto& [dis_id, user_id] = pair;
-                             std::string score_j = request.get_user_score(beatmap_id, user_id);
-                             if (!score_j.empty()) {
-                               Score                       score(score_j);
-                               std::lock_guard<std::mutex> lock(m);
-                               scores.push_back(std::move(score));
+                             std::string scores_j = request.get_user_beatmap_score(beatmap_id, user_id, true);
+                             static size_t i = 0;
+                             if (!scores_j.empty()) {
+                               json j = json::parse(scores_j);
+                               if (!j.is_array()) {
+                                 scores[i++].from_json(j);
+                               }
+                               std::sort(j.begin(), j.end(), [](const json& a, const json& b) { // sort specific user's scores
+                                return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
+                               });
+                               scores[i++].from_json(j.at(0));
                              }
                            });
   });
+  for (auto it = scores.begin(); it != scores.end();) {
+    if (!it->is_empty) ++it;
+    scores.erase(it);
+  }
   if (scores.empty()) {
     event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
     return;
   }
   if (scores.size() > 1) {
-    std::ranges::sort(scores, [](const Score a, const Score b) {
+    stdr::sort(scores, [](const Score a, const Score b) {       // sort best user scores
       return std::make_tuple(a.get_pp(), a.get_total_score()) >
           std::make_tuple(b.get_pp(), b.get_total_score());
     });
@@ -158,7 +162,7 @@ void Bot::handle_message(const dpp::message_create_t& event) {
 }
 
 void Bot::handle_member_add(const dpp::guild_member_add_t& event) {
-  if (!event.added.get_user()->is_bot()) { 
+  if (!event.added.get_user()->is_bot() && give_autorole) { 
     bot.guild_member_add_role(guild_id, event.added.get_user()->id, autorole_id);
   }
 }
@@ -168,6 +172,7 @@ void Bot::handle_member_remove(const dpp::guild_member_remove_t& event) {
 }
 
 void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
+  // lol
   if (event.command.get_command_name() == "гандон") {
     float_t    f     = rand.get_real(0.0f, 100.0f);
     dpp::embed embed = dpp::embed()
@@ -178,6 +183,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     dpp::message msg(event.command.channel_id, embed);
     event.reply(msg);
   }
+
+  // avatar
   if (event.command.get_command_name() == "avatar") {
     std::string username = std::get<std::string>(event.get_parameter("username"));
     std::string userid   = request.get_userid_v1(username);
@@ -189,6 +196,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     dpp::message msg(event.command.channel_id, embed);
     event.reply(msg);
   }
+
+  // update_token
   if (event.command.get_command_name() == "update_token") {
     auto invoker_id = event.command.usr.id.str();
     if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
@@ -200,6 +209,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     else
       event.reply(dpp::message("Token update - fail"));
   }
+
+  // set
   if (event.command.get_command_name() == "set") {
     std::string u_from_com = std::get<std::string>(event.get_parameter("username"));
     std::string req        = request.get_user(u_from_com);
@@ -217,6 +228,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     write_map_json();
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
+
+  // score
   if (event.command.get_command_name() == "score") {
     auto user_it = disid_osuid_map.find(event.command.usr.id.str());
     if (user_it == disid_osuid_map.end()) {
@@ -232,7 +245,7 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     }
     std::string beatmap_id       = beatmap_it->second;
     std::string response_beatmap = request.get_beatmap(beatmap_id);
-    std::string response_score   = request.get_user_score(beatmap_id, user);
+    std::string response_score   = request.get_user_beatmap_score(beatmap_id, user);
     if (response_score.empty()) {
       event.reply(dpp::message("Can't find score on this map."));
       return;
@@ -248,6 +261,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
             .add_field("Your best score on map", score.to_string(beatmap.get_max_combo()));
     event.reply(embed);
   }
+
+  // autorole_switch
   if (event.command.get_command_name() == "autorole_switch") {
     auto invoker_id = event.command.usr.id.str();
     if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
