@@ -122,7 +122,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   });
   for (auto it = scores.begin(); it != scores.end();) {
     if (!it->is_empty) ++it;
-    scores.erase(it);
+    else scores.erase(it);
   }
   if (scores.empty()) {
     event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
