@@ -29,7 +29,7 @@ public:
   bool set_tokens(const std::string_view grant_type); 
   bool check_token();
 
-  std::string get_user(const std::string_view username) const;
+  std::string get_user(const std::string_view username, const bool by_id = false) const;
   std::string get_user_beatmap_score(const std::string_view beatmap,
                                      const std::string_view user,
                                      const bool all = false) const;
@@ -37,13 +37,13 @@ public:
   std::string get_beatmap(const std::string_view beatmap) const;
 
   Request() { 
-    config.api_v1_key = read_config("API_V1_KEY");
-    config.client_id = read_config("CLIENT_ID");
-    config.client_secret = read_config("CLIENT_SECRET");
-    config.auth_code = read_config("AUTH_CODE");
-    config.access_token = read_config("ACCESS_TOKEN");
-    config.refresh_token = read_config("REFRESH_TOKEN");
-    config.redirect_uri = read_config("REDIRECT_URI");
+    config.api_v1_key     = read_config("API_V1_KEY");
+    config.client_id      = read_config("CLIENT_ID");
+    config.client_secret  = read_config("CLIENT_SECRET");
+    config.auth_code      = read_config("AUTH_CODE");
+    config.access_token   = read_config("ACCESS_TOKEN");
+    config.refresh_token  = read_config("REFRESH_TOKEN");
+    config.redirect_uri   = read_config("REDIRECT_URI");
 
     std::jthread([&]() {
       while(true) {

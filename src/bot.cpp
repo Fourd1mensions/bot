@@ -106,17 +106,18 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
     tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
                            [&](const auto& pair) {
                              const auto& [dis_id, user_id] = pair;
+                             auto& score = scores[std::distance(disid_osuid_map.begin(), disid_osuid_map.find(dis_id))];
                              std::string scores_j = request.get_user_beatmap_score(beatmap_id, user_id, true);
-                             static size_t i = 0;
                              if (!scores_j.empty()) {
                                json j = json::parse(scores_j);
-                               if (!j.is_array()) {
-                                 scores[i++].from_json(j);
-                               }
+                               j = j["scores"];
                                std::sort(j.begin(), j.end(), [](const json& a, const json& b) { // sort specific user's scores
-                                return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
+                                 return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
                                });
-                               scores[i++].from_json(j.at(0));
+                               score.from_json(j.at(0));
+                               std::string usr_j = request.get_user(fmt::format("{}", score.get_user_id()), true); // TODO: store usernames
+                               json usr = json::parse(usr_j);
+                               score.set_username(usr.at("username"));
                              }
                            });
   });

@@ -15,20 +15,23 @@ private:
   std::string rank;
   std::string created_at;
   std::string username;
+  size_t      user_id;
   
   public:
   bool        is_empty = true;
+
   void        from_json(const json& j);
   std::string to_string(const uint32_t beatmap_combo) const;
+
   std::string get_header() const;
   std::string get_body(const uint32_t beatmap_combo) const;
   std::string get_created_at() const;
-  inline auto get_pp() const {
-    return pp;
-  }
-  inline auto get_total_score() const {
-    return total_score;
-  }
+  inline auto get_pp() const { return pp; }
+  inline auto get_total_score() const { return total_score; }
+  inline auto get_user_id() const { return user_id; }
+
+  inline void set_username(const std::string& name) { username = name; }
+  
   Score() {
   }
   Score(const json& json) {

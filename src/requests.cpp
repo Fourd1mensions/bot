@@ -112,13 +112,14 @@ std::string Request::get_userid_v1(const std::string_view username) {
   return std::string(r.text.substr(pos, endpos - pos));
 }
 
-std::string Request::get_user(const std::string_view username) const {
+// user = username by default
+std::string Request::get_user(const std::string_view user, const bool by_id) const {
   if (is_refresh_needed) {
     spdlog::error("get_user failed, token is dead");
     return "";
   }
   cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/@{}/osu", username)},
+      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id? "" : "@", user)},
                cpr::Header{{"Authorization", "Bearer " + config.access_token},
                            {"Content-Type", "application/json"},
                            {"Accept", "application/json"}});
@@ -131,8 +132,8 @@ std::string Request::get_user(const std::string_view username) const {
 }
 // if all=false returns single score that peppy wants, else - all user scores on map 
 std::string Request::get_user_beatmap_score(const std::string_view beatmap,
-                                    const std::string_view user,
-                                    const bool all) const {
+                                            const std::string_view user,
+                                            const bool all) const {
   if (is_refresh_needed) {
     spdlog::error("get_user_score failed, token is dead");
     return {};
@@ -146,9 +147,15 @@ std::string Request::get_user_beatmap_score(const std::string_view beatmap,
 
   const auto status_code = r.status_code;
   switch (status_code) {
-    case 200: spdlog::info("Found score for {} on {}", user, beatmap); return r.text;
-    case 404: spdlog::warn("No scores found for {}", user); break;
-    default: spdlog::error("get_user_score failed, status: {}", status_code); break;
+    case 200: 
+      spdlog::info("status {} for {} on {}", status_code, user, beatmap); 
+      if (r.text != "{\"scores\":[]}") return r.text;
+      else {
+        fmt::print("...but no scores found\n");
+        return {};
+      }
+    case 404: spdlog::info("status {}, no scores found for {}", status_code, user); break;
+    default: spdlog::warn("status: {}, get_user_beatmap_score failed", status_code); break;
   }
   return {};
 }
