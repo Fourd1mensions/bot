@@ -46,28 +46,28 @@ void Bot::update_chat_map(const std::string& msg, const std::string& channel_id)
     chat_map[channel_id] = m.str(2);
 }
 
-void Bot::write_map_json() {
+void Bot::write_users_json() {
   std::lock_guard<std::mutex> lock(mutex);
   json                        j(disid_osuid_map);
-  std::ofstream               file("map.json");
+  std::ofstream               file("users.json");
   if (file.is_open()) {
     file << j.dump(4);
     file.close();
   }
 }
 
-auto Bot::read_map_json(const dpp::snowflake& guild_id)
+auto Bot::read_users_json(const dpp::snowflake& guild_id)
     -> std::unordered_map<std::string, std::string> {
   std::unordered_map<std::string, std::string> result;
-  std::ifstream                                file("map.json");
+  std::ifstream                                file("users.json");
   if (!file.is_open()) {
-    spdlog::error("Failed to open map.json, cannot load users");
+    spdlog::error("Failed to open users.json, cannot load users");
     return {};
   }
   json j = json::parse(file, nullptr, false);
   file.close();
   if (j.is_discarded()) {
-    spdlog::error("Failed to parse map.json!");
+    spdlog::error("Failed to parse users.json!");
     return {};
   }
   for (const auto& [id, username] : j.items()) {
@@ -102,24 +102,23 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   Beatmap            beatmap(response_beatmap);
   std::vector<Score> scores(disid_osuid_map.size());
   // force tbb parallelization ???
-  arena.execute([&]() {
-    tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
-                           [&](const auto& pair) {
-                             const auto& [dis_id, user_id] = pair;
-                             auto& score = scores[std::distance(disid_osuid_map.begin(), disid_osuid_map.find(dis_id))];
-                             std::string scores_j = request.get_user_beatmap_score(beatmap_id, user_id, true);
-                             if (!scores_j.empty()) {
-                               json j = json::parse(scores_j);
-                               j = j["scores"];
-                               std::sort(j.begin(), j.end(), [](const json& a, const json& b) { // sort specific user's scores
-                                 return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
-                               });
-                               score.from_json(j.at(0));
-                               std::string usr_j = request.get_user(fmt::format("{}", score.get_user_id()), true); // TODO: store usernames
-                               json usr = json::parse(usr_j);
-                               score.set_username(usr.at("username"));
-                             }
-                           });
+  arena.execute([&]() { tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
+    [&](const auto& pair) {
+      const auto& [dis_id, user_id] = pair;
+      auto& score = scores[std::distance(disid_osuid_map.begin(), disid_osuid_map.find(dis_id))];
+      std::string scores_j = request.get_user_beatmap_score(beatmap_id, user_id, true);
+      if (!scores_j.empty()) {
+        json j = json::parse(scores_j);
+        j = j["scores"];
+        std::sort(j.begin(), j.end(), [](const json& a, const json& b) { // sort specific user's scores
+          return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
+        });
+        score.from_json(j.at(0));
+        std::string usr_j = request.get_user(fmt::format("{}", score.get_user_id()), true); // TODO: store usernames
+        json usr = json::parse(usr_j);
+        score.set_username(usr.at("username"));
+      }
+    });
   });
   for (auto it = scores.begin(); it != scores.end();) {
     if (!it->is_empty) ++it;
@@ -137,10 +136,10 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   }
   auto msg_id = event.msg.id;
   auto embed  = dpp::embed()
-                   .set_color(dpp::colors::viola_purple)
-                   .set_title(beatmap.to_string())
-                   .set_url(beatmap.get_beatmap_url())
-                   .set_thumbnail(beatmap.get_image_url());
+    .set_color(dpp::colors::viola_purple)
+    .set_title(beatmap.to_string())
+    .set_url(beatmap.get_beatmap_url())
+    .set_thumbnail(beatmap.get_image_url());
 
   for (size_t i = 0; i < scores.size(); i++) {
     dpp::embed_field field;
@@ -176,11 +175,11 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
   // lol
   if (event.command.get_command_name() == "гандон") {
     float_t    f     = rand.get_real(0.0f, 100.0f);
-    dpp::embed embed = dpp::embed()
-                           .set_color(dpp::colors::cream)
-                           .set_title("Тест на гандона")
-                           .set_description(fmt::format("**Вы гандон на {:.2f}%**", f))
-                           .set_timestamp(time(0));
+    auto embed = dpp::embed()
+      .set_color(dpp::colors::cream)
+      .set_title("Тест на гандона")
+      .set_description(fmt::format("**Вы гандон на {:.2f}%**", f))
+      .set_timestamp(time(0));
     dpp::message msg(event.command.channel_id, embed);
     event.reply(msg);
   }
@@ -188,12 +187,12 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
   // avatar
   if (event.command.get_command_name() == "avatar") {
     std::string username = std::get<std::string>(event.get_parameter("username"));
-    std::string userid   = request.get_userid_v1(username);
-    dpp::embed  embed    = dpp::embed()
-                           .set_color(dpp::colors::cream)
-                           .set_author(username, "https://osu.ppy.sh/users/" + userid, "")
-                           .set_image("https://a.ppy.sh/" + userid)
-                           .set_timestamp(time(0));
+    std::string userid = request.get_userid_v1(username);
+    auto embed = dpp::embed()
+      .set_color(dpp::colors::cream)
+      .set_author(username, "https://osu.ppy.sh/users/" + userid, "")
+      .set_image("https://a.ppy.sh/" + userid)
+      .set_timestamp(time(0));
     dpp::message msg(event.command.channel_id, embed);
     event.reply(msg);
   }
@@ -226,7 +225,7 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
       u_from_req = j.at("username").get<std::string>();
     } catch (json::exception e) {}
     disid_osuid_map[key] = fmt::to_string(j.value("id", 0));
-    write_map_json();
+    write_users_json();
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
 
@@ -253,13 +252,12 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
     }
     Score      score(response_score);
     Beatmap    beatmap(response_beatmap);
-    dpp::embed embed =
-        dpp::embed()
-            .set_color(dpp::colors::cream)
-            .set_title(beatmap.to_string())
-            .set_url(beatmap.get_beatmap_url())
-            .set_thumbnail(beatmap.get_image_url())
-            .add_field("Your best score on map", score.to_string(beatmap.get_max_combo()));
+    auto embed = dpp::embed()
+      .set_color(dpp::colors::cream)
+      .set_title(beatmap.to_string())
+      .set_url(beatmap.get_beatmap_url())
+      .set_thumbnail(beatmap.get_image_url())
+      .add_field("Your best score on map", score.to_string(beatmap.get_max_combo()));
     event.reply(embed);
   }
 
@@ -288,26 +286,19 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
     bot.global_command_create(dpp::slashcommand("гандон", "Проверка", bot.me.id));
     bot.global_command_create(dpp::slashcommand("pages", "test", bot.me.id));
     bot.global_command_create(dpp::slashcommand("avatar", "Display osu! profile avatar", bot.me.id)
-                                  .add_option(dpp::command_option(dpp::co_string, "username",
-                                                                  "osu! profile username", true))
+      .add_option(dpp::command_option(dpp::co_string, "username", "osu! profile username", true))
     );
-    bot.global_command_create(
-        dpp::slashcommand("update_token", "If peppy doesn't respond", bot.me.id)
+    bot.global_command_create(dpp::slashcommand("update_token", "If peppy doesn't respond", bot.me.id));
+    bot.global_command_create(dpp::slashcommand("set", "Set osu username", bot.me.id)
+      .add_option(dpp::command_option(dpp::co_string, "username", "Your osu! profile username", true))
     );
-    bot.global_command_create(
-        dpp::slashcommand("set", "Set osu username", bot.me.id)
-            .add_option(dpp::command_option(dpp::co_string, "username",
-                                            "Your osu! profile username", true))
-    );
-    bot.global_command_create(
-        dpp::slashcommand("autorole_switch", "Manage autorole issuance", bot.me.id)
-    );
+    bot.global_command_create(dpp::slashcommand("autorole_switch", "Manage autorole issuance", bot.me.id));
     /*bot.global_command_create(
         dpp::slashcommand("score", "Displays your score", bot.me.id));*/
   }
   guild_id = Request::read_config("GUILD_ID");
   autorole_id = Request::read_config("AUTOROLE_ID");
-  disid_osuid_map = read_map_json(guild_id);
+  disid_osuid_map = read_users_json(guild_id);
 }
 
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {

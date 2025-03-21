@@ -32,12 +32,8 @@ private:
 
   inline void set_username(const std::string& name) { username = name; }
   
-  Score() {
-  }
-  Score(const json& json) {
-    from_json(json);
-  }
-
+  Score() {}
+  Score(const json& json) { from_json(json); }
   Score(const std::string& json_str);
 };
 

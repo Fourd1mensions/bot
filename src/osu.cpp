@@ -20,20 +20,23 @@ void Score::from_json(const json& j) {
     accuracy            = score_j.value("accuracy", 0.0);
     created_at          = score_j.value("created_at", "");
     max_combo           = score_j.value("max_combo", 0);
-    pp = !score_j["pp"].is_null() ? score_j.value("pp", 0.0) : 0.0;
-    count_miss = score_j.at("statistics").value("count_miss", 0);
-    count_50   = score_j.at("statistics").value("count_50", 0);
-    count_100  = score_j.at("statistics").value("count_100", 0);
-    count_300  = score_j.at("statistics").value("count_300", 0);
-    username   = score_j.contains("user") ? score_j.at("user").value("username", "") : "";
-    user_id = score_j.value("user_id", 0);
+    user_id             = score_j.value("user_id", 0);
+
+    pp        = !score_j["pp"].is_null() ? score_j.value("pp", 0.0) : 0.0;
+    username  = score_j.contains("user") ? score_j.at("user").value("username", "") : "";
+
+    const auto& stat_j = score_j.at("statistics");
+    count_miss = stat_j.value("count_miss", 0);
+    count_50   = stat_j.value("count_50", 0);
+    count_100  = stat_j.value("count_100", 0);
+    count_300  = stat_j.value("count_300", 0);
+
     from_json_mods(score_j);
     is_empty = false;
   } catch (const json::exception& e) { spdlog::error("Failed to parse score: {}", e.what()); }
 }
 
 std::string Score::to_string(const uint32_t beatmap_combo) const {
-
   std::string emoji_id;
   if (rank == "F")
     emoji_id = "<:RankingF:1278036373332295843>";
@@ -63,7 +66,6 @@ std::string Score::to_string(const uint32_t beatmap_combo) const {
 }
 
 std::string Score::get_header() const {
-
   std::string result = fmt::format("{} `{:.0f}pp` +{}", username, pp, mods);
   return result;
 }
