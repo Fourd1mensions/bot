@@ -7,14 +7,7 @@
 #include <thread>
 #include <type_traits>
 
-#include <dpp/colors.h>
-#include <dpp/cluster.h>
-#include <dpp/dispatcher.h>
-#include <dpp/exception.h>
-#include <dpp/message.h>
-#include <dpp/snowflake.h>
 #include <fmt/base.h>
-#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 
 namespace stdr = std::ranges;

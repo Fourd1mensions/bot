@@ -3,14 +3,8 @@
 #include <fstream>
 #include <string_view>
 
-#include <cpr/api.h>
 #include <cpr/cpr.h>
-#include <cpr/cprtypes.h>
-#include <cpr/parameters.h>
-#include <cpr/payload.h>
-#include <cpr/response.h>
 #include <fmt/base.h>
-#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 
 std::string Request::read_config(const std::string_view key) {

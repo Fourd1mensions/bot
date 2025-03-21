@@ -8,11 +8,6 @@
 #include <requests.h>
 
 #include <dpp/dpp.h>
-#include <dpp/dispatcher.h>
-#include <dpp/unicode_emoji.h>
-#include <dpp/snowflake.h>
-#include <fmt/core.h>
-#include <spdlog/spdlog.h>
 
 class Random {
 private:
