@@ -24,28 +24,32 @@ public:
   Random() : _rd(), _gen(_rd()) {}
 };
 
+using snowflake_string_map = std::unordered_map<dpp::snowflake, std::string>;
+
 class Bot {
 private:
-  bool            give_autorole = true;
-  dpp::snowflake  guild_id,
-                  autorole_id;
-  dpp::cluster    bot;
-  Random          rand;
-  Request         request;
-  std::mutex      mutex;
-  tbb::task_arena arena;
+  bool                  give_autorole = true;
+
+  dpp::cluster          bot;
+  dpp::snowflake        guild_id,
+                        autorole_id;
+
+  Random                rand;
+  Request               request;
+  
+  std::mutex            mutex;
+  tbb::task_arena       arena;
 
   // Contains channel_id : {message_id : beatmap_id}
-  std::unordered_map<std::string, std::pair<std::string, std::string>> chat_map;
+  std::unordered_map<dpp::snowflake, std::pair<dpp::snowflake, std::string>> chat_map;
 
   // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
-  std::unordered_map<std::string, std::string> disid_osuid_map;
+  snowflake_string_map  disid_osuid_map;
 
-  void update_chat_map(const std::string& msg, const std::string& channel_id, const std::string& msg_id);
-  void write_users_json();
-  auto read_users_json(const dpp::snowflake& guild_id)
-      -> std::unordered_map<std::string, std::string>;
-  void create_lb_message(const dpp::message_create_t& event);
+  void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
+  void                  write_users_json();
+  snowflake_string_map  read_users_json(const dpp::snowflake& guild_id);
+  void                  create_lb_message(const dpp::message_create_t& event);
 
   // Handle events
 

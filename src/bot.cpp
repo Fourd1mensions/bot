@@ -31,7 +31,7 @@ bool Random::get_bool() {
   return distr(_gen);
 }
 
-void Bot::update_chat_map(const std::string& msg, const std::string& channel_id, const std::string& msg_id) {
+void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id) {
   std::regex url_reg(R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
   std::smatch m;
 
@@ -52,9 +52,8 @@ void Bot::write_users_json() {
   }
 }
 
-auto Bot::read_users_json(const dpp::snowflake& guild_id)
-    -> std::unordered_map<std::string, std::string> {
-  std::unordered_map<std::string, std::string> result;
+snowflake_string_map Bot::read_users_json(const dpp::snowflake& guild_id) {
+  std::unordered_map<dpp::snowflake, std::string> result;
   std::ifstream                                file("users.json");
   if (!file.is_open()) {
     spdlog::error("Failed to open users.json, cannot load users");
@@ -165,7 +164,7 @@ void Bot::handle_message_create(const dpp::message_create_t& event) {
 void Bot::handle_message_update(const dpp::message_update_t& event) {
   const auto& channel_id = event.msg.channel_id.str();
   const auto& msg_id = chat_map[channel_id].first;
-  if (msg_id == event.msg.id.str())
+  if (msg_id == event.msg.id)
     update_chat_map(event.raw_event, channel_id, msg_id);
 }
 
@@ -288,7 +287,8 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
 
 void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
   if (dpp::run_once<struct register_bot_commands>()) {
-    if (delete_commands) bot.global_bulk_command_delete();
+    if (delete_commands) 
+      bot.global_bulk_command_delete();
 
     bot.global_command_create(dpp::slashcommand("гандон", "Проверка", bot.me.id));
     bot.global_command_create(dpp::slashcommand("pages", "test", bot.me.id));
@@ -310,6 +310,7 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
 
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
+
   bot.on_log(dpp::utility::cout_logger());
   bot.on_button_click([this](const dpp::button_click_t& event) {
     handle_button_click(event);
@@ -332,5 +333,6 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
   bot.on_ready([this, delete_commands](const dpp::ready_t& event) { 
     ready_event(event, delete_commands); 
   });
+
   bot.start(dpp::st_wait);
 }
