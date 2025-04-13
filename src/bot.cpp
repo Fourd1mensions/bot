@@ -1,4 +1,3 @@
-#include "dispatcher.h"
 #include <bot.h>
 #include <requests.h>
 
@@ -87,7 +86,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   if (beatmap_id.empty()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
     return;
-  } 
+  }
 
   std::string response_beatmap = request.get_beatmap(beatmap_id);
   if (response_beatmap.empty()) {
@@ -117,15 +116,14 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
       }
     });
   });
+  for (auto it = scores.begin(); it != scores.end();) {
+    if (!it->is_empty) ++it;
+    else scores.erase(it);
+  }
 
   if (scores.empty()) {
     event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
     return;
-  }
-
-  for (auto it = scores.begin(); it != scores.end();) {
-    if (!it->is_empty) ++it;
-    else scores.erase(it);
   }
 
   if (scores.size() > 1) {
