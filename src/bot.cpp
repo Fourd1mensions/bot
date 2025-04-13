@@ -1,3 +1,4 @@
+#include "dispatcher.h"
 #include <bot.h>
 #include <requests.h>
 
@@ -31,12 +32,15 @@ bool Random::get_bool() {
   return distr(_gen);
 }
 
-void Bot::update_chat_map(const std::string& msg, const std::string& channel_id) {
-  std::regex url_reg(
-      R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
+void Bot::update_chat_map(const std::string& msg, const std::string& channel_id, const std::string& msg_id) {
+  std::regex url_reg(R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
   std::smatch m;
-  if (std::regex_search(msg, m, url_reg) && m.size() > 2)
-    chat_map[channel_id] = m.str(2);
+
+  if (std::regex_search(msg, m, url_reg) && m.size() > 2) {
+    auto& p = chat_map[channel_id];
+    p.first = msg_id;
+    p.second = m.str(2);
+  }
 }
 
 void Bot::write_users_json() {
@@ -78,20 +82,20 @@ auto Bot::read_users_json(const dpp::snowflake& guild_id)
 void Bot::handle_button_click(const dpp::button_click_t& event) {}
 
 void Bot::create_lb_message(const dpp::message_create_t& event) {
-  std::string beatmap_id;
-  auto        beatmap_it = chat_map.find(event.msg.channel_id.str());
-  if (beatmap_it == chat_map.end()) {
-    event.reply(dpp::message("Can't find the map. Please send the map link and "
-                                  "use the command again."));
+  const std::string& channel_id = event.msg.channel_id.str(); 
+  const std::string& beatmap_id = chat_map[channel_id].second;
+  if (beatmap_id.empty()) {
+    event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
     return;
   } 
-  beatmap_id                   = beatmap_it->second;
+
   std::string response_beatmap = request.get_beatmap(beatmap_id);
   if (response_beatmap.empty()) {
     spdlog::error("Unable to send request");
     event.reply(dpp::message("Peppy didn't respond"));
     return;
   }
+
   Beatmap            beatmap(response_beatmap);
   std::vector<Score> scores(disid_osuid_map.size());
   // force tbb parallelization ???
@@ -113,20 +117,24 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
       }
     });
   });
-  for (auto it = scores.begin(); it != scores.end();) {
-    if (!it->is_empty) ++it;
-    else scores.erase(it);
-  }
+
   if (scores.empty()) {
     event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
     return;
   }
+
+  for (auto it = scores.begin(); it != scores.end();) {
+    if (!it->is_empty) ++it;
+    else scores.erase(it);
+  }
+
   if (scores.size() > 1) {
     stdr::sort(scores, [](const Score a, const Score b) {       // sort best user scores
       return std::make_tuple(a.get_pp(), a.get_total_score()) >
           std::make_tuple(b.get_pp(), b.get_total_score());
     });
   }
+
   auto msg_id = event.msg.id;
   auto embed  = dpp::embed()
     .set_color(dpp::colors::viola_purple)
@@ -146,18 +154,26 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   event.reply(embed);
 }
 
-void Bot::handle_message(const dpp::message_create_t& event) {
+void Bot::handle_message_create(const dpp::message_create_t& event) {
   fmt::print("{}: {}\n", event.msg.author.username, event.msg.content);
-  update_chat_map(event.raw_event, event.msg.channel_id.str());
+
+  update_chat_map(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
+
   if (event.msg.content.find("!lb") == 0) {
     std::jthread(&Bot::create_lb_message, this, std::move(event)).detach();
   }
 }
 
+void Bot::handle_message_update(const dpp::message_update_t& event) {
+  const auto& channel_id = event.msg.channel_id.str();
+  const auto& msg_id = chat_map[channel_id].first;
+  if (msg_id == event.msg.id.str())
+    update_chat_map(event.raw_event, channel_id, msg_id);
+}
+
 void Bot::handle_member_add(const dpp::guild_member_add_t& event) {
-  if (!event.added.get_user()->is_bot() && give_autorole) { 
+  if (!event.added.get_user()->is_bot() && give_autorole) 
     bot.guild_member_add_role(guild_id, event.added.get_user()->id, autorole_id);
-  }
 }
 
 void Bot::handle_member_remove(const dpp::guild_member_remove_t& event) {
@@ -224,25 +240,25 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
 
   // score
   if (event.command.get_command_name() == "score") {
-    auto user_it = disid_osuid_map.find(event.command.usr.id.str());
-    if (user_it == disid_osuid_map.end()) {
+    const auto& user = disid_osuid_map[event.command.usr.id.str()];
+    if (user.empty()) {
       event.reply(dpp::message("Please /set your osu username before using this command."));
       return;
     }
-    std::string user       = user_it->second;
-    auto        beatmap_it = chat_map.find(event.command.channel_id.str());
-    if (beatmap_it == chat_map.end()) {
-      event.reply(dpp::message("Can't find the map. Please send the map link "
-                               "and use the command again."));
+
+    const std::string& beatmap_id = chat_map[event.command.channel_id.str()].second;
+    if (beatmap_id.empty()) {
+      event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
       return;
     }
-    std::string beatmap_id       = beatmap_it->second;
+
     std::string response_beatmap = request.get_beatmap(beatmap_id);
     std::string response_score   = request.get_user_beatmap_score(beatmap_id, user);
     if (response_score.empty()) {
       event.reply(dpp::message("Can't find score on this map."));
       return;
     }
+
     Score      score(response_score);
     Beatmap    beatmap(response_beatmap);
     auto embed = dpp::embed()
@@ -301,7 +317,10 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
     handle_button_click(event);
   });
   bot.on_message_create([this](const dpp::message_create_t& event) {
-    handle_message(event);
+    handle_message_create(event);
+  });
+  bot.on_message_update([this](const dpp::message_update_t& event){
+    handle_message_update(event);
   });
   bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
     handle_member_add(event);
@@ -312,7 +331,8 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     std::jthread(&Bot::handle_slashcommand, this, std::move(event)).detach();
   });
-  bot.on_ready(
-      [this, delete_commands](const dpp::ready_t& event) { ready_event(event, delete_commands); });
+  bot.on_ready([this, delete_commands](const dpp::ready_t& event) { 
+    ready_event(event, delete_commands); 
+  });
   bot.start(dpp::st_wait);
 }

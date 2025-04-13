@@ -8,6 +8,7 @@
 #include <requests.h>
 
 #include <dpp/dpp.h>
+#include <utility>
 
 class Random {
 private:
@@ -35,13 +36,13 @@ private:
   std::mutex      mutex;
   tbb::task_arena arena;
 
-  // Contains channel_id: last_beatmap_id
-  std::unordered_map<std::string, std::string> chat_map;
+  // Contains channel_id : {message_id : beatmap_id}
+  std::unordered_map<std::string, std::pair<std::string, std::string>> chat_map;
 
   // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
   std::unordered_map<std::string, std::string> disid_osuid_map;
 
-  void update_chat_map(const std::string& msg, const std::string& channel_id);
+  void update_chat_map(const std::string& msg, const std::string& channel_id, const std::string& msg_id);
   void write_users_json();
   auto read_users_json(const dpp::snowflake& guild_id)
       -> std::unordered_map<std::string, std::string>;
@@ -50,7 +51,8 @@ private:
   // Handle events
 
   void handle_button_click(const dpp::button_click_t& event);
-  void handle_message(const dpp::message_create_t& event);
+  void handle_message_create(const dpp::message_create_t& event);
+  void handle_message_update(const dpp::message_update_t& event);
   void handle_member_add(const dpp::guild_member_add_t& event);
   void handle_member_remove(const dpp::guild_member_remove_t& event);
   void handle_slashcommand(const dpp::slashcommand_t& event);
