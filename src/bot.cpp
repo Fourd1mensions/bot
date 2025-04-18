@@ -1,5 +1,6 @@
 #include <bot.h>
 #include <requests.h>
+#include <utils.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -53,8 +54,8 @@ void Bot::write_users_json() {
 }
 
 snowflake_string_map Bot::read_users_json(const dpp::snowflake& guild_id) {
-  std::unordered_map<dpp::snowflake, std::string> result;
-  std::ifstream                                file("users.json");
+  snowflake_string_map result;
+  std::ifstream file("users.json");
   if (!file.is_open()) {
     spdlog::error("Failed to open users.json, cannot load users");
     return {};
@@ -75,9 +76,9 @@ snowflake_string_map Bot::read_users_json(const dpp::snowflake& guild_id) {
     }
   }
   return result;
-}
+} 
 
-void Bot::handle_button_click(const dpp::button_click_t& event) {}
+void Bot::button_click_event(const dpp::button_click_t& event) {}
 
 void Bot::create_lb_message(const dpp::message_create_t& event) {
   const std::string& channel_id = event.msg.channel_id.str(); 
@@ -105,7 +106,8 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
       if (!scores_j.empty()) {
         json j = json::parse(scores_j);
         j = j["scores"];
-        std::sort(j.begin(), j.end(), [](const json& a, const json& b) { // sort specific user's scores
+        // sort specific user's scores
+        std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
           return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
         });
         score.from_json(j.at(0));
@@ -124,9 +126,9 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
     event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
     return;
   }
-
+  // sort best user scores
   if (scores.size() > 1) {
-    stdr::sort(scores, [](const Score a, const Score b) {       // sort best user scores
+    stdr::sort(scores, [](const Score& a, const Score& b) {
       return std::make_tuple(a.get_pp(), a.get_total_score()) >
           std::make_tuple(b.get_pp(), b.get_total_score());
     });
@@ -151,7 +153,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   event.reply(embed);
 }
 
-void Bot::handle_message_create(const dpp::message_create_t& event) {
+void Bot::message_create_event(const dpp::message_create_t& event) {
   fmt::print("{}: {}\n", event.msg.author.username, event.msg.content);
 
   update_chat_map(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
@@ -161,23 +163,23 @@ void Bot::handle_message_create(const dpp::message_create_t& event) {
   }
 }
 
-void Bot::handle_message_update(const dpp::message_update_t& event) {
+void Bot::message_update_event(const dpp::message_update_t& event) {
   const auto& channel_id = event.msg.channel_id.str();
   const auto& msg_id = chat_map[channel_id].first;
   if (msg_id == event.msg.id)
     update_chat_map(event.raw_event, channel_id, msg_id);
 }
 
-void Bot::handle_member_add(const dpp::guild_member_add_t& event) {
+void Bot::member_add_event(const dpp::guild_member_add_t& event) {
   if (!event.added.get_user()->is_bot() && give_autorole) 
     bot.guild_member_add_role(guild_id, event.added.get_user()->id, autorole_id);
 }
 
-void Bot::handle_member_remove(const dpp::guild_member_remove_t& event) {
+void Bot::member_remove_event(const dpp::guild_member_remove_t& event) {
   disid_osuid_map.erase(event.removed.id.str());
 }
 
-void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
+void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
   // lol
   if (event.command.get_command_name() == "гандон") {
     float_t    f     = rand.get_real(0.0f, 100.0f);
@@ -231,7 +233,7 @@ void Bot::handle_slashcommand(const dpp::slashcommand_t& event) {
       u_from_req = j.at("username").get<std::string>();
     } catch (json::exception e) {}
     disid_osuid_map[key] = fmt::to_string(j.value("id", 0));
-    write_users_json();
+    utils::map_to_file("users.json", disid_osuid_map);
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
 
@@ -305,7 +307,7 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
   }
   guild_id = Request::read_config("GUILD_ID");
   autorole_id = Request::read_config("AUTOROLE_ID");
-  disid_osuid_map = read_users_json(guild_id);
+  utils::file_to_map(disid_osuid_map, "users.json");
 }
 
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
@@ -313,22 +315,22 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
 
   bot.on_log(dpp::utility::cout_logger());
   bot.on_button_click([this](const dpp::button_click_t& event) {
-    handle_button_click(event);
+    button_click_event(event);
   });
   bot.on_message_create([this](const dpp::message_create_t& event) {
-    handle_message_create(event);
+    message_create_event(event);
   });
   bot.on_message_update([this](const dpp::message_update_t& event){
-    handle_message_update(event);
+    message_update_event(event);
   });
   bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
-    handle_member_add(event);
+    member_add_event(event);
   });
   bot.on_guild_member_remove([this](const dpp::guild_member_remove_t& event) {
-    handle_member_remove(event);
+    member_remove_event(event);
   });
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
-    std::jthread(&Bot::handle_slashcommand, this, std::move(event)).detach();
+    std::jthread(&Bot::slashcommand_event, this, std::move(event)).detach();
   });
   bot.on_ready([this, delete_commands](const dpp::ready_t& event) { 
     ready_event(event, delete_commands); 
