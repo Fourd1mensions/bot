@@ -45,20 +45,22 @@ private:
 
   // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
   snowflake_string_map  disid_osuid_map;
-
   void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
+
+  // TODO: delete all this shit
   void                  write_users_json();
   snowflake_string_map  read_users_json(const dpp::snowflake& guild_id);
   void                  create_lb_message(const dpp::message_create_t& event);
+  // TODO: check guild members 
 
   // Handle events
 
-  void handle_button_click(const dpp::button_click_t& event);
-  void handle_message_create(const dpp::message_create_t& event);
-  void handle_message_update(const dpp::message_update_t& event);
-  void handle_member_add(const dpp::guild_member_add_t& event);
-  void handle_member_remove(const dpp::guild_member_remove_t& event);
-  void handle_slashcommand(const dpp::slashcommand_t& event);
+  void button_click_event(const dpp::button_click_t& event);
+  void message_create_event(const dpp::message_create_t& event);
+  void message_update_event(const dpp::message_update_t& event);
+  void member_add_event(const dpp::guild_member_add_t& event);
+  void member_remove_event(const dpp::guild_member_remove_t& event);
+  void slashcommand_event(const dpp::slashcommand_t& event);
   void ready_event(const dpp::ready_t& event, bool);
 
 public:
