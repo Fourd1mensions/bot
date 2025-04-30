@@ -43,41 +43,6 @@ void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_
   }
 }
 
-void Bot::write_users_json() {
-  std::lock_guard<std::mutex> lock(mutex);
-  json                        j(disid_osuid_map);
-  std::ofstream               file("users.json");
-  if (file.is_open()) {
-    file << j.dump(4);
-    file.close();
-  }
-}
-
-snowflake_string_map Bot::read_users_json(const dpp::snowflake& guild_id) {
-  snowflake_string_map result;
-  std::ifstream file("users.json");
-  if (!file.is_open()) {
-    spdlog::error("Failed to open users.json, cannot load users");
-    return {};
-  }
-  json j = json::parse(file, nullptr, false);
-  file.close();
-  if (j.is_discarded()) {
-    spdlog::error("Failed to parse users.json!");
-    return {};
-  }
-  for (const auto& [id, username] : j.items()) {
-    try {
-      if (bot.guild_get_member_sync(guild_id, id).user_id == id.c_str()) {
-        result[id] = username.get<std::string>();
-      }
-    } catch (const dpp::exception& dpp_ex) {
-      spdlog::error("Failed to fetch {} data ({})", username.get<std::string>(), dpp_ex.what());
-    }
-  }
-  return result;
-} 
-
 void Bot::button_click_event(const dpp::button_click_t& event) {}
 
 void Bot::create_lb_message(const dpp::message_create_t& event) {
@@ -233,7 +198,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
       u_from_req = j.at("username").get<std::string>();
     } catch (json::exception e) {}
     disid_osuid_map[key] = fmt::to_string(j.value("id", 0));
-    utils::map_to_file("users.json", disid_osuid_map);
+    utils::map_to_file(disid_osuid_map, "users.json");
     event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
   }
 

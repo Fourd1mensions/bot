@@ -17,7 +17,7 @@ private:
   std::string username;
   size_t      user_id;
   
-  public:
+public:
   bool        is_empty = true;
 
   void        from_json(const json& j);

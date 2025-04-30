@@ -1,4 +1,5 @@
 #include <osu.h>
+#include <utils.h>
 
 #include <spdlog/spdlog.h>
 
@@ -71,13 +72,8 @@ std::string Score::get_header() const {
 }
 
 std::string Score::get_body(const uint32_t beatmap_combo) const {
-  auto ISO8601_to_UNIX = [](const std::string& datetime) {
-    std::tm            tm = {};
-    std::istringstream ss(datetime);
-    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-    return std::mktime(&tm) - timezone;
-  };
-  std::string time = fmt::format("<t:{}:R>", ISO8601_to_UNIX(created_at));
+
+  std::string time = fmt::format("<t:{}:R>", utils::ISO8601_to_UNIX(created_at));
 
   std::string emoji_id;
   if (rank == "F")

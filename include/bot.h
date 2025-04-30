@@ -48,9 +48,7 @@ private:
   void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
 
   // TODO: delete all this shit
-  void                  write_users_json();
-  snowflake_string_map  read_users_json(const dpp::snowflake& guild_id);
-  void                  create_lb_message(const dpp::message_create_t& event);
+ void                  create_lb_message(const dpp::message_create_t& event);
   // TODO: check guild members 
 
   // Handle events

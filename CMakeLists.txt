@@ -29,6 +29,8 @@ set(MAIN_SOUCES
   src/requests.cpp
   src/bot.cpp
   src/osu.cpp
+  src/utils.cpp
+  src/message_builder.cpp
 )
 
 find_package(fmt REQUIRED)
