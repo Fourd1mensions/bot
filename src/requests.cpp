@@ -112,11 +112,11 @@ std::string Request::get_user(const std::string_view user, const bool by_id) con
     spdlog::error("get_user failed, token is dead");
     return "";
   }
-  cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id? "" : "@", user)},
-               cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                           {"Content-Type", "application/json"},
-                           {"Accept", "application/json"}});
+  cpr::Response r = cpr::Get(
+      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", user)},
+      cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                  {"Content-Type", "application/json"},
+                  {"Accept", "application/json"}});
   if (r.status_code == 200) {
     spdlog::info("get_user success");
     return r.text;
@@ -124,26 +124,27 @@ std::string Request::get_user(const std::string_view user, const bool by_id) con
   spdlog::info("get_user failed, status: {}", r.status_code);
   return "";
 }
-// if all=false returns single score that peppy wants, else - all user scores on map 
+// if all=false returns single score that peppy wants, else - all user scores on map
 std::string Request::get_user_beatmap_score(const std::string_view beatmap,
-                                            const std::string_view user,
-                                            const bool all) const {
+                                            const std::string_view user, const bool all) const {
   if (is_refresh_needed) {
     spdlog::error("get_user_score failed, token is dead");
     return {};
   }
 
-  cpr::Response r = cpr::Get(
-      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}", beatmap, user, all? "/all" : "")},
-      cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                  {"Content-Type", "application/json"},
-                  {"Accept", "application/json"}});
+  cpr::Response r =
+      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}",
+                                    beatmap, user, all ? "/all" : "")},
+               cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                           {"Content-Type", "application/json"},
+                           {"Accept", "application/json"}});
 
   const auto status_code = r.status_code;
   switch (status_code) {
-    case 200: 
-      spdlog::info("status {} for {} on {}", status_code, user, beatmap); 
-      if (r.text != "{\"scores\":[]}") return r.text;
+    case 200:
+      spdlog::info("status {} for {} on {}", status_code, user, beatmap);
+      if (r.text != "{\"scores\":[]}")
+        return r.text;
       else {
         fmt::print("...but no scores found\n");
         return {};

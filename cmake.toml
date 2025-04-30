@@ -1,0 +1,40 @@
+# Reference: https://build-cpp.github.io/cmkr/cmake-toml
+[project]
+name = "bot"
+cmake-before = """
+set(DPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+"""
+
+[options]
+CMAKE_EXPORT_COMPILE_COMMANDS = true
+
+[variables]
+CMAKE_BUILD_TYPE = "Release"
+
+[fetch-content]
+fmt = { git = "https://github.com/fmtlib/fmt.git", tag = "11.0.2" }
+spdlog = { git = "https://github.com/gabime/spdlog.git", tag = "v1.14.0" }
+dpp = { git = "https://github.com/brainboxdotcc/DPP.git", tag = "v10.0.35" }
+cpr = { git = "https://github.com/libcpr/cpr.git", tag = "3b15fa82ea74739b574d705fea44959b58142eb8" }
+
+[find-package.Threads]
+required = true
+[find-package.OpenSSL]
+required = true
+
+[target.discord-bot]
+type = "executable"
+sources = ["src/*.cpp"]
+include-directories = ["include"]
+compile-features = ["cxx_std_23"]
+link-libraries = [
+  "fmt::fmt",
+  "spdlog::spdlog",
+  "Threads::Threads",
+  "OpenSSL::Crypto",
+  "OpenSSL::SSL",
+  "cpr::cpr",
+  "dpp",
+  "tbb",
+]
