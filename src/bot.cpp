@@ -48,6 +48,10 @@ void Bot::button_click_event(const dpp::button_click_t& event) {}
 void Bot::create_lb_message(const dpp::message_create_t& event) {
   const std::string& channel_id = event.msg.channel_id.str(); 
   const std::string& beatmap_id = chat_map[channel_id].second;
+
+  dpp::message m{};
+  m.to_json();
+
   if (beatmap_id.empty()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
     return;
