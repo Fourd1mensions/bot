@@ -8,9 +8,9 @@ std::string utils::file::read(const std::string& path) {
     spdlog::error("Failed to open {}", path);
     return {};
   }
-  std::string result;
-  f >> result;
-  return result;
+  std::stringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
 }
 
 bool utils::file::write(const std::string& path, const json& content) {

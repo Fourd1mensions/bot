@@ -140,6 +140,7 @@ std::string Request::get_beatmap(const std::string_view beatmap) const {
 }
 
 Request::Request() {
+  // TODO: split this code to functions, check config.json is opened
   config.api_v1_key     = utils::read_field("API_V1_KEY", "config.json");
   config.client_id      = utils::read_field("CLIENT_ID", "config.json");
   config.client_secret  = utils::read_field("CLIENT_SECRET", "config.json");
