@@ -274,8 +274,8 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
     /*bot.global_command_create(
         dpp::slashcommand("score", "Displays your score", bot.me.id));*/
   }
-  guild_id = Request::read_config("GUILD_ID");
-  autorole_id = Request::read_config("AUTOROLE_ID");
+  guild_id = utils::read_field("GUILD_ID", "config.json");
+  autorole_id =  utils::read_field("AUTOROLE_ID", "config.json"); 
   utils::file_to_map(disid_osuid_map, "users.json");
 }
 

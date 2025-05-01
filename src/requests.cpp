@@ -1,46 +1,12 @@
 #include <requests.h>
 
-#include <fstream>
 #include <string_view>
+#include <thread>
+#include <chrono>
 
 #include <cpr/cpr.h>
 #include <fmt/base.h>
 #include <spdlog/spdlog.h>
-
-std::string Request::read_config(const std::string_view key) {
-  std::ifstream file("config.json");
-  if (!file.is_open())
-    return "";
-  json j;
-  file >> j;
-  file.close();
-  try {
-    return j.value(key, "");
-  } catch (json::exception e) {
-    spdlog::warn("{}", e.what());
-    return "";
-  }
-}
-
-bool Request::save_config() {
-  std::fstream file("config.json", std::ios::in);
-  if (!file.is_open())
-    return false;
-  try {
-    nlohmann::json config = nlohmann::json::parse(file);
-    file.close();
-    config["AUTH_CODE"]     = this->config.auth_code;
-    config["ACCESS_TOKEN"]  = this->config.access_token;
-    config["REFRESH_TOKEN"] = this->config.refresh_token;
-    config["EXPIRES_IN"]    = this->config.expires_in;
-    file.open("config.json", std::ios::out | std::ios::trunc);
-    file << config.dump(4);
-    return true;
-  } catch (json::exception e) {
-    spdlog::error("{}", e.what());
-    return false;
-  }
-}
 
 bool Request::set_tokens(const std::string_view grant_type) {
   cpr::Payload payload{};
@@ -68,7 +34,7 @@ bool Request::set_tokens(const std::string_view grant_type) {
     config.access_token  = j.value("access_token", "");
     config.refresh_token = j.value("refresh_token", "");
     config.expires_in    = j.value("expires_in", 86399);
-    save_config();
+    utils::save_config(config);
     spdlog::info("Got ACCESS_TOKEN!");
     return true;
   }
@@ -171,4 +137,22 @@ std::string Request::get_beatmap(const std::string_view beatmap) const {
   }
   spdlog::info("get_beatmap failed, status: {}", r.status_code);
   return "";
+}
+
+Request::Request() {
+  config.api_v1_key     = utils::read_field("API_V1_KEY", "config.json");
+  config.client_id      = utils::read_field("CLIENT_ID", "config.json");
+  config.client_secret  = utils::read_field("CLIENT_SECRET", "config.json");
+  config.auth_code      = utils::read_field("AUTH_CODE", "config.json");
+  config.access_token   = utils::read_field("ACCESS_TOKEN", "config.json");
+  config.refresh_token  = utils::read_field("REFRESH_TOKEN", "config.json");
+  config.redirect_uri   = utils::read_field("REDIRECT_URI", "config.json");
+  // TODO: new token update alg uses expires_in
+  std::jthread([&]() {
+    while(true) {
+      if(!check_token()) break;
+      std::this_thread::sleep_for(std::chrono::seconds(300));
+    }
+  }).detach();
+
 }

@@ -1,5 +1,5 @@
 #include <bot.h>
-#include <requests.h>
+#include <utils.h>
 
 #include <tbb/tbb.h>
 
@@ -13,7 +13,7 @@ int main(const int argc, const char** argv) {
       delete_commands = true;
   }
 
-  std::string key = Request::read_config("DISCORD_TOKEN");
+  std::string key = utils::read_field("DISCORD_TOKEN","config.json");
   Bot         bot(key, delete_commands);
 
   return EXIT_SUCCESS;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <ctime>
-#include <fstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -13,13 +12,21 @@
 
 using json = nlohmann::json;
 
+// TODO: bring back Config to request.h after rewrite save_config()
+struct Config {
+  std::string api_v1_key, client_id, client_secret, auth_code, access_token,
+      refresh_token, redirect_uri;
+  size_t expires_in;
+};
+
 namespace utils {
 
-  // write_users_json, read_users_json, read_config, emoji_json
+  // TODO: read_config, emoji_json
 
   namespace file {
     std::string read(const std::string& path);
-  }
+    bool write(const std::string& path, const json& content);
+  } // namespace file
 
   std::string read_field(const std::string_view key, const std::string& path);
 
@@ -37,15 +44,7 @@ namespace utils {
       j[std::to_string(key)] = value; 
     }
 
-    std::ofstream file(path);
-    if (!file.is_open()) {
-      spdlog::error("Failed to open {}", path);
-      return false;
-    }
-    file << j.dump(4);
-    file.close();
-
-    return true;
+    return file::write(path, j);
   }
 
   // <string, string> or <snowflake, string>, path to .json file
@@ -71,6 +70,7 @@ namespace utils {
 
     return true;
   }
-
+  // TODO: rewrite this function
+  bool save_config(const Config& config);
   time_t ISO8601_to_UNIX(const std::string& datetime);
 } // namespace utils
