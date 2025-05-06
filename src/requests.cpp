@@ -129,7 +129,6 @@ Request::Request() {
   config.api_v1_key     = utils::read_field("API_V1_KEY", "config.json");
   config.client_id      = utils::read_field("CLIENT_ID", "config.json");
   config.client_secret  = utils::read_field("CLIENT_SECRET", "config.json");
-  config.auth_code      = utils::read_field("AUTH_CODE", "config.json");
   config.access_token   = utils::read_field("ACCESS_TOKEN", "config.json");
   config.redirect_uri   = utils::read_field("REDIRECT_URI", "config.json");
   // TODO: new token update alg uses expires_in
