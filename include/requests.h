@@ -17,8 +17,7 @@ private:
   bool is_refresh_needed = false;
 
   public:
-  // "authorization_code" or "refresh_token"
-  bool set_tokens(const std::string_view grant_type); 
+  bool set_tokens(); 
   bool check_token();
 
   std::string get_user(const std::string_view username, const bool by_id = false) const;

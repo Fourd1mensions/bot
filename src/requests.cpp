@@ -8,22 +8,13 @@
 #include <fmt/base.h>
 #include <spdlog/spdlog.h>
 
-bool Request::set_tokens(const std::string_view grant_type) {
-  cpr::Payload payload{};
-  spdlog::info("Requesting new {}", grant_type);
-  if (grant_type == "authorization_code") {
-    payload = cpr::Payload{{"client_id", config.client_id},
-                           {"client_secret", config.client_secret},
-                           {"grant_type", grant_type.data()},
-                           {"code", config.auth_code},
-                           {"redirect_uri", config.redirect_uri}};
-  } else {
-    payload = cpr::Payload{{"client_id", config.client_id},
-                           {"client_secret", config.client_secret},
-                           {"grant_type", grant_type.data()},
-                           {"refresh_token", config.refresh_token},
-                           {"redirect_uri", config.redirect_uri}};
-  }
+bool Request::set_tokens() { 
+  spdlog::info("Requesting new token");
+  
+  const auto payload = cpr::Payload{{"client_id", config.client_id},
+      {"client_secret", config.client_secret},
+      {"grant_type", "client_credentials"},
+      {"scope", "public"}};
 
   cpr::Response r = cpr::Post(cpr::Url{"https://osu.ppy.sh/oauth/token"},
                               cpr::Header{{"Accept", "application/json"},
@@ -32,7 +23,6 @@ bool Request::set_tokens(const std::string_view grant_type) {
   if (r.status_code == 200) {
     auto j               = json::parse(r.text);
     config.access_token  = j.value("access_token", "");
-    config.refresh_token = j.value("refresh_token", "");
     config.expires_in    = j.value("expires_in", 86399);
     utils::save_config(config);
     spdlog::info("Got ACCESS_TOKEN!");
@@ -49,26 +39,21 @@ bool Request::check_token() {
     return true;
   }
   spdlog::warn("Test request failed, trying to refresh token...");
-  if (set_tokens("refresh_token")) {
-    spdlog::info("Refresh token is success");
-    return true;
+
+  if (!set_tokens()) {
+    spdlog::error("Refresh token by code is failed. Cannot send requests");
+    is_refresh_needed = true;
+    return false;
   }
-  spdlog::warn("Refresh token is failed, trying to use auth code...");
-  if (set_tokens("authorization_code")) {
-    spdlog::info("Refresh token by code is success");
-    return true;
-  }
-  spdlog::error(
-      "Refresh token by code is failed. Please update authentification code and restart bot");
-  is_refresh_needed = true;
-  return false;
+
+  return true;
 }
 
 std::string Request::get_userid_v1(const std::string_view username) {
   cpr::Response r      = cpr::Get(cpr::Url{"http://osu.ppy.sh/api/get_user"},
                                   cpr::Parameters{{"k", config.api_v1_key}, {"u", username.data()}});
-  size_t        pos    = r.text.find_first_of("0123456789");
-  size_t        endpos = r.text.find_first_not_of("0123456789", pos);
+  const size_t        pos    = r.text.find_first_of("0123456789");
+  const size_t        endpos = r.text.find_first_not_of("0123456789", pos);
   return std::string(r.text.substr(pos, endpos - pos));
 }
 
@@ -146,7 +131,6 @@ Request::Request() {
   config.client_secret  = utils::read_field("CLIENT_SECRET", "config.json");
   config.auth_code      = utils::read_field("AUTH_CODE", "config.json");
   config.access_token   = utils::read_field("ACCESS_TOKEN", "config.json");
-  config.refresh_token  = utils::read_field("REFRESH_TOKEN", "config.json");
   config.redirect_uri   = utils::read_field("REDIRECT_URI", "config.json");
   // TODO: new token update alg uses expires_in
   std::jthread([&]() {

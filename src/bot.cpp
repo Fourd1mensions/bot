@@ -181,7 +181,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
       event.reply(dpp::message("<:FRICK:1241513672480653475>"));
       return;
     }
-    if (request.set_tokens("refresh_token"))
+    if (request.set_tokens())
       event.reply(dpp::message("Token update - success"));
     else
       event.reply(dpp::message("Token update - fail"));
