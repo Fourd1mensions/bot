@@ -1,14 +1,12 @@
 #include <requests.h>
 
 #include <string_view>
-#include <thread>
-#include <chrono>
 
 #include <cpr/cpr.h>
 #include <fmt/base.h>
 #include <spdlog/spdlog.h>
 
-bool Request::set_tokens() { 
+bool Request::set_token() { 
   spdlog::info("Requesting new token");
   
   const auto payload = cpr::Payload{{"client_id", config.client_id},
@@ -22,8 +20,10 @@ bool Request::set_tokens() {
                               payload);
   if (r.status_code == 200) {
     auto j               = json::parse(r.text);
-    config.access_token  = j.value("access_token", "");
-    config.expires_in    = j.value("expires_in", 86399);
+    config.access_token = j.value("access_token", "");
+    size_t now          = utils::get_time();    
+    config.expires_at   = now + j.value("expires_in", 86995);
+ 
     utils::save_config(config);
     spdlog::info("Got ACCESS_TOKEN!");
     return true;
@@ -32,19 +32,9 @@ bool Request::set_tokens() {
   return false;
 }
 
-bool Request::check_token() {
-  std::string test = get_user("peppy");
-  if (!test.empty()) {
-    spdlog::info("Test request is success");
-    return true;
-  }
-  spdlog::warn("Test request failed, trying to refresh token...");
-
-  if (!set_tokens()) {
-    spdlog::error("Refresh token by code is failed. Cannot send requests");
-    is_refresh_needed = true;
-    return false;
-  }
+bool Request::update_token() {
+  if (utils::get_time() > config.expires_at) 
+    return set_token();
 
   return true;
 }
@@ -58,11 +48,12 @@ std::string Request::get_userid_v1(const std::string_view username) {
 }
 
 // user = username by default
-std::string Request::get_user(const std::string_view user, const bool by_id) const {
-  if (is_refresh_needed) {
-    spdlog::error("get_user failed, token is dead");
+std::string Request::get_user(const std::string_view user, const bool by_id) {
+   if (!update_token()) {
+    spdlog::error("Can't send requests, token is dead");
     return "";
   }
+  
   cpr::Response r = cpr::Get(
       cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", user)},
       cpr::Header{{"Authorization", "Bearer " + config.access_token},
@@ -77,10 +68,10 @@ std::string Request::get_user(const std::string_view user, const bool by_id) con
 }
 // if all=false returns single score that peppy wants, else - all user scores on map
 std::string Request::get_user_beatmap_score(const std::string_view beatmap,
-                                            const std::string_view user, const bool all) const {
-  if (is_refresh_needed) {
-    spdlog::error("get_user_score failed, token is dead");
-    return {};
+                                            const std::string_view user, const bool all) {
+  if (!update_token()) {
+    spdlog::error("Can't send requests, token is dead");
+    return "";
   }
 
   cpr::Response r =
@@ -106,9 +97,9 @@ std::string Request::get_user_beatmap_score(const std::string_view beatmap,
   return {};
 }
 
-std::string Request::get_beatmap(const std::string_view beatmap) const {
-  if (is_refresh_needed) {
-    spdlog::error("get_beatmap failed, token is dead");
+std::string Request::get_beatmap(const std::string_view beatmap) {
+  if (!update_token()) {
+    spdlog::error("Can't send requests, token is dead");
     return "";
   }
   cpr::Response r =
@@ -117,7 +108,6 @@ std::string Request::get_beatmap(const std::string_view beatmap) const {
                            {"Content-Type", "application/json"},
                            {"Accept", "application/json"}});
   if (r.status_code == 200) {
-    spdlog::info("get_beatmap success");
     return r.text;
   }
   spdlog::info("get_beatmap failed, status: {}", r.status_code);
@@ -125,18 +115,6 @@ std::string Request::get_beatmap(const std::string_view beatmap) const {
 }
 
 Request::Request() {
-  // TODO: split this code to functions, check config.json is opened
-  config.api_v1_key     = utils::read_field("API_V1_KEY", "config.json");
-  config.client_id      = utils::read_field("CLIENT_ID", "config.json");
-  config.client_secret  = utils::read_field("CLIENT_SECRET", "config.json");
-  config.access_token   = utils::read_field("ACCESS_TOKEN", "config.json");
-  config.redirect_uri   = utils::read_field("REDIRECT_URI", "config.json");
-  // TODO: new token update alg uses expires_in
-  std::jthread([&]() {
-    while(true) {
-      if(!check_token()) break;
-      std::this_thread::sleep_for(std::chrono::seconds(300));
-    }
-  }).detach();
-
+  utils::load_config(config);
+  update_token();
 }

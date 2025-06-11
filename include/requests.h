@@ -14,18 +14,16 @@ private:
   // https://osu.ppy.sh/oauth/authorize?response_type=code&client_id=34987&redirect_uri=https://bot.xrcsm.dev/auth/osu&scope=public
   
   Config config;
-  bool is_refresh_needed = false;
+  bool set_token(); 
 
   public:
-  bool set_tokens(); 
-  bool check_token();
-
-  std::string get_user(const std::string_view username, const bool by_id = false) const;
+  bool update_token();
+  std::string get_user(const std::string_view username, const bool by_id = false);
   std::string get_user_beatmap_score(const std::string_view beatmap,
                                      const std::string_view user,
-                                     const bool all = false) const;
+                                     const bool all = false);
   std::string get_userid_v1(const std::string_view username);
-  std::string get_beatmap(const std::string_view beatmap) const;
+  std::string get_beatmap(const std::string_view beatmap);
 
   Request();
 };

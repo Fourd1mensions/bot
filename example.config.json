@@ -4,7 +4,7 @@
   "CLIENT_ID": "",
   "CLIENT_SECRET": "",
   "ACCESS_TOKEN": "",
-  "EXPIRES_IN": "",
+  "EXPIRES_AT": "",
   "REDIRECT_URI": "",
   "GUILD_ID": "",
   "AUTOROLE_ID": ""

@@ -16,7 +16,7 @@ using json = nlohmann::json;
 struct Config {
   std::string api_v1_key, client_id, client_secret, auth_code, access_token,
       refresh_token, redirect_uri;
-  size_t expires_in;
+  size_t expires_in, expires_at;
 };
 
 namespace utils {
@@ -72,5 +72,7 @@ namespace utils {
   }
   // TODO: rewrite this function
   bool save_config(const Config& config);
+  bool load_config(Config& config);
   time_t ISO8601_to_UNIX(const std::string& datetime);
+  size_t get_time();
 } // namespace utils
