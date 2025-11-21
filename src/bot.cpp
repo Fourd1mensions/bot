@@ -1,3 +1,5 @@
+#include "fmt/format.h"
+#include "osu.h"
 #include <bot.h>
 #include <requests.h>
 #include <utils.h>
@@ -125,6 +127,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
 void Bot::message_create_event(const dpp::message_create_t& event) {
   fmt::print("{}: {}\n", event.msg.author.username, event.msg.content);
 
+  std::lock_guard<std::mutex> lock(mutex);
   update_chat_map(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
 
   if (event.msg.content.find("!lb") == 0) {
@@ -254,6 +257,37 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
       event.reply("Giving autorole switched to on");
     }
   }
+
+  // weather
+  if (event.command.get_command_name() == "weather") {
+    const std::string city = std::get<std::string>(event.get_parameter("city"));
+    std::string w = request.get_weather(city);
+    json j = json::parse(w);
+
+    std::string c  = j.value("name", "Unknown");
+    std::string desc  = j["weather"].at(0).value("description", "");
+    double temp       = j["main"].value("temp", 0.0);
+    double feels      = j["main"].value("feels_like", 0.0);
+    int humidity      = j["main"].value("humidity", 0);
+    double wind       = j["wind"].value("speed", 0.0);
+
+    std::time_t timestamp = j.value("dt", 0);
+    timestamp += j.value("timezone", 0);
+    std::tm tm = *std::gmtime(&timestamp);
+    std::ostringstream time;
+    time << std::put_time(&tm, "%d.%m.%Y %H:%M");
+
+    auto embed = dpp::embed()
+        .set_color(dpp::colors::cream)
+        .set_title(c + " - " + desc)
+        //.set_description(desc)
+        .add_field("Температура", fmt::format("{:.1f}°C, ощущается как {:.1f}°C", temp, feels ))
+        .add_field("Влажность", fmt::format("{}%", humidity), true)
+        .add_field("Ветер", fmt::format("{:.1f}м/с", wind), true)
+        .set_footer(dpp::embed_footer().set_text(time.str()));
+
+    event.reply(embed);
+  }
 }
 
 void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
@@ -273,6 +307,9 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
     bot.global_command_create(dpp::slashcommand("autorole_switch", "Manage autorole issuance", bot.me.id));
     /*bot.global_command_create(
         dpp::slashcommand("score", "Displays your score", bot.me.id));*/
+    bot.global_command_create(dpp::slashcommand("weather", "Shows current weather", bot.me.id)
+      .add_option(dpp::command_option(dpp::co_string, "city", "Location", true))
+    );
   }
   guild_id = utils::read_field("GUILD_ID", "config.json");
   autorole_id =  utils::read_field("AUTOROLE_ID", "config.json"); 
@@ -304,6 +341,7 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
   bot.on_ready([this, delete_commands](const dpp::ready_t& event) { 
     ready_event(event, delete_commands); 
   });
+  
 
   bot.start(dpp::st_wait);
 }
