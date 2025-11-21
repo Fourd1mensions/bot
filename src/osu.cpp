@@ -120,7 +120,7 @@ void Beatmap::from_json(const json& j) {
 }
 
 std::string Beatmap::to_string() const {
-  return fmt::format("{} - {} [{}] {}★", artist, title, version, difficulty_rating);
+  return fmt::format("{} - {} [{}] {:.3g}★", artist, title, version, difficulty_rating);
 }
 
 std::string Beatmap::get_beatmap_url() const {
