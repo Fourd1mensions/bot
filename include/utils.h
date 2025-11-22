@@ -41,7 +41,11 @@ namespace utils {
 
     json j;
     for (const auto& [key, value] : map) {
-      j[std::to_string(key)] = value; 
+      if constexpr (std::is_same_v<K, std::string>) {
+        j[key] = value;
+      } else {
+        j[std::to_string(key)] = value;
+      }
     }
 
     return file::write(path, j);

@@ -42,11 +42,22 @@ void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_
     auto& p = chat_map[channel_id];
     p.first = msg_id;
     p.second = m.str(2);
+
+    // Save chat_map to file for persistence (channel_id -> beatmap_id)
+    std::unordered_map<std::string, std::string> persist_map;
+    for (const auto& entry : chat_map) {
+      persist_map[entry.first.str()] = entry.second.second;
+    }
+    utils::map_to_file(persist_map, "chat_map.json");
   }
 }
 
 dpp::message Bot::build_lb_page(const LeaderboardState& state) {
   constexpr size_t SCORES_PER_PAGE = 5;
+
+  size_t start = state.current_page * SCORES_PER_PAGE;
+  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
+  size_t scores_on_page = end - start;
 
   auto embed = dpp::embed()
     .set_color(dpp::colors::viola_purple)
@@ -54,14 +65,13 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state) {
     .set_url(state.beatmap.get_beatmap_url())
     .set_thumbnail(state.beatmap.get_image_url())
     .set_footer(dpp::embed_footer().set_text(
-      fmt::format("Page {}/{} • {} total scores",
+      fmt::format("Page {}/{} • {}/{} {} shown",
         state.current_page + 1,
         state.total_pages,
-        state.scores.size())
+        scores_on_page,
+        state.scores.size(),
+        scores_on_page == 1 ? "score" : "scores")
     ));
-
-  size_t start = state.current_page * SCORES_PER_PAGE;
-  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
 
   for (size_t i = start; i < end; i++) {
     dpp::embed_field field;
@@ -82,22 +92,19 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state) {
     dpp::component prev_button;
     prev_button.set_type(dpp::cot_button)
       .set_id("lb_prev")
-      .set_label("Previous")
       .set_style(dpp::cos_primary)
       .set_emoji("⬅️")
       .set_disabled(state.current_page == 0);
 
     dpp::component page_indicator;
     page_indicator.set_type(dpp::cot_button)
-      .set_id("lb_page_info")
+      .set_id("lb_jump")
       .set_label(fmt::format("{}/{}", state.current_page + 1, state.total_pages))
-      .set_style(dpp::cos_secondary)
-      .set_disabled(true);
+      .set_style(dpp::cos_secondary);
 
     dpp::component next_button;
     next_button.set_type(dpp::cot_button)
       .set_id("lb_next")
-      .set_label("Next")
       .set_style(dpp::cos_primary)
       .set_emoji("➡️")
       .set_disabled(state.current_page >= state.total_pages - 1);
@@ -120,6 +127,11 @@ void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake messa
 
   const auto& state = it->second;
 
+  constexpr size_t SCORES_PER_PAGE = 5;
+  size_t start = state.current_page * SCORES_PER_PAGE;
+  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
+  size_t scores_on_page = end - start;
+
   // Build message without components
   auto embed = dpp::embed()
     .set_color(dpp::colors::viola_purple)
@@ -127,15 +139,13 @@ void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake messa
     .set_url(state.beatmap.get_beatmap_url())
     .set_thumbnail(state.beatmap.get_image_url())
     .set_footer(dpp::embed_footer().set_text(
-      fmt::format("Page {}/{} • {} total scores • Pagination expired",
+      fmt::format("Page {}/{} • {}/{} {} shown",
         state.current_page + 1,
         state.total_pages,
-        state.scores.size())
+        scores_on_page,
+        state.scores.size(),
+        scores_on_page == 1 ? "score" : "scores")
     ));
-
-  constexpr size_t SCORES_PER_PAGE = 5;
-  size_t start = state.current_page * SCORES_PER_PAGE;
-  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
 
   for (size_t i = start; i < end; i++) {
     dpp::embed_field field;
@@ -158,8 +168,82 @@ void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake messa
   });
 }
 
+void Bot::form_submit_event(const dpp::form_submit_t& event) {
+  if (event.custom_id == "lb_jump_modal") {
+    auto msg_id = event.command.message_id;
+    auto it = leaderboard_states.find(msg_id);
+
+    if (it == leaderboard_states.end()) {
+      event.reply(dpp::ir_channel_message_with_source,
+        dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
+      return;
+    }
+
+    auto& state = it->second;
+
+    // Get the page number from the form
+    std::string page_str = std::get<std::string>(event.components[0].components[0].value);
+
+    try {
+      int page_num = std::stoi(page_str);
+
+      // Validate page number
+      if (page_num < 1 || page_num > static_cast<int>(state.total_pages)) {
+        event.reply(dpp::ir_channel_message_with_source,
+          dpp::message(fmt::format("Invalid page number. Please enter a number between 1 and {}.", state.total_pages))
+            .set_flags(dpp::m_ephemeral));
+        return;
+      }
+
+      // Update to the requested page (convert to 0-indexed)
+      state.current_page = page_num - 1;
+
+      // Build updated message with new page
+      dpp::message updated_msg = build_lb_page(state);
+
+      // Update the message
+      event.reply(dpp::ir_update_message, updated_msg);
+
+    } catch (const std::exception& e) {
+      event.reply(dpp::ir_channel_message_with_source,
+        dpp::message("Invalid input. Please enter a valid number.").set_flags(dpp::m_ephemeral));
+    }
+  }
+}
+
 void Bot::button_click_event(const dpp::button_click_t& event) {
   const std::string& button_id = event.custom_id;
+
+  // Handle page jump modal
+  if (button_id == "lb_jump") {
+    auto msg_id = event.command.message_id;
+    auto it = leaderboard_states.find(msg_id);
+
+    if (it == leaderboard_states.end()) {
+      event.reply(dpp::ir_channel_message_with_source,
+        dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
+      return;
+    }
+
+    const auto& state = it->second;
+
+    // Create modal for page jump
+    dpp::interaction_modal_response modal("lb_jump_modal", "Jump to Page");
+
+    dpp::component text_input;
+    text_input.set_label("Page Number")
+      .set_id("page_number")
+      .set_text_style(dpp::text_short)
+      .set_placeholder(fmt::format("Enter 1-{}", state.total_pages))
+      .set_min_length(1)
+      .set_max_length(3)
+      .set_required(true);
+
+    modal.add_component(text_input);
+
+    event.dialog(modal);
+    return;
+  }
 
   // Handle leaderboard pagination
   if (button_id == "lb_prev" || button_id == "lb_next") {
@@ -473,8 +557,17 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
     );
   }
   guild_id = utils::read_field("GUILD_ID", "config.json");
-  autorole_id =  utils::read_field("AUTOROLE_ID", "config.json"); 
+  autorole_id =  utils::read_field("AUTOROLE_ID", "config.json");
   utils::file_to_map(disid_osuid_map, "users.json");
+
+  // Load chat_map from file (channel_id -> beatmap_id)
+  std::unordered_map<std::string, std::string> persist_map;
+  utils::file_to_map(persist_map, "chat_map.json");
+  for (const auto& entry : persist_map) {
+    dpp::snowflake chan_id(entry.first);
+    chat_map[chan_id] = {0, entry.second}; // message_id = 0, will be updated on next message
+  }
+  spdlog::info("Loaded {} beatmap mappings from chat_map.json", persist_map.size());
 }
 
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
@@ -483,6 +576,9 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
   bot.on_log(dpp::utility::cout_logger());
   bot.on_button_click([this](const dpp::button_click_t& event) {
     button_click_event(event);
+  });
+  bot.on_form_submit([this](const dpp::form_submit_t& event) {
+    form_submit_event(event);
   });
   bot.on_message_create([this](const dpp::message_create_t& event) {
     message_create_event(event);

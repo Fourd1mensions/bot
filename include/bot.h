@@ -75,6 +75,7 @@ private:
   // Handle events
 
   void button_click_event(const dpp::button_click_t& event);
+  void form_submit_event(const dpp::form_submit_t& event);
   void message_create_event(const dpp::message_create_t& event);
   void message_update_event(const dpp::message_update_t& event);
   void member_add_event(const dpp::guild_member_add_t& event);
