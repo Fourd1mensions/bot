@@ -24,6 +24,6 @@ private:
                                      const bool all = false);
   std::string get_userid_v1(const std::string_view username);
   std::string get_beatmap(const std::string_view beatmap);
-
+  std::string get_weather(const std::string_view city);
   Request();
 };

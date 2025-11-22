@@ -114,6 +114,26 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
   return "";
 }
 
+std::string Request::get_weather(const std::string_view city) {
+  const std::string key = "52f3df09403f3e9b88d041aa07f2de53";
+  std::string city_ = city.data();
+  auto response = cpr::Get(
+    cpr::Url{"http://api.openweathermap.org/data/2.5/weather"},
+    cpr::Parameters{cpr::Parameter{"q", city_},
+                    cpr::Parameter{"appid", key},
+                    cpr::Parameter{"units", "metric"},
+                    cpr::Parameter{"lang", "ru"}
+                  }
+  );
+
+  if (response.status_code == 200) {
+    auto j = json::parse(response.text);
+    return j.dump(4);    
+  }
+
+  return std::string();
+}
+
 Request::Request() {
   utils::load_config(config);
   update_token();
