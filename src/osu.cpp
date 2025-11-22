@@ -164,7 +164,7 @@ Score::Score(const std::string& json_str) {
   } catch (const json::exception& e) { spdlog::error("Failed to parse score: {}", e.what()); }
 }
 
-Beatmap::Beatmap(const std::string& json_str) {
+Beatmap::Beatmap(const std::string& json_str) : modded_difficulty_rating(0.0f), has_modded_rating(false) {
   try {
     json json = json::parse(json_str);
     from_json(json);
