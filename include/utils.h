@@ -15,7 +15,8 @@ using json = nlohmann::json;
 // TODO: bring back Config to request.h after rewrite save_config()
 struct Config {
   std::string api_v1_key, client_id, client_secret, auth_code, access_token,
-      refresh_token, redirect_uri;
+      refresh_token, redirect_uri, weather_api_key;
+  std::vector<std::string> admin_users;
   size_t expires_in, expires_at;
 };
 

@@ -72,9 +72,16 @@ bool utils::load_config(Config& config) {
     config.client_secret  = j.value("CLIENT_SECRET", "");
     config.access_token   = j.value("ACCESS_TOKEN", "");
     config.redirect_uri   = j.value("REDIRECT_URI", "");
+    config.weather_api_key = j.value("WEATHER_API_KEY", "");
     config.expires_at     = j.value("EXPIRES_AT", 0);
+
+    // Load admin users array
+    if (j.contains("ADMIN_USERS") && j["ADMIN_USERS"].is_array()) {
+      config.admin_users = j["ADMIN_USERS"].get<std::vector<std::string>>();
+    }
+
     return true;
-  } catch(json::exception e) {
+  } catch(const json::exception& e) {
     spdlog::error("{}", e.what());
     return false;
   }

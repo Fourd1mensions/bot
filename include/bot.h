@@ -51,8 +51,10 @@ private:
 
   Random                rand;
   Request               request;
-  
+  Config                config;
+
   std::mutex            mutex;
+  std::mutex            lb_states_mutex;
   tbb::task_arena       arena;
 
   // Contains channel_id : {message_id : beatmap_id}
@@ -61,12 +63,13 @@ private:
   // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
   snowflake_string_map  disid_osuid_map;
 
-  // Stores leaderboard state by message ID for pagination
+  // Stores leaderboard state by message ID for pagination (protected by lb_states_mutex)
   std::unordered_map<dpp::snowflake, LeaderboardState> leaderboard_states;
 
   void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
   dpp::message          build_lb_page(const LeaderboardState& state);
   void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
+  bool                  is_admin(const std::string& user_id) const;
 
   // TODO: delete all this shit
  void                  create_lb_message(const dpp::message_create_t& event);

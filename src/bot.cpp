@@ -34,6 +34,10 @@ bool Random::get_bool() {
   return distr(_gen);
 }
 
+bool Bot::is_admin(const std::string& user_id) const {
+  return std::find(config.admin_users.begin(), config.admin_users.end(), user_id) != config.admin_users.end();
+}
+
 void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id) {
   std::regex url_reg(R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
   std::smatch m;
@@ -120,12 +124,15 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state) {
 }
 
 void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id) {
-  auto it = leaderboard_states.find(message_id);
-  if (it == leaderboard_states.end()) {
-    return; // Already cleaned up
+  LeaderboardState state;
+  {
+    std::lock_guard<std::mutex> lock(lb_states_mutex);
+    auto it = leaderboard_states.find(message_id);
+    if (it == leaderboard_states.end()) {
+      return; // Already cleaned up
+    }
+    state = it->second; // Copy state while holding lock
   }
-
-  const auto& state = it->second;
 
   constexpr size_t SCORES_PER_PAGE = 5;
   size_t start = state.current_page * SCORES_PER_PAGE;
@@ -162,7 +169,10 @@ void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake messa
   bot.message_edit(msg, [this, message_id](const dpp::confirmation_callback_t& callback) {
     if (!callback.is_error()) {
       // Clean up state
-      leaderboard_states.erase(message_id);
+      {
+        std::lock_guard<std::mutex> lock(lb_states_mutex);
+        leaderboard_states.erase(message_id);
+      }
       spdlog::info("Leaderboard pagination expired for message {}", message_id.str());
     }
   });
@@ -171,21 +181,24 @@ void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake messa
 void Bot::form_submit_event(const dpp::form_submit_t& event) {
   if (event.custom_id == "lb_jump_modal") {
     auto msg_id = event.command.message_id;
-    auto it = leaderboard_states.find(msg_id);
-
-    if (it == leaderboard_states.end()) {
-      event.reply(dpp::ir_channel_message_with_source,
-        dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
-      return;
-    }
-
-    auto& state = it->second;
 
     // Get the page number from the form
     std::string page_str = std::get<std::string>(event.components[0].components[0].value);
 
     try {
       int page_num = std::stoi(page_str);
+
+      // Access state with mutex protection
+      std::lock_guard<std::mutex> lock(lb_states_mutex);
+      auto it = leaderboard_states.find(msg_id);
+
+      if (it == leaderboard_states.end()) {
+        event.reply(dpp::ir_channel_message_with_source,
+          dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
+        return;
+      }
+
+      auto& state = it->second;
 
       // Validate page number
       if (page_num < 1 || page_num > static_cast<int>(state.total_pages)) {
@@ -217,15 +230,20 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
   // Handle page jump modal
   if (button_id == "lb_jump") {
     auto msg_id = event.command.message_id;
-    auto it = leaderboard_states.find(msg_id);
 
-    if (it == leaderboard_states.end()) {
-      event.reply(dpp::ir_channel_message_with_source,
-        dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
-      return;
+    size_t total_pages;
+    {
+      std::lock_guard<std::mutex> lock(lb_states_mutex);
+      auto it = leaderboard_states.find(msg_id);
+
+      if (it == leaderboard_states.end()) {
+        event.reply(dpp::ir_channel_message_with_source,
+          dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
+        return;
+      }
+
+      total_pages = it->second.total_pages;
     }
-
-    const auto& state = it->second;
 
     // Create modal for page jump
     dpp::interaction_modal_response modal("lb_jump_modal", "Jump to Page");
@@ -234,7 +252,7 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
     text_input.set_label("Page Number")
       .set_id("page_number")
       .set_text_style(dpp::text_short)
-      .set_placeholder(fmt::format("Enter 1-{}", state.total_pages))
+      .set_placeholder(fmt::format("Enter 1-{}", total_pages))
       .set_min_length(1)
       .set_max_length(3)
       .set_required(true);
@@ -248,6 +266,8 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
   // Handle leaderboard pagination
   if (button_id == "lb_prev" || button_id == "lb_next") {
     auto msg_id = event.command.message_id;
+
+    std::lock_guard<std::mutex> lock(lb_states_mutex);
     auto it = leaderboard_states.find(msg_id);
 
     if (it == leaderboard_states.end()) {
@@ -354,7 +374,10 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
     }
     // Store the state using the bot's reply message ID
     auto reply_msg = callback.get<dpp::message>();
-    leaderboard_states[reply_msg.id] = lb_state;
+    {
+      std::lock_guard<std::mutex> lock(lb_states_mutex);
+      leaderboard_states[reply_msg.id] = lb_state;
+    }
 
     // Schedule invalidation after 5 minutes (only if there are multiple pages)
     if (lb_state.total_pages > 1) {
@@ -425,7 +448,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
   // update_token
   if (event.command.get_command_name() == "update_token") {
     auto invoker_id = event.command.usr.id.str();
-    if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
+    if (!is_admin(invoker_id)) {
       event.reply(dpp::message("<:FRICK:1241513672480653475>"));
       return;
     }
@@ -443,15 +466,20 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
       event.reply(dpp::message(fmt::format("Can't find {} on Bancho.", u_from_com)));
       return;
     }
-    json        j          = json::parse(req);
-    std::string key        = event.command.usr.id.str();
-    std::string u_from_req = "";
+
     try {
-      u_from_req = j.at("username").get<std::string>();
-    } catch (json::exception e) {}
-    disid_osuid_map[key] = fmt::to_string(j.value("id", 0));
-    utils::map_to_file(disid_osuid_map, "users.json");
-    event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
+      json j = json::parse(req);
+      std::string key = event.command.usr.id.str();
+      std::string u_from_req = j.at("username").get<std::string>();
+      int user_id = j.at("id").get<int>();
+
+      disid_osuid_map[key] = fmt::to_string(user_id);
+      utils::map_to_file(disid_osuid_map, "users.json");
+      event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
+    } catch (const json::exception& e) {
+      spdlog::error("Failed to parse user data for {}: {}", u_from_com, e.what());
+      event.reply(dpp::message("Failed to process user data. Please try again later."));
+    }
   }
 
   // score
@@ -489,7 +517,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
   // autorole_switch
   if (event.command.get_command_name() == "autorole_switch") {
     auto invoker_id = event.command.usr.id.str();
-    if (invoker_id != "403958611367297024" && invoker_id != "249958340690575360") {
+    if (!is_admin(invoker_id)) {
       event.reply(dpp::message("<:FRICK:1241513672480653475>"));
       return;
     }
@@ -572,6 +600,11 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
 
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
+
+  // Load configuration
+  if (!utils::load_config(config)) {
+    spdlog::error("Failed to load config.json");
+  }
 
   bot.on_log(dpp::utility::cout_logger());
   bot.on_button_click([this](const dpp::button_click_t& event) {

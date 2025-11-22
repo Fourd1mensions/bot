@@ -4,8 +4,10 @@
   "CLIENT_ID": "",
   "CLIENT_SECRET": "",
   "ACCESS_TOKEN": "",
-  "EXPIRES_AT": "",
+  "EXPIRES_AT": 0,
   "REDIRECT_URI": "",
   "GUILD_ID": "",
-  "AUTOROLE_ID": ""
+  "AUTOROLE_ID": "",
+  "WEATHER_API_KEY": "",
+  "ADMIN_USERS": []
 }

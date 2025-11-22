@@ -115,7 +115,11 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
 }
 
 std::string Request::get_weather(const std::string_view city) {
-  const std::string key = "52f3df09403f3e9b88d041aa07f2de53";
+  const std::string& key = config.weather_api_key;
+  if (key.empty()) {
+    spdlog::error("WEATHER_API_KEY not configured in config.json");
+    return "{}";
+  }
   std::string city_ = city.data();
   auto response = cpr::Get(
     cpr::Url{"http://api.openweathermap.org/data/2.5/weather"},
