@@ -56,25 +56,34 @@ void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_
   }
 }
 
-dpp::message Bot::build_lb_page(const LeaderboardState& state) {
+dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string& mods_filter) {
   constexpr size_t SCORES_PER_PAGE = 5;
 
   size_t start = state.current_page * SCORES_PER_PAGE;
   size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
   size_t scores_on_page = end - start;
 
+  // Use mods_filter from state if available, otherwise use parameter
+  const std::string& active_mods = state.mods_filter.empty() ? mods_filter : state.mods_filter;
+
+  std::string title = state.beatmap.to_string();
+  if (!active_mods.empty()) {
+    title += fmt::format(" +{}", active_mods);
+  }
+
   auto embed = dpp::embed()
     .set_color(dpp::colors::viola_purple)
-    .set_title(state.beatmap.to_string())
+    .set_title(title)
     .set_url(state.beatmap.get_beatmap_url())
     .set_thumbnail(state.beatmap.get_image_url())
     .set_footer(dpp::embed_footer().set_text(
-      fmt::format("Page {}/{} • {}/{} {} shown",
+      fmt::format("Page {}/{} • {}/{} {} shown{}",
         state.current_page + 1,
         state.total_pages,
         scores_on_page,
         state.scores.size(),
-        scores_on_page == 1 ? "score" : "scores")
+        scores_on_page == 1 ? "score" : "scores",
+        active_mods.empty() ? "" : fmt::format(" • Filter: +{}", active_mods))
     ));
 
   for (size_t i = start; i < end; i++) {
@@ -179,6 +188,10 @@ void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake messa
 }
 
 void Bot::form_submit_event(const dpp::form_submit_t& event) {
+  spdlog::info("[FORM] user={} ({}) channel={} form_id={}",
+    event.command.usr.id.str(), event.command.usr.username,
+    event.command.channel_id.str(), event.custom_id);
+
   if (event.custom_id == "lb_jump_modal") {
     auto msg_id = event.command.message_id;
 
@@ -226,6 +239,10 @@ void Bot::form_submit_event(const dpp::form_submit_t& event) {
 
 void Bot::button_click_event(const dpp::button_click_t& event) {
   const std::string& button_id = event.custom_id;
+
+  spdlog::info("[BTN] user={} ({}) channel={} button={}",
+    event.command.usr.id.str(), event.command.usr.username,
+    event.command.channel_id.str(), button_id);
 
   // Handle page jump modal
   if (button_id == "lb_jump") {
@@ -296,26 +313,51 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
   }
 }
 
-void Bot::create_lb_message(const dpp::message_create_t& event) {
-  const std::string& channel_id = event.msg.channel_id.str(); 
+void Bot::create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter) {
+  const std::string& channel_id = event.msg.channel_id.str();
   const std::string& beatmap_id = chat_map[channel_id].second;
-
-  dpp::message m{};
-  m.to_json();
 
   if (beatmap_id.empty()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
     return;
   }
 
+  // Show typing indicator
+  bot.channel_typing(event.msg.channel_id);
+
+  auto start = std::chrono::steady_clock::now();
+
   std::string response_beatmap = request.get_beatmap(beatmap_id);
   if (response_beatmap.empty()) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::steady_clock::now() - start).count();
+
+    if (elapsed > 8) {
+      event.reply(dpp::message(
+        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+    } else {
+      event.reply(dpp::message("❌ Peppy didn't respond"));
+    }
     spdlog::error("Unable to send request");
-    event.reply(dpp::message("Peppy didn't respond"));
     return;
   }
 
   Beatmap            beatmap(response_beatmap);
+
+  // Fetch mod-adjusted beatmap attributes if mods filter is present
+  if (!mods_filter.empty()) {
+    uint32_t mods_bitset = utils::mods_string_to_bitset(mods_filter);
+    std::string attributes_response = request.get_beatmap_attributes(beatmap_id, mods_bitset);
+    if (!attributes_response.empty()) {
+      try {
+        json attributes_json = json::parse(attributes_response);
+        beatmap.set_modded_attributes(attributes_json);
+      } catch (const json::exception& e) {
+        spdlog::error("Failed to parse beatmap attributes: {}", e.what());
+      }
+    }
+  }
+
   std::vector<Score> scores(disid_osuid_map.size());
 
   // Create stable index mapping to avoid race condition
@@ -323,6 +365,14 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
   size_t idx = 0;
   for (const auto& [dis_id, user_id] : disid_osuid_map) {
     user_to_index[user_id] = idx++;
+  }
+
+  // Parse required mods for filtering
+  std::vector<std::string> required_mods;
+  if (!mods_filter.empty()) {
+    for (size_t i = 0; i + 1 < mods_filter.length(); i += 2) {
+      required_mods.push_back(mods_filter.substr(i, 2));
+    }
   }
 
   // force tbb parallelization ???
@@ -334,26 +384,70 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
       if (!scores_j.empty()) {
         json j = json::parse(scores_j);
         j = j["scores"];
-        // sort specific user's scores
-        std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
-          return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
-        });
-        score.from_json(j.at(0));
-        std::string usr_j = request.get_user(fmt::format("{}", score.get_user_id()), true); // TODO: store usernames
-        json usr = json::parse(usr_j);
-        score.set_username(usr.at("username"));
+
+        // Filter scores by mods if filter is specified
+        if (!required_mods.empty()) {
+          auto filtered_scores = json::array();
+          for (const auto& score_json : j) {
+            // Parse mods from this score
+            std::string score_mods_str;
+            if (score_json.contains("mods") && score_json["mods"].is_array()) {
+              for (const auto& mod : score_json["mods"]) {
+                score_mods_str += mod.get<std::string>();
+              }
+            }
+            if (score_mods_str.empty()) score_mods_str = "NM";
+
+            // Check if all required mods are present
+            bool has_all_mods = true;
+            for (const auto& required_mod : required_mods) {
+              if (score_mods_str.find(required_mod) == std::string::npos) {
+                has_all_mods = false;
+                break;
+              }
+            }
+
+            if (has_all_mods) {
+              filtered_scores.push_back(score_json);
+            }
+          }
+          j = filtered_scores;
+        }
+
+        // If we have scores after filtering, take the best one
+        if (!j.empty()) {
+          // sort specific user's scores
+          std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
+            return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
+          });
+          score.from_json(j.at(0));
+          std::string usr_j = request.get_user(fmt::format("{}", score.get_user_id()), true); // TODO: store usernames
+          json usr = json::parse(usr_j);
+          score.set_username(usr.at("username"));
+        }
       }
     });
   });
+  // Remove empty scores
   for (auto it = scores.begin(); it != scores.end();) {
     if (!it->is_empty) ++it;
     else scores.erase(it);
   }
 
+  auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+    std::chrono::steady_clock::now() - start).count();
+
   if (scores.empty()) {
-    event.reply(dpp::message("Can't find any scores on " + beatmap.to_string()));
+    if (elapsed > 8) {
+      event.reply(dpp::message(
+        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      spdlog::warn("[CMD] !lb took {}s and found no scores (slow API response)", elapsed);
+    } else {
+      event.reply(dpp::message("❌ Can't find any scores on " + beatmap.to_string()));
+    }
     return;
   }
+
   // sort best user scores
   if (scores.size() > 1) {
     stdr::sort(scores, [](const Score& a, const Score& b) {
@@ -362,17 +456,20 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
     });
   }
 
+  if (elapsed > 8) {
+    spdlog::warn("[CMD] !lb took {}s to complete (slow API response)", elapsed);
+  }
+
   // Create leaderboard state and build first page
-  LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0);
+  LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0, mods_filter);
   dpp::message msg = build_lb_page(lb_state);
 
-  // Reply and store the state for pagination
+  // Reply with leaderboard
   event.reply(msg, false, [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) {
     if (callback.is_error()) {
       spdlog::error("Failed to send leaderboard message");
       return;
     }
-    // Store the state using the bot's reply message ID
     auto reply_msg = callback.get<dpp::message>();
     {
       std::lock_guard<std::mutex> lock(lb_states_mutex);
@@ -393,13 +490,32 @@ void Bot::create_lb_message(const dpp::message_create_t& event) {
 }
 
 void Bot::message_create_event(const dpp::message_create_t& event) {
-  fmt::print("{}: {}\n", event.msg.author.username, event.msg.content);
+  spdlog::info("[MSG] user={} ({}) channel={} content=\"{}\"",
+    event.msg.author.id.str(), event.msg.author.username,
+    event.msg.channel_id.str(), event.msg.content);
 
   std::lock_guard<std::mutex> lock(mutex);
   update_chat_map(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
 
-  if (event.msg.content.find("!lb") == 0) {
-    std::jthread(&Bot::create_lb_message, this, std::move(event)).detach();
+  // Case-insensitive command check
+  std::string content_lower = event.msg.content;
+  std::transform(content_lower.begin(), content_lower.end(), content_lower.begin(),
+    [](unsigned char c) { return std::tolower(c); });
+
+  if (content_lower.find("!lb") == 0) {
+    // Parse mods parameter (e.g., "!lb +hddt" or "!lb +hd+dt")
+    std::string mods_filter;
+    size_t plus_pos = event.msg.content.find('+');
+    if (plus_pos != std::string::npos) {
+      mods_filter = event.msg.content.substr(plus_pos + 1);
+      // Remove spaces and convert to uppercase
+      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), ' '), mods_filter.end());
+      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), '+'), mods_filter.end());
+      std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(),
+        [](unsigned char c) { return std::toupper(c); });
+    }
+
+    std::jthread(&Bot::create_lb_message, this, std::move(event), mods_filter).detach();
   }
 }
 
@@ -420,8 +536,16 @@ void Bot::member_remove_event(const dpp::guild_member_remove_t& event) {
 }
 
 void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
+  // Log all slash commands with structured context
+  const std::string& cmd_name = event.command.get_command_name();
+  const std::string& user_id = event.command.usr.id.str();
+  const std::string& username = event.command.usr.username;
+  const std::string& channel_id = event.command.channel_id.str();
+
+  spdlog::info("[CMD] user={} ({}) channel={} command=/{}", user_id, username, channel_id, cmd_name);
+
   // lol
-  if (event.command.get_command_name() == "гандон") {
+  if (cmd_name == "гандон") {
     float_t    f     = rand.get_real(0.0f, 100.0f);
     auto embed = dpp::embed()
       .set_color(dpp::colors::cream)
@@ -460,10 +584,21 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
 
   // set
   if (event.command.get_command_name() == "set") {
+    auto start = std::chrono::steady_clock::now();
+
     std::string u_from_com = std::get<std::string>(event.get_parameter("username"));
     std::string req        = request.get_user(u_from_com);
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::steady_clock::now() - start).count();
+
     if (req.empty()) {
-      event.reply(dpp::message(fmt::format("Can't find {} on Bancho.", u_from_com)));
+      if (elapsed > 8) {
+        event.edit_original_response(dpp::message(
+          fmt::format("Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      } else {
+        event.edit_original_response(dpp::message(fmt::format("Can't find {} on Bancho.", u_from_com)));
+      }
       return;
     }
 
@@ -475,10 +610,15 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
 
       disid_osuid_map[key] = fmt::to_string(user_id);
       utils::map_to_file(disid_osuid_map, "users.json");
-      event.reply(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
+
+      if (elapsed > 8) {
+        spdlog::warn("[CMD] /set took {}s to complete (slow API response)", elapsed);
+      }
+
+      event.edit_original_response(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
     } catch (const json::exception& e) {
       spdlog::error("Failed to parse user data for {}: {}", u_from_com, e.what());
-      event.reply(dpp::message("Failed to process user data. Please try again later."));
+      event.edit_original_response(dpp::message("Failed to process user data. Please try again later."));
     }
   }
 
@@ -486,20 +626,31 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
   if (event.command.get_command_name() == "score") {
     const auto& user = disid_osuid_map[event.command.usr.id.str()];
     if (user.empty()) {
-      event.reply(dpp::message("Please /set your osu username before using this command."));
+      event.edit_original_response(dpp::message("Please /set your osu username before using this command."));
       return;
     }
 
     const std::string& beatmap_id = chat_map[event.command.channel_id.str()].second;
     if (beatmap_id.empty()) {
-      event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
+      event.edit_original_response(dpp::message("Can't find the map. Please send the map link and use this command again."));
       return;
     }
 
+    auto start = std::chrono::steady_clock::now();
+
     std::string response_beatmap = request.get_beatmap(beatmap_id);
     std::string response_score   = request.get_user_beatmap_score(beatmap_id, user);
-    if (response_score.empty()) {
-      event.reply(dpp::message("Can't find score on this map."));
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::steady_clock::now() - start).count();
+
+    if (response_score.empty() || response_beatmap.empty()) {
+      if (elapsed > 8) {
+        event.edit_original_response(dpp::message(
+          fmt::format("Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      } else {
+        event.edit_original_response(dpp::message("Can't find score on this map."));
+      }
       return;
     }
 
@@ -511,7 +662,12 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
       .set_url(beatmap.get_beatmap_url())
       .set_thumbnail(beatmap.get_image_url())
       .add_field("Your best score on map", score.to_string(beatmap.get_max_combo()));
-    event.reply(embed);
+
+    if (elapsed > 8) {
+      spdlog::warn("[CMD] /score took {}s to complete (slow API response)", elapsed);
+    }
+
+    event.edit_original_response(dpp::message(event.command.channel_id, embed));
   }
 
   // autorole_switch
@@ -537,6 +693,11 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
     std::string w = request.get_weather(city);
     json j = json::parse(w);
 
+    if (j.empty() || j.is_null()) {
+      event.edit_original_response(dpp::message("Failed to get weather data. Please try again later."));
+      return;
+    }
+
     std::string c  = j.value("name", "Unknown");
     std::string desc  = j["weather"].at(0).value("description", "");
     double temp       = j["main"].value("temp", 0.0);
@@ -559,7 +720,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
         .add_field("Ветер", fmt::format("{:.1f}м/с", wind), true)
         .set_footer(dpp::embed_footer().set_text(time.str()));
 
-    event.reply(embed);
+    event.edit_original_response(dpp::message(event.command.channel_id, embed));
   }
 }
 
@@ -601,6 +762,11 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
 Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
 
+  // Configure spdlog with structured logging pattern
+  spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
+  spdlog::set_level(spdlog::level::info);
+  spdlog::info("Initializing bot...");
+
   // Load configuration
   if (!utils::load_config(config)) {
     spdlog::error("Failed to load config.json");
@@ -626,6 +792,11 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
     member_remove_event(event);
   });
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
+    // Call thinking() immediately for commands that make API calls
+    const std::string& cmd = event.command.get_command_name();
+    if (cmd == "set" || cmd == "score" || cmd == "weather") {
+      event.thinking();
+    }
     std::jthread(&Bot::slashcommand_event, this, std::move(event)).detach();
   });
   bot.on_ready([this, delete_commands](const dpp::ready_t& event) { 

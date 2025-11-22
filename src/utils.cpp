@@ -98,3 +98,29 @@ size_t utils::get_time() {
   return static_cast<size_t>(system_clock::to_time_t(system_clock::now()));
 }
 
+uint32_t utils::mods_string_to_bitset(const std::string& mods) {
+  if (mods.empty() || mods == "NM") return 0;
+
+  uint32_t result = 0;
+  for (size_t i = 0; i + 1 < mods.length(); i += 2) {
+    std::string mod = mods.substr(i, 2);
+
+    if (mod == "NF") result |= 1;
+    else if (mod == "EZ") result |= 2;
+    else if (mod == "TD") result |= 4;
+    else if (mod == "HD") result |= 8;
+    else if (mod == "HR") result |= 16;
+    else if (mod == "SD") result |= 32;
+    else if (mod == "DT") result |= 64;
+    else if (mod == "NC") result |= 576;  // NC = 512 + 64 (includes DT)
+    else if (mod == "HT") result |= 256;
+    else if (mod == "RX") result |= 128;
+    else if (mod == "FL") result |= 1024;
+    else if (mod == "AT") result |= 2048;
+    else if (mod == "SO") result |= 4096;
+    else if (mod == "AP") result |= 8192;
+    else if (mod == "PF") result |= 16416; // PF = 16384 + 32 (includes SD)
+  }
+  return result;
+}
+

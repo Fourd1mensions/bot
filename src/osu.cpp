@@ -120,7 +120,8 @@ void Beatmap::from_json(const json& j) {
 }
 
 std::string Beatmap::to_string() const {
-  return fmt::format("{} - {} [{}] {:.3g}★", artist, title, version, difficulty_rating);
+  float_t rating = has_modded_rating ? modded_difficulty_rating : difficulty_rating;
+  return fmt::format("{} - {} [{}] {:.3g}★", artist, title, version, rating);
 }
 
 std::string Beatmap::get_beatmap_url() const {
@@ -133,6 +134,27 @@ std::string Beatmap::get_image_url() const {
 
 uint32_t Beatmap::get_max_combo() const {
   return max_combo;
+}
+
+void Beatmap::set_modded_attributes(const json& attributes_json) {
+  try {
+    if (attributes_json.contains("attributes")) {
+      const json& attrs = attributes_json.at("attributes");
+      if (attrs.contains("star_rating")) {
+        modded_difficulty_rating = attrs.at("star_rating").get<double>();
+        has_modded_rating = true;
+      }
+    }
+  } catch (const json::exception& e) {
+    spdlog::error("Failed to parse beatmap attributes: {}", e.what());
+  }
+}
+
+float_t Beatmap::get_difficulty_rating(bool use_modded) const {
+  if (use_modded && has_modded_rating) {
+    return modded_difficulty_rating;
+  }
+  return difficulty_rating;
 }
 
 Score::Score(const std::string& json_str) {

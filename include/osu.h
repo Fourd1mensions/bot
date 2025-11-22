@@ -29,6 +29,7 @@ public:
   inline auto get_pp() const { return pp; }
   inline auto get_total_score() const { return total_score; }
   inline auto get_user_id() const { return user_id; }
+  inline const std::string& get_mods() const { return mods; }
 
   inline void set_username(const std::string& name) { username = name; }
   
@@ -42,6 +43,8 @@ private:
   uint32_t    beatmap_id;
   uint32_t    beatmapset_id;
   float_t     difficulty_rating;
+  float_t     modded_difficulty_rating; // Star rating with mods applied
+  bool        has_modded_rating;        // Whether modded rating has been set
   std::string artist;
   std::string title;
   std::string version; // diff name
@@ -56,10 +59,12 @@ public:
   std::string get_beatmap_url() const;
   std::string get_image_url() const;
   uint32_t    get_max_combo() const;
+  void        set_modded_attributes(const json& attributes_json);
+  float_t     get_difficulty_rating(bool use_modded = false) const;
 
-  Beatmap() = default;
+  Beatmap() : modded_difficulty_rating(0.0f), has_modded_rating(false) {}
 
-  Beatmap(const json& json) {
+  Beatmap(const json& json) : modded_difficulty_rating(0.0f), has_modded_rating(false) {
     from_json(json);
   }
 

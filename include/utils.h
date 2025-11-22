@@ -80,4 +80,5 @@ namespace utils {
   bool load_config(Config& config);
   time_t ISO8601_to_UNIX(const std::string& datetime);
   size_t get_time();
+  uint32_t mods_string_to_bitset(const std::string& mods);
 } // namespace utils

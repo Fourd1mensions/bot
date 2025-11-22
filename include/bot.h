@@ -29,12 +29,13 @@ using snowflake_string_map = std::unordered_map<dpp::snowflake, std::string>;
 struct LeaderboardState {
   std::vector<Score> scores;
   Beatmap beatmap;
+  std::string mods_filter;
   size_t current_page;
   size_t total_pages;
 
   LeaderboardState() : current_page(0), total_pages(0) {}
-  LeaderboardState(std::vector<Score> s, Beatmap b, size_t page = 0)
-    : scores(std::move(s)), beatmap(std::move(b)), current_page(page) {
+  LeaderboardState(std::vector<Score> s, Beatmap b, size_t page = 0, std::string mods = "")
+    : scores(std::move(s)), beatmap(std::move(b)), mods_filter(std::move(mods)), current_page(page) {
     constexpr size_t SCORES_PER_PAGE = 5;
     total_pages = (scores.size() + SCORES_PER_PAGE - 1) / SCORES_PER_PAGE;
     if (total_pages == 0) total_pages = 1;
@@ -67,12 +68,12 @@ private:
   std::unordered_map<dpp::snowflake, LeaderboardState> leaderboard_states;
 
   void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
-  dpp::message          build_lb_page(const LeaderboardState& state);
+  dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
   void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
   bool                  is_admin(const std::string& user_id) const;
 
   // TODO: delete all this shit
- void                  create_lb_message(const dpp::message_create_t& event);
+ void                  create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
   // TODO: check guild members 
 
   // Handle events
