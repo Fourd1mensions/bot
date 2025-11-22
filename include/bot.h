@@ -26,6 +26,21 @@ public:
 
 using snowflake_string_map = std::unordered_map<dpp::snowflake, std::string>;
 
+struct LeaderboardState {
+  std::vector<Score> scores;
+  Beatmap beatmap;
+  size_t current_page;
+  size_t total_pages;
+
+  LeaderboardState() : current_page(0), total_pages(0) {}
+  LeaderboardState(std::vector<Score> s, Beatmap b, size_t page = 0)
+    : scores(std::move(s)), beatmap(std::move(b)), current_page(page) {
+    constexpr size_t SCORES_PER_PAGE = 5;
+    total_pages = (scores.size() + SCORES_PER_PAGE - 1) / SCORES_PER_PAGE;
+    if (total_pages == 0) total_pages = 1;
+  }
+};
+
 class Bot {
 private:
   bool                  give_autorole = true;
@@ -45,7 +60,13 @@ private:
 
   // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
   snowflake_string_map  disid_osuid_map;
+
+  // Stores leaderboard state by message ID for pagination
+  std::unordered_map<dpp::snowflake, LeaderboardState> leaderboard_states;
+
   void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
+  dpp::message          build_lb_page(const LeaderboardState& state);
+  void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
 
   // TODO: delete all this shit
  void                  create_lb_message(const dpp::message_create_t& event);
