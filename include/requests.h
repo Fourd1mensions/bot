@@ -3,6 +3,8 @@
 #include <utils.h>
 
 #include <string>
+#include <cpr/cpr.h>
+#include <spdlog/spdlog.h>
 
 #include <nlohmann/json.hpp>
 
@@ -12,9 +14,27 @@ class Request {
 private:
   // if refresh token doesn't work use authorization code
   // https://osu.ppy.sh/oauth/authorize?response_type=code&client_id=34987&redirect_uri=https://bot.xrcsm.dev/auth/osu&scope=public
-  
+
   Config config;
-  bool set_token(); 
+  bool set_token();
+
+  // Helper to execute API requests with automatic 401 retry
+  template<typename Func>
+  cpr::Response execute_with_retry(Func&& request_func) {
+    cpr::Response r = request_func();
+
+    // Handle 401 Unauthorized - token might have expired
+    if (r.status_code == 401) {
+      spdlog::warn("[API] Got 401, refreshing token and retrying");
+      config.expires_at = 0; // Force token refresh
+      if (set_token()) {
+        // Retry the request with new token
+        r = request_func();
+      }
+    }
+
+    return r;
+  }
 
   public:
   bool update_token();
