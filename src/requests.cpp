@@ -103,11 +103,13 @@ std::string Request::get_user(const std::string_view user, const bool by_id) {
   // URL-encode username if not using ID
   std::string encoded_user = by_id ? std::string(user) : cpr::util::urlEncode(std::string(user));
 
-  cpr::Response r = cpr::Get(
-      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", encoded_user)},
-      cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                  {"Content-Type", "application/json"},
-                  {"Accept", "application/json"}});
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Get(
+        cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", encoded_user)},
+        cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                    {"Content-Type", "application/json"},
+                    {"Accept", "application/json"}});
+  });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -128,12 +130,13 @@ std::string Request::get_user_beatmap_score(const std::string_view beatmap,
   }
 
   auto start = std::chrono::steady_clock::now();
-  cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}",
-                                    beatmap, user, all ? "/all" : "")},
-               cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                           {"Content-Type", "application/json"},
-                           {"Accept", "application/json"}});
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}",
+                                         beatmap, user, all ? "/all" : "")},
+                    cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                                {"Content-Type", "application/json"},
+                                {"Accept", "application/json"}});
+  });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -168,11 +171,12 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
   }
 
   auto start = std::chrono::steady_clock::now();
-  cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap)},
-               cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                           {"Content-Type", "application/json"},
-                           {"Accept", "application/json"}});
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap)},
+                    cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                                {"Content-Type", "application/json"},
+                                {"Accept", "application/json"}});
+  });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -200,12 +204,14 @@ std::string Request::get_beatmap_attributes(const std::string_view beatmap, uint
     body["mods"] = mods_bitset;
   }
 
-  cpr::Response r = cpr::Post(
-      cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/attributes", beatmap)},
-      cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                  {"Content-Type", "application/json"},
-                  {"Accept", "application/json"}},
-      cpr::Body{body.dump()});
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Post(
+        cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/attributes", beatmap)},
+        cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                    {"Content-Type", "application/json"},
+                    {"Accept", "application/json"}},
+        cpr::Body{body.dump()});
+  });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -247,27 +253,14 @@ std::string Request::get_user_recent_scores(const std::string_view user_id,
     params.Add({"offset", std::to_string(offset)});
   }
 
-  cpr::Response r = cpr::Get(
-      cpr::Url{url},
-      params,
-      cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                  {"Content-Type", "application/json"},
-                  {"Accept", "application/json"}});
-
-  // Handle 401 Unauthorized - token might have expired
-  if (r.status_code == 401) {
-    spdlog::warn("[API] get_user_recent_scores got 401, refreshing token and retrying");
-    config.expires_at = 0; // Force token refresh
-    if (set_token()) {
-      // Retry the request with new token
-      r = cpr::Get(
-          cpr::Url{url},
-          params,
-          cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                      {"Content-Type", "application/json"},
-                      {"Accept", "application/json"}});
-    }
-  }
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Get(
+        cpr::Url{url},
+        params,
+        cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                    {"Content-Type", "application/json"},
+                    {"Accept", "application/json"}});
+  });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -307,12 +300,14 @@ std::string Request::get_user_best_scores(const std::string_view user_id,
     params.Add({"offset", std::to_string(offset)});
   }
 
-  cpr::Response r = cpr::Get(
-      cpr::Url{url},
-      params,
-      cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                  {"Content-Type", "application/json"},
-                  {"Accept", "application/json"}});
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Get(
+        cpr::Url{url},
+        params,
+        cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                    {"Content-Type", "application/json"},
+                    {"Accept", "application/json"}});
+  });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
