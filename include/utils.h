@@ -5,6 +5,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <chrono>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -16,7 +17,11 @@ using json = nlohmann::json;
 struct Config {
   std::string api_v1_key, client_id, client_secret, auth_code, access_token,
       refresh_token, redirect_uri, weather_api_key;
+  std::string http_host;
+  uint16_t http_port;
+  std::string public_url;
   std::vector<std::string> admin_users;
+  std::vector<std::string> beatmap_mirrors;
   size_t expires_in, expires_at;
 };
 
@@ -81,4 +86,13 @@ namespace utils {
   time_t ISO8601_to_UNIX(const std::string& datetime);
   size_t get_time();
   uint32_t mods_string_to_bitset(const std::string& mods);
+
+  // Format time ago: "5m", "2h", "3d", or "Nov 22 2025"
+  std::string format_time_ago(const std::chrono::system_clock::time_point& time_point);
+
+  // URL encode a string (for filenames with spaces, special chars)
+  std::string url_encode(const std::string& value);
+
+  // URL decode a string (decode %XX sequences)
+  std::string url_decode(const std::string& value);
 } // namespace utils
