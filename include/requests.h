@@ -24,7 +24,17 @@ private:
                                      const bool all = false);
   std::string get_userid_v1(const std::string_view username);
   std::string get_beatmap(const std::string_view beatmap);
+  std::string get_beatmap_id_from_set(const std::string_view beatmapset_id);
   std::string get_beatmap_attributes(const std::string_view beatmap, uint32_t mods_bitset);
+  std::string get_user_recent_scores(const std::string_view user_id,
+                                     bool include_fails = false,
+                                     const std::string& mode = "osu",
+                                     int limit = 50,
+                                     int offset = 0);
+  std::string get_user_best_scores(const std::string_view user_id,
+                                   const std::string& mode = "osu",
+                                   int limit = 100,
+                                   int offset = 0);
   std::string get_weather(const std::string_view city);
   Request();
 };

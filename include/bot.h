@@ -3,11 +3,16 @@
 #include <tbb/tbb.h>
 #include <random>
 #include <unordered_map>
+#include <memory>
+#include <chrono>
 
 #include <osu.h>
 #include <requests.h>
+#include <http_server.h>
+#include <beatmap_downloader.h>
 
 #include <dpp/dpp.h>
+#include <state/session_state.h>
 
 class Random {
 private:
@@ -26,22 +31,6 @@ public:
 
 using snowflake_string_map = std::unordered_map<dpp::snowflake, std::string>;
 
-struct LeaderboardState {
-  std::vector<Score> scores;
-  Beatmap beatmap;
-  std::string mods_filter;
-  size_t current_page;
-  size_t total_pages;
-
-  LeaderboardState() : current_page(0), total_pages(0) {}
-  LeaderboardState(std::vector<Score> s, Beatmap b, size_t page = 0, std::string mods = "")
-    : scores(std::move(s)), beatmap(std::move(b)), mods_filter(std::move(mods)), current_page(page) {
-    constexpr size_t SCORES_PER_PAGE = 5;
-    total_pages = (scores.size() + SCORES_PER_PAGE - 1) / SCORES_PER_PAGE;
-    if (total_pages == 0) total_pages = 1;
-  }
-};
-
 class Bot {
 private:
   bool                  give_autorole = true;
@@ -53,9 +42,10 @@ private:
   Random                rand;
   Request               request;
   Config                config;
+  std::unique_ptr<HttpServer> http_server;
+  BeatmapDownloader     beatmap_downloader;
 
   std::mutex            mutex;
-  std::mutex            lb_states_mutex;
   tbb::task_arena       arena;
 
   // Contains channel_id : {message_id : beatmap_id}
@@ -64,16 +54,31 @@ private:
   // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
   snowflake_string_map  disid_osuid_map;
 
-  // Stores leaderboard state by message ID for pagination (protected by lb_states_mutex)
-  std::unordered_map<dpp::snowflake, LeaderboardState> leaderboard_states;
+  // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
 
   void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
+  std::string           get_chat_beatmap_id(const dpp::snowflake& channel_id);
+  std::string           resolve_beatmap_id(const std::string& stored_id);
   dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
   void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
+  void                  schedule_button_removal(dpp::snowflake channel_id, dpp::snowflake message_id, std::chrono::minutes ttl);
+  void                  process_pending_button_removals();
+  std::string           get_username_cached(int64_t user_id);
   bool                  is_admin(const std::string& user_id) const;
+
+  // Helper functions for mod-adjusted BPM and length
+  float                 apply_speed_mods_to_bpm(float bpm, const std::string& mods) const;
+  uint32_t              apply_speed_mods_to_length(uint32_t length_seconds, const std::string& mods) const;
 
   // TODO: delete all this shit
  void                  create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
+  void                  create_bg_message(const dpp::message_create_t& event);
+  void                  create_audio_message(const dpp::message_create_t& event);
+  void                  create_rs_message(const dpp::message_create_t& event, const std::string& mode = "osu", const std::string& params = "");
+  void                  create_compare_message(const dpp::message_create_t& event, const std::string& params = "");
+  void                  create_map_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
+  void                  create_sim_message(const dpp::message_create_t& event, double accuracy, const std::string& mode = "osu", const std::string& mods_filter = "", int combo = 0, int count_100 = -1, int count_50 = -1, int misses = 0, double ratio = -1.0);
+  dpp::message          build_rs_page(RecentScoreState& state);
   // TODO: check guild members 
 
   // Handle events
@@ -89,4 +94,6 @@ private:
 
 public:
   Bot(const std::string& token, bool delete_commands);
+  void start();
+  void shutdown();
 };

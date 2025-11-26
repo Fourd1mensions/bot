@@ -22,15 +22,25 @@ void Score::from_json(const json& j) {
     created_at          = score_j.value("created_at", "");
     max_combo           = score_j.value("max_combo", 0);
     user_id             = score_j.value("user_id", 0);
+    passed              = score_j.value("passed", true);
 
     pp        = !score_j["pp"].is_null() ? score_j.value("pp", 0.0) : 0.0;
     username  = score_j.contains("user") ? score_j.at("user").value("username", "") : "";
+
+    // Parse beatmap_id from nested beatmap object
+    if (score_j.contains("beatmap")) {
+      beatmap_id = score_j.at("beatmap").value("id", 0);
+    } else {
+      beatmap_id = score_j.value("beatmap_id", 0);
+    }
 
     const auto& stat_j = score_j.at("statistics");
     count_miss = stat_j.value("count_miss", 0);
     count_50   = stat_j.value("count_50", 0);
     count_100  = stat_j.value("count_100", 0);
     count_300  = stat_j.value("count_300", 0);
+
+    mode = score_j.value("mode", "osu");
 
     from_json_mods(score_j);
     is_empty = false;
@@ -111,11 +121,15 @@ void Beatmap::from_json(const json& j) {
     beatmapset_id     = j.at("beatmapset_id").get<int>();
     difficulty_rating = j.at("difficulty_rating").get<double>();
     max_combo         = j.at("max_combo").get<int>();
+    bpm               = j.value("bpm", 0.0);
+    total_length      = j.value("total_length", 0);
+    mode              = j.value("mode", "osu"); // Default to osu if not specified
     artist            = j.at("beatmapset").at("artist").get<std::string>();
     title             = j.at("beatmapset").at("title").get<std::string>();
     version           = j.at("version").get<std::string>();
     beatmap_url       = j.at("url").get<std::string>();
-    image_url         = j.at("beatmapset").at("covers").at("list").get<std::string>();
+    // Use "cover" for full-size background image instead of "list"
+    image_url         = j.at("beatmapset").at("covers").at("cover").get<std::string>();
   } catch (json::exception e) { spdlog::error("Failed to parse beatmap: {}", e.what()); }
 }
 
@@ -132,8 +146,20 @@ std::string Beatmap::get_image_url() const {
   return image_url;
 }
 
+std::string Beatmap::get_mode() const {
+  return mode;
+}
+
 uint32_t Beatmap::get_max_combo() const {
   return max_combo;
+}
+
+uint32_t Beatmap::get_beatmap_id() const {
+  return beatmap_id;
+}
+
+uint32_t Beatmap::get_beatmapset_id() const {
+  return beatmapset_id;
 }
 
 void Beatmap::set_modded_attributes(const json& attributes_json) {

@@ -40,6 +40,10 @@ find_package(Threads REQUIRED)
 
 find_package(OpenSSL REQUIRED)
 
+find_package(libzip REQUIRED)
+
+find_package(PkgConfig REQUIRED)
+
 include(FetchContent)
 
 # Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
@@ -82,12 +86,38 @@ FetchContent_Declare(cpr
 )
 FetchContent_MakeAvailable(cpr)
 
+message(STATUS "Fetching crow (v1.2.0)...")
+FetchContent_Declare(crow
+	GIT_REPOSITORY
+		"https://github.com/CrowCpp/Crow.git"
+	GIT_TAG
+		v1.2.0
+)
+FetchContent_MakeAvailable(crow)
+
+message(STATUS "Fetching pqxx (7.9.2)...")
+FetchContent_Declare(pqxx
+	GIT_REPOSITORY
+		"https://github.com/jtv/libpqxx.git"
+	GIT_TAG
+		7.9.2
+)
+FetchContent_MakeAvailable(pqxx)
+
 # Target: discord-bot
+set(CMKR_TARGET discord-bot)
+pkg_check_modules(LIBMEMCACHED REQUIRED libmemcached)
+
 set(discord-bot_SOURCES
 	cmake.toml
+	"src/beatmap_downloader.cpp"
 	"src/bot.cpp"
+	"src/cache.cpp"
+	"src/database.cpp"
+	"src/http_server.cpp"
 	"src/main.cpp"
 	"src/message_builder.cpp"
+	"src/migration.cpp"
 	"src/osu.cpp"
 	"src/requests.cpp"
 	"src/utils.cpp"
@@ -115,9 +145,16 @@ target_link_libraries(discord-bot PRIVATE
 	cpr::cpr
 	dpp
 	tbb
+	Crow::Crow
+	libzip::zip
+	pqxx
 )
 
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT discord-bot)
 endif()
+
+target_link_libraries(discord-bot PRIVATE ${LIBMEMCACHED_LIBRARIES})
+target_include_directories(discord-bot PRIVATE ${LIBMEMCACHED_INCLUDE_DIRS})
+target_compile_options(discord-bot PRIVATE ${LIBMEMCACHED_CFLAGS_OTHER})

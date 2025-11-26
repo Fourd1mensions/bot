@@ -1,13 +1,27 @@
 {
+  "_comment": "Required fields - bot won't start without these",
   "DISCORD_TOKEN": "",
-  "API_V1_KEY": "",
-  "CLIENT_ID": "",
-  "CLIENT_SECRET": "",
-  "ACCESS_TOKEN": "",
-  "EXPIRES_AT": 0,
-  "REDIRECT_URI": "",
   "GUILD_ID": "",
   "AUTOROLE_ID": "",
-  "WEATHER_API_KEY": "",
-  "ADMIN_USERS": []
+  "CLIENT_ID": "",
+  "CLIENT_SECRET": "",
+  "API_V1_KEY": "",
+
+  "_comment2": "Auto-managed fields - bot updates these automatically",
+  "ACCESS_TOKEN": "",
+  "EXPIRES_AT": 0,
+
+  "_comment3": "Optional fields with defaults - can be omitted or customized",
+  "HTTP_HOST": "127.0.0.1",
+  "HTTP_PORT": 8080,
+  "PUBLIC_URL": "https://kana.nisemonic.net",
+  "ADMIN_USERS": [],
+  "BEATMAP_MIRRORS": [
+    "https://api.nerinyan.moe/d",
+    "https://catboy.best/d",
+    "https://api.chimu.moe/v1/download"
+  ],
+
+  "_comment4": "Optional features",
+  "WEATHER_API_KEY": ""
 }
