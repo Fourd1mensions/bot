@@ -68,79 +68,6 @@ uint32_t Bot::apply_speed_mods_to_length(uint32_t length_seconds, const std::str
   return length_seconds;
 }
 
-std::string Bot::resolve_beatmap_id(const std::string& stored_id) {
-  constexpr std::string_view set_prefix = "set:";
-  if (stored_id.starts_with(set_prefix)) {
-    std::string set_id = stored_id.substr(set_prefix.size());
-    std::string beatmap_id = request.get_beatmap_id_from_set(set_id);
-    if (beatmap_id.empty()) {
-      spdlog::error("Failed to resolve beatmap from set {}", set_id);
-    }
-    return beatmap_id;
-  }
-  return stored_id;
-}
-
-std::string Bot::get_chat_beatmap_id(const dpp::snowflake& channel_id) {
-  // Check in-memory cache first
-  auto it = chat_map.find(channel_id);
-  if (it != chat_map.end()) {
-    return it->second.second;
-  }
-
-  // Not in memory - try loading from database
-  try {
-    auto& db = db::Database::instance();
-    auto context = db.get_chat_context(channel_id);
-
-    if (context) {
-      const auto& [msg_id, beatmap_id] = *context;
-      // Populate in-memory cache
-      chat_map[channel_id] = {msg_id, beatmap_id};
-      spdlog::debug("Loaded chat context from database for channel {}", channel_id.str());
-      return beatmap_id;
-    }
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to load chat context from database: {}", e.what());
-  }
-
-  return ""; // Not found anywhere
-}
-
-void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id) {
-  // Prefer explicit beatmap ID if present, otherwise fall back to beatmapset ID
-  std::regex set_regex(R"(https:\/\/osu\.ppy\.sh\/beatmapsets\/(\d+)(?:[^ ]*?#(?:osu|taiko|fruits|mania)\/(\d+))?)");
-  std::regex beatmap_regex(R"(https:\/\/osu\.ppy\.sh\/(?:beatmaps\/|b\/)(\d+))");
-  std::smatch m;
-
-  std::string stored_value;
-
-  if (std::regex_search(msg, m, set_regex)) {
-    // m[2] is beatmap id if link contains #mode/<beatmap_id>
-    if (m.size() > 2 && m[2].matched) {
-      stored_value = m.str(2);
-    } else {
-      stored_value = "set:" + m.str(1);
-    }
-  } else if (std::regex_search(msg, m, beatmap_regex)) {
-    stored_value = m.str(1);
-  }
-
-  if (!stored_value.empty()) {
-    auto& p = chat_map[channel_id];
-    p.first = msg_id;
-    p.second = stored_value;
-
-    // Save to database
-    try {
-      auto& db = db::Database::instance();
-      db.set_chat_context(channel_id, msg_id, stored_value);
-    } catch (const std::exception& e) {
-      spdlog::error("Failed to save chat context to database: {}", e.what());
-    }
-  }
-}
-
 dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string& mods_filter) {
   constexpr size_t SCORES_PER_PAGE = 5;
 
@@ -1254,8 +1181,8 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
 
 void Bot::create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter) {
   dpp::snowflake channel_id = event.msg.channel_id;
-  std::string stored_id = get_chat_beatmap_id(channel_id);
-  std::string beatmap_id = resolve_beatmap_id(stored_id);
+  std::string stored_id = chat_context_service.get_beatmap_id(channel_id);
+  std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
   if (beatmap_id.empty()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
@@ -1304,12 +1231,13 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
     }
   }
 
-  std::vector<Score> scores(disid_osuid_map.size());
+  auto user_mappings = user_mapping_service.get_all_mappings();
+  std::vector<Score> scores(user_mappings.size());
 
   // Create stable index mapping to avoid race condition
   std::unordered_map<std::string, size_t> user_to_index;
   size_t idx = 0;
-  for (const auto& [dis_id, user_id] : disid_osuid_map) {
+  for (const auto& [dis_id, user_id] : user_mappings) {
     user_to_index[user_id] = idx++;
   }
 
@@ -1321,10 +1249,10 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
     }
   }
 
-  spdlog::info("[!lb] Fetching scores and usernames for {} users", disid_osuid_map.size());
+  spdlog::info("[!lb] Fetching scores and usernames for {} users", user_mappings.size());
 
   // force tbb parallelization ???
-  arena.execute([&]() { tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
+  arena.execute([&]() { tbb::parallel_for_each(std::begin(user_mappings), std::end(user_mappings),
     [&](const auto& pair) {
       const auto& [dis_id, user_id] = pair;
       auto& score = scores[user_to_index[user_id]];
@@ -1445,8 +1373,8 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
 
 void Bot::create_bg_message(const dpp::message_create_t& event) {
   dpp::snowflake channel_id = event.msg.channel_id;
-  std::string stored_id = get_chat_beatmap_id(channel_id);
-  std::string beatmap_id = resolve_beatmap_id(stored_id);
+  std::string stored_id = chat_context_service.get_beatmap_id(channel_id);
+  std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
   if (beatmap_id.empty()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
@@ -1557,7 +1485,7 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
 }
 
 void Bot::create_map_message(const dpp::message_create_t& event, const std::string& mods_filter) {
-  std::string stored_value = get_chat_beatmap_id(event.msg.channel_id);
+  std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
   if (stored_value.empty()) {
     event.reply("No beatmap found in this channel. Please send a beatmap link first.");
     return;
@@ -1778,7 +1706,7 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
 }
 
 void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy, const std::string& mode, const std::string& mods_filter, int combo, int count_100, int count_50, int misses, double ratio) {
-  std::string stored_value = get_chat_beatmap_id(event.msg.channel_id);
+  std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
   if (stored_value.empty()) {
     event.reply("No beatmap found in this channel. Please send a beatmap link first.");
     return;
@@ -1919,8 +1847,8 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
 
 void Bot::create_audio_message(const dpp::message_create_t& event) {
   dpp::snowflake channel_id = event.msg.channel_id;
-  std::string stored_id = get_chat_beatmap_id(channel_id);
-  std::string beatmap_id = resolve_beatmap_id(stored_id);
+  std::string stored_id = chat_context_service.get_beatmap_id(channel_id);
+  std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
   if (beatmap_id.empty()) {
     event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
@@ -2254,7 +2182,7 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   auto start = std::chrono::steady_clock::now();
 
   // Get current beatmap from context
-  std::string stored_value = get_chat_beatmap_id(event.msg.channel_id);
+  std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
   if (stored_value.empty()) {
     event.reply("No beatmap found in this channel. Please send a beatmap link first.");
     return;
@@ -2512,7 +2440,7 @@ void Bot::message_create_event(const dpp::message_create_t& event) {
     event.msg.channel_id.str(), event.msg.content);
 
   std::lock_guard<std::mutex> lock(mutex);
-  update_chat_map(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
+  chat_context_service.update_context(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
 
   // Case-insensitive command check
   std::string content_lower = event.msg.content;
@@ -2771,24 +2699,10 @@ void Bot::message_create_event(const dpp::message_create_t& event) {
 void Bot::message_update_event(const dpp::message_update_t& event) {
   dpp::snowflake channel_id = event.msg.channel_id;
 
-  // Load context from database if not in memory
-  auto it = chat_map.find(channel_id);
-  if (it == chat_map.end()) {
-    try {
-      auto& db = db::Database::instance();
-      auto context = db.get_chat_context(channel_id);
-      if (context) {
-        chat_map[channel_id] = *context;
-        it = chat_map.find(channel_id);
-      }
-    } catch (const std::exception& e) {
-      spdlog::warn("Failed to load chat context: {}", e.what());
-      return;
-    }
-  }
-
-  if (it != chat_map.end() && it->second.first == event.msg.id) {
-    update_chat_map(event.raw_event, channel_id, event.msg.id);
+  // Check if the updated message is the one tracked in chat context
+  dpp::snowflake tracked_msg_id = chat_context_service.get_message_id(channel_id);
+  if (tracked_msg_id == event.msg.id) {
+    chat_context_service.update_context(event.raw_event, channel_id, event.msg.id);
   }
 }
 
@@ -2798,7 +2712,7 @@ void Bot::member_add_event(const dpp::guild_member_add_t& event) {
 }
 
 void Bot::member_remove_event(const dpp::guild_member_remove_t& event) {
-  disid_osuid_map.erase(event.removed.id.str());
+  user_mapping_service.remove_mapping(event.removed.id.str());
 }
 
 void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
@@ -2874,7 +2788,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
       std::string u_from_req = j.at("username").get<std::string>();
       int user_id = j.at("id").get<int>();
 
-      disid_osuid_map[key] = fmt::to_string(user_id);
+      user_mapping_service.set_mapping(key, fmt::to_string(user_id));
 
       // Save to database
       try {
@@ -2913,14 +2827,15 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
 
   // score
   if (event.command.get_command_name() == "score") {
-    const auto& user = disid_osuid_map[event.command.usr.id.str()];
-    if (user.empty()) {
+    auto user_opt = user_mapping_service.get_osu_id(event.command.usr.id.str());
+    if (!user_opt.has_value()) {
       event.edit_original_response(dpp::message("Please /set your osu username before using this command."));
       return;
     }
+    const auto& user = user_opt.value();
 
-    std::string stored_id = get_chat_beatmap_id(event.command.channel_id);
-    std::string beatmap_id = resolve_beatmap_id(stored_id);
+    std::string stored_id = chat_context_service.get_beatmap_id(event.command.channel_id);
+    std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
     if (beatmap_id.empty()) {
       event.edit_original_response(dpp::message("Can't find the map. Please send the map link and use this command again."));
       return;
@@ -3052,17 +2967,8 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
   guild_id = utils::read_field("GUILD_ID", "config.json");
   autorole_id =  utils::read_field("AUTOROLE_ID", "config.json");
 
-  // Load user mappings from database
-  try {
-    auto& db = db::Database::instance();
-    auto mappings = db.get_all_user_mappings();
-    for (const auto& [discord_id, osu_id] : mappings) {
-      disid_osuid_map[discord_id] = std::to_string(osu_id);
-    }
-    spdlog::info("Loaded {} user mappings from database", disid_osuid_map.size());
-  } catch (const std::exception& e) {
-    spdlog::error("Failed to load user mappings from database: {}", e.what());
-  }
+  // Load user mappings from database via service
+  user_mapping_service.load_from_file("");  // Empty path - loads from database
 
   // Chat map loading is not needed - will be populated on-demand from database
   spdlog::info("Chat map will be populated on-demand from database");
@@ -3074,7 +2980,10 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
   // No periodic cleanup needed - Memcached handles TTL automatically
 }
 
-Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
+Bot::Bot(const std::string& token, bool delete_commands)
+    : bot(token),
+      arena(tbb::task_arena(16)),
+      beatmap_resolver_service(request) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
 
   // Configure spdlog with structured logging pattern
