@@ -254,6 +254,21 @@ std::string Request::get_user_recent_scores(const std::string_view user_id,
                   {"Content-Type", "application/json"},
                   {"Accept", "application/json"}});
 
+  // Handle 401 Unauthorized - token might have expired
+  if (r.status_code == 401) {
+    spdlog::warn("[API] get_user_recent_scores got 401, refreshing token and retrying");
+    config.expires_at = 0; // Force token refresh
+    if (set_token()) {
+      // Retry the request with new token
+      r = cpr::Get(
+          cpr::Url{url},
+          params,
+          cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                      {"Content-Type", "application/json"},
+                      {"Accept", "application/json"}});
+    }
+  }
+
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();
 

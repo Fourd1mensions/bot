@@ -10,6 +10,9 @@
 #include <requests.h>
 #include <http_server.h>
 #include <beatmap_downloader.h>
+#include <services/chat_context_service.h>
+#include <services/user_mapping_service.h>
+#include <services/beatmap_resolver_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -48,17 +51,12 @@ private:
   std::mutex            mutex;
   tbb::task_arena       arena;
 
-  // Contains channel_id : {message_id : beatmap_id}
-  std::unordered_map<dpp::snowflake, std::pair<dpp::snowflake, std::string>> chat_map;
-
-  // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
-  snowflake_string_map  disid_osuid_map;
+  // Services
+  services::ChatContextService      chat_context_service;
+  services::UserMappingService      user_mapping_service;
+  services::BeatmapResolverService  beatmap_resolver_service;
 
   // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
-
-  void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
-  std::string           get_chat_beatmap_id(const dpp::snowflake& channel_id);
-  std::string           resolve_beatmap_id(const std::string& stored_id);
   dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
   void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
   void                  schedule_button_removal(dpp::snowflake channel_id, dpp::snowflake message_id, std::chrono::minutes ttl);
