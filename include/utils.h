@@ -106,4 +106,7 @@ namespace utils {
 
   // Parse mod string (e.g., "HDDT", "HRHD") into mod flags
   ModFlags parse_mod_flags(const std::string& mods);
+
+  // Get Discord emoji string for osu! rank (X, XH, S, SH, A, B, C, D)
+  std::string get_rank_emoji(const std::string& rank);
 } // namespace utils

@@ -233,3 +233,20 @@ utils::ModFlags utils::parse_mod_flags(const std::string& mods) {
   flags.has_ht = mods.find("HT") != std::string::npos;
   return flags;
 }
+
+std::string utils::get_rank_emoji(const std::string& rank) {
+  static const std::unordered_map<std::string, std::string> rank_emojis = {
+    {"XH", "<:rankingSSH:1320169012810514532>"},
+    {"X",  "<:rankingSSH:1320169012810514532>"},
+    {"SH", "<:rankingSH:1320169010814210048>"},
+    {"S",  "<:rankingS:1320169009434132501>"},
+    {"A",  "<:rankingA:1320169005894787162>"},
+    {"B",  "<:rankingB:1320169007396704286>"},
+    {"C",  "<:rankingC:1320169008491585607>"},
+    {"D",  "<:rankingD:1320169004011819008>"},
+    {"F",  "<:rankingD:1320169004011819008>"}
+  };
+
+  auto it = rank_emojis.find(rank);
+  return it != rank_emojis.end() ? it->second : rank;
+}

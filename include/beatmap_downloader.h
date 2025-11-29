@@ -57,6 +57,9 @@ public:
   std::optional<std::string> find_audio_in_extract(const fs::path& extract_path) const;
   std::optional<std::string> find_background_in_extract(const fs::path& extract_path) const;
 
+  // Build footer text with mirror info and cache time
+  std::string build_download_footer(uint32_t beatmapset_id) const;
+
 private:
   fs::path data_dir_;
   fs::path osz_dir_;
