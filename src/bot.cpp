@@ -1556,77 +1556,13 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
 void Bot::create_rs_message(const dpp::message_create_t& event, const std::string& mode, const std::string& params) {
   auto start = std::chrono::steady_clock::now();
 
-  // Parse parameters: [username] [-p] [-i index] [-b] [-m mode]
-  std::string target_user;
-  size_t score_index = 0;
-  bool include_fails = true; // Default: include fails
-  bool use_best_scores = false; // Default: use recent scores
-  std::string actual_mode = mode; // Use mode from command, can be overridden by -m flag
+  // Parse parameters using service
+  auto parsed = command_params_service.parse_recent_params(params, mode);
 
-  if (!params.empty()) {
-    std::istringstream iss(params);
-    std::string token;
-    std::vector<std::string> tokens;
-    while (iss >> token) {
-      tokens.push_back(token);
-    }
-
-    // Parse flags and collect username parts
-    std::vector<std::string> username_parts;
-    for (size_t i = 0; i < tokens.size(); ++i) {
-      const auto& t = tokens[i];
-
-      if (t == "-p") {
-        // Passed only flag
-        include_fails = false;
-      } else if (t == "-b") {
-        // Best scores flag (top 100)
-        use_best_scores = true;
-      } else if (t == "-i" && i + 1 < tokens.size()) {
-        // Index flag with value
-        try {
-          int idx = std::stoi(tokens[i + 1]);
-          if (idx > 0) score_index = idx - 1; // Convert to 0-based
-          ++i; // Skip next token (the index value)
-        } catch (...) {
-          spdlog::warn("Invalid index value: {}", tokens[i + 1]);
-        }
-      } else if (t == "-m" && i + 1 < tokens.size()) {
-        // Mode flag with value (osu, taiko, fruits, mania)
-        std::string mode_input = tokens[i + 1];
-        std::transform(mode_input.begin(), mode_input.end(), mode_input.begin(), ::tolower);
-
-        if (mode_input == "osu" || mode_input == "std" || mode_input == "standard") {
-          actual_mode = "osu";
-        } else if (mode_input == "taiko") {
-          actual_mode = "taiko";
-        } else if (mode_input == "catch" || mode_input == "ctb" || mode_input == "fruits") {
-          actual_mode = "fruits";
-        } else if (mode_input == "mania") {
-          actual_mode = "mania";
-        } else {
-          spdlog::warn("Invalid mode value: {}, defaulting to osu", tokens[i + 1]);
-        }
-        ++i; // Skip next token (the mode value)
-      } else if (t[0] != '-') {
-        // Username part (anything not starting with -)
-        username_parts.push_back(t);
-      }
-    }
-
-    // Join all username parts with spaces
-    if (!username_parts.empty()) {
-      target_user = username_parts[0];
-      for (size_t i = 1; i < username_parts.size(); ++i) {
-        target_user += " " + username_parts[i];
-      }
-    }
-  }
-
-  // Determine osu user_id
+  // Resolve osu user_id from parsed username
   int64_t osu_user_id = 0;
 
-  if (target_user.empty()) {
+  if (parsed.username.empty()) {
     // Use caller's linked account
     auto& db = db::Database::instance();
     auto osu_id_opt = db.get_osu_user_id(event.msg.author.id);
@@ -1636,30 +1572,23 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
     }
     osu_user_id = *osu_id_opt;
   } else {
-    // Check if target_user is a Discord mention (<@USER_ID> or <@!USER_ID>)
-    if (target_user.size() > 3 && target_user[0] == '<' && target_user[1] == '@' && target_user.back() == '>') {
-      // Parse Discord user ID from mention
-      std::string discord_id_str = target_user.substr(2, target_user.size() - 3);
-
-      // Remove '!' if present (some mentions have <@!ID> format)
-      if (!discord_id_str.empty() && discord_id_str[0] == '!') {
-        discord_id_str = discord_id_str.substr(1);
-      }
-
+    // Check if target_user is a Discord mention
+    auto mention_id = services::CommandParamsService::parse_discord_mention(parsed.username);
+    if (mention_id) {
       try {
-        dpp::snowflake mentioned_discord_id = std::stoull(discord_id_str);
+        dpp::snowflake mentioned_discord_id = std::stoull(*mention_id);
 
         // Look up osu! user ID from database
         auto& db = db::Database::instance();
         auto osu_id_opt = db.get_osu_user_id(mentioned_discord_id);
 
         if (!osu_id_opt) {
-          event.reply(dpp::message(fmt::format("user <@{}> hasn't linked their osu! account yet", discord_id_str)));
+          event.reply(dpp::message(fmt::format("user <@{}> hasn't linked their osu! account yet", *mention_id)));
           return;
         }
 
         osu_user_id = *osu_id_opt;
-        spdlog::info("[RS] Using mentioned user: Discord ID {} -> osu! ID {}", discord_id_str, osu_user_id);
+        spdlog::info("[RS] Using mentioned user: Discord ID {} -> osu! ID {}", *mention_id, osu_user_id);
       } catch (const std::exception& e) {
         event.reply(dpp::message("invalid user mention"));
         spdlog::error("Failed to parse Discord mention: {}", e.what());
@@ -1667,9 +1596,9 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
       }
     } else {
       // Look up user by username
-      std::string user_response = request.get_user(target_user, false);
+      std::string user_response = request.get_user(parsed.username, false);
       if (user_response.empty()) {
-        event.reply(dpp::message(fmt::format("user '{}' not found", target_user)));
+        event.reply(dpp::message(fmt::format("user '{}' not found", parsed.username)));
         return;
       }
 
@@ -1689,11 +1618,11 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
 
   // Fetch scores (recent or best)
   std::string scores_response;
-  if (use_best_scores) {
-    scores_response = request.get_user_best_scores(std::to_string(osu_user_id), actual_mode, 100, 0);
+  if (parsed.use_best_scores) {
+    scores_response = request.get_user_best_scores(std::to_string(osu_user_id), parsed.mode, 100, 0);
   } else {
     scores_response = request.get_user_recent_scores(
-      std::to_string(osu_user_id), include_fails, actual_mode, 50, 0);
+      std::to_string(osu_user_id), parsed.include_fails, parsed.mode, 50, 0);
   }
 
   if (scores_response.empty()) {
@@ -1730,14 +1659,15 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
   }
 
   // Validate score index
-  if (score_index >= scores.size()) {
+  if (parsed.score_index >= scores.size()) {
     event.reply(dpp::message(fmt::format("score index {} out of range (max: {})",
-      score_index + 1, scores.size())));
+      parsed.score_index + 1, scores.size())));
     return;
   }
 
   // Create state
-  RecentScoreState rs_state(std::move(scores), score_index, actual_mode, include_fails, use_best_scores, osu_user_id, event.msg.author.id);
+  RecentScoreState rs_state(std::move(scores), parsed.score_index, parsed.mode,
+    parsed.include_fails, parsed.use_best_scores, osu_user_id, event.msg.author.id);
 
   // Build first page (will parse .osu file for first score only and cache it)
   dpp::message msg = build_rs_page(rs_state);
@@ -1807,44 +1737,13 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
     return;
   }
 
-  // Parse parameters: [username] [+mods]
-  std::string target_user;
-  std::string mods_filter;
+  // Parse parameters using service
+  auto parsed = command_params_service.parse_compare_params(params);
 
-  if (!params.empty()) {
-    std::istringstream iss(params);
-    std::string token;
-    std::vector<std::string> tokens;
-    while (iss >> token) {
-      tokens.push_back(token);
-    }
-
-    // Parse tokens
-    std::vector<std::string> username_parts;
-    for (const auto& t : tokens) {
-      if (t[0] == '+') {
-        // Mods filter
-        mods_filter = t.substr(1);
-        std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(), ::toupper);
-      } else {
-        // Username part
-        username_parts.push_back(t);
-      }
-    }
-
-    // Join username parts
-    if (!username_parts.empty()) {
-      target_user = username_parts[0];
-      for (size_t i = 1; i < username_parts.size(); ++i) {
-        target_user += " " + username_parts[i];
-      }
-    }
-  }
-
-  // Determine osu user_id
+  // Resolve osu user_id from parsed username
   int64_t osu_user_id = 0;
 
-  if (target_user.empty()) {
+  if (parsed.username.empty()) {
     // Use caller's linked account
     auto& db = db::Database::instance();
     auto osu_id_opt = db.get_osu_user_id(event.msg.author.id);
@@ -1855,24 +1754,20 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
     osu_user_id = *osu_id_opt;
   } else {
     // Check if target_user is a Discord mention
-    if (target_user.size() > 3 && target_user[0] == '<' && target_user[1] == '@' && target_user.back() == '>') {
-      std::string discord_id_str = target_user.substr(2, target_user.size() - 3);
-      if (!discord_id_str.empty() && discord_id_str[0] == '!') {
-        discord_id_str = discord_id_str.substr(1);
-      }
-
+    auto mention_id = services::CommandParamsService::parse_discord_mention(parsed.username);
+    if (mention_id) {
       try {
-        dpp::snowflake mentioned_discord_id = std::stoull(discord_id_str);
+        dpp::snowflake mentioned_discord_id = std::stoull(*mention_id);
         auto& db = db::Database::instance();
         auto osu_id_opt = db.get_osu_user_id(mentioned_discord_id);
 
         if (!osu_id_opt) {
-          event.reply(dpp::message(fmt::format("user <@{}> hasn't linked their osu! account yet", discord_id_str)));
+          event.reply(dpp::message(fmt::format("user <@{}> hasn't linked their osu! account yet", *mention_id)));
           return;
         }
 
         osu_user_id = *osu_id_opt;
-        spdlog::info("[COMPARE] Using mentioned user: Discord ID {} -> osu! ID {}", discord_id_str, osu_user_id);
+        spdlog::info("[COMPARE] Using mentioned user: Discord ID {} -> osu! ID {}", *mention_id, osu_user_id);
       } catch (const std::exception& e) {
         event.reply(dpp::message("invalid user mention"));
         spdlog::error("Failed to parse Discord mention: {}", e.what());
@@ -1880,9 +1775,9 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
       }
     } else {
       // Look up user by username
-      std::string user_response = request.get_user(target_user, false);
+      std::string user_response = request.get_user(parsed.username, false);
       if (user_response.empty()) {
-        event.reply(dpp::message(fmt::format("user '{}' not found", target_user)));
+        event.reply(dpp::message(fmt::format("user '{}' not found", parsed.username)));
         return;
       }
 
@@ -1926,7 +1821,7 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   json scores_array = scores_data["scores"];
 
   // Filter by mods if specified
-  if (!mods_filter.empty()) {
+  if (!parsed.mods_filter.empty()) {
     json filtered_scores = json::array();
     for (const auto& score_json : scores_array) {
       std::string score_mods_str;
@@ -1939,8 +1834,8 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
 
       // Check if score has the required mods
       bool has_mods = true;
-      for (size_t i = 0; i + 1 < mods_filter.length(); i += 2) {
-        std::string required_mod = mods_filter.substr(i, 2);
+      for (size_t i = 0; i + 1 < parsed.mods_filter.length(); i += 2) {
+        std::string required_mod = parsed.mods_filter.substr(i, 2);
         if (score_mods_str.find(required_mod) == std::string::npos) {
           has_mods = false;
           break;
@@ -1955,9 +1850,9 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   }
 
   if (scores_array.empty()) {
-    std::string msg = mods_filter.empty()
+    std::string msg = parsed.mods_filter.empty()
       ? "No scores found for this beatmap"
-      : fmt::format("No scores found with +{} mods", mods_filter);
+      : fmt::format("No scores found with +{} mods", parsed.mods_filter);
     event.reply(dpp::message(msg));
     return;
   }
@@ -1975,8 +1870,8 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
 
   // Build response
   std::string content = fmt::format("**{}** on **{}**\n", username, beatmap.to_string());
-  if (!mods_filter.empty()) {
-    content += fmt::format("Filtered by: +{}\n", mods_filter);
+  if (!parsed.mods_filter.empty()) {
+    content += fmt::format("Filtered by: +{}\n", parsed.mods_filter);
   }
   content += fmt::format("Found {} score(s)\n\n", scores_array.size());
 
