@@ -15,6 +15,7 @@
 #include <services/beatmap_resolver_service.h>
 #include <services/message_presenter_service.h>
 #include <services/beatmap_performance_service.h>
+#include <services/command_params_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -59,6 +60,7 @@ private:
   services::BeatmapResolverService    beatmap_resolver_service;
   services::MessagePresenterService   message_presenter;
   services::BeatmapPerformanceService performance_service;
+  services::CommandParamsService      command_params_service;
 
   // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
   dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
