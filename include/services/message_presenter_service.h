@@ -73,6 +73,13 @@ public:
     MessagePresenterService& operator=(const MessagePresenterService&) = delete;
 
     /**
+     * Build an error message with red embed.
+     * @param error_text The error message to display
+     * @return Discord message with error embed
+     */
+    dpp::message build_error_message(std::string_view error_text) const;
+
+    /**
      * Build a leaderboard page embed with pagination buttons.
      * @param beatmap The beatmap being displayed
      * @param scores_on_page Scores to display on current page
@@ -151,6 +158,19 @@ public:
     ) const;
 
     /**
+     * Build an audio download embed (!song command).
+     * @param beatmap The beatmap
+     * @param audio_url URL of the audio file
+     * @param source Source indicator (mirror name or "cached")
+     * @return Complete Discord message with embed
+     */
+    dpp::message build_audio(
+        const Beatmap& beatmap,
+        const std::string& audio_url,
+        const std::string& source
+    ) const;
+
+    /**
      * Build pagination button row.
      * @param prefix Button ID prefix ("lb_" or "rs_")
      * @param current Current page/index (0-indexed)
@@ -191,6 +211,18 @@ public:
         std::string footer;
         time_t timestamp;
     };
+
+    /**
+     * Build a recent score page from cached data.
+     * Used for fast navigation without re-parsing the beatmap.
+     * @param cache_data Previously cached page data
+     * @param pagination Current pagination state
+     * @return Complete Discord message with embed and components
+     */
+    dpp::message build_from_cache_data(
+        const RecentScoreCacheData& cache_data,
+        const PaginationInfo& pagination
+    ) const;
 
     /**
      * Build cache data for recent score page (avoids duplicating presenter logic).

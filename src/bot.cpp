@@ -7,6 +7,16 @@
 #include <cache.h>
 #include <osu_tools.h>
 #include <osu_parser.h>
+#include <error_messages.h>
+
+// Commands
+#include <commands/lb_command.h>
+#include <commands/rs_command.h>
+#include <commands/bg_command.h>
+#include <commands/audio_command.h>
+#include <commands/map_command.h>
+#include <commands/compare_command.h>
+#include <commands/sim_command.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -214,29 +224,26 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
     try {
       json cached_data = json::parse(cache_it->second);
 
-      // Rebuild message from cached data
-      auto embed = dpp::embed()
-        .set_color(dpp::colors::viola_purple)
-        .set_title(cached_data["title"].get<std::string>())
-        .set_url(cached_data["url"].get<std::string>())
-        .set_description(cached_data["description"].get<std::string>())
-        .set_thumbnail(cached_data["thumbnail"].get<std::string>());
+      // Rebuild message from cached data using presenter
+      services::MessagePresenterService::RecentScoreCacheData cache_data{
+        .title = cached_data["title"].get<std::string>(),
+        .url = cached_data["url"].get<std::string>(),
+        .description = cached_data["description"].get<std::string>(),
+        .thumbnail = cached_data["thumbnail"].get<std::string>(),
+        .beatmap_info = cached_data["beatmap_info"].get<std::string>(),
+        .footer = cached_data["footer"].get<std::string>(),
+        .timestamp = cached_data["timestamp"].get<time_t>()
+      };
 
-      embed.add_field("", cached_data["beatmap_info"].get<std::string>(), false);
-      embed.set_footer(dpp::embed_footer().set_text(cached_data["footer"].get<std::string>()))
-           .set_timestamp(cached_data["timestamp"].get<time_t>());
-
-      dpp::message msg;
-      msg.add_embed(embed);
-
-      // Add pagination buttons using presenter service
-      if (state.scores.size() > 1) {
-        msg.add_component(message_presenter.build_pagination_row(
-          "rs_", state.current_index, state.scores.size(), true));
-      }
+      services::PaginationInfo pagination{
+        .current = state.current_index,
+        .total = state.scores.size(),
+        .has_refresh = true,
+        .refresh_count = state.refresh_count
+      };
 
       spdlog::debug("[RS] Using cached page data for index {}", state.current_index);
-      return msg;
+      return message_presenter.build_from_cache_data(cache_data, pagination);
     } catch (const std::exception& e) {
       spdlog::warn("[RS] Failed to use cached page data: {}, rebuilding", e.what());
       // Fall through to rebuild
@@ -706,8 +713,8 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
     event.command.usr.id.str(), event.command.usr.username,
     event.command.channel_id.str(), button_id);
 
-  // Handle page jump modal
-  if (button_id == "lb_jump") {
+  // Handle page jump modal (center button)
+  if (button_id == "lb_select") {
     auto msg_id = event.command.message_id;
 
     // Fetch from Memcached
@@ -906,7 +913,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
   std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
   if (beatmap_id.empty()) {
-    event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
+    event.reply(message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
     return;
   }
 
@@ -921,10 +928,10 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
       std::chrono::steady_clock::now() - start).count();
 
     if (elapsed > 8) {
-      event.reply(dpp::message(
-        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      event.reply(message_presenter.build_error_message(
+        fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
     } else {
-      event.reply(dpp::message("❌ Peppy didn't respond"));
+      event.reply(message_presenter.build_error_message(error_messages::API_NO_RESPONSE));
     }
     spdlog::error("Unable to send request");
     return;
@@ -1035,11 +1042,12 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
 
   if (scores.empty()) {
     if (elapsed > 8) {
-      event.reply(dpp::message(
-        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      event.reply(message_presenter.build_error_message(
+        fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
       spdlog::warn("[CMD] !lb took {}s and found no scores (slow API response)", elapsed);
     } else {
-      event.reply(dpp::message("❌ Can't find any scores on " + beatmap.to_string()));
+      event.reply(message_presenter.build_error_message(
+        fmt::format(error_messages::NO_SCORES_ON_BEATMAP_FORMAT, beatmap.to_string())));
     }
     return;
   }
@@ -1099,7 +1107,7 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
   std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
   if (beatmap_id.empty()) {
-    event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
+    event.reply(message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
     return;
   }
 
@@ -1114,10 +1122,10 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
       std::chrono::steady_clock::now() - start).count();
 
     if (elapsed > 8) {
-      event.reply(dpp::message(
-        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      event.reply(message_presenter.build_error_message(
+        fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
     } else {
-      event.reply(dpp::message("❌ Peppy didn't respond"));
+      event.reply(message_presenter.build_error_message(error_messages::API_NO_RESPONSE));
     }
     spdlog::error("Unable to send request");
     return;
@@ -1131,7 +1139,7 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
   // Download .osz file if needed
   if (!beatmap_downloader.download_osz(beatmapset_id)) {
     spdlog::error("[!bg] download_osz failed for beatmapset {}", beatmapset_id);
-    event.reply(dpp::message("❌ Failed to download beatmap"));
+    event.reply(message_presenter.build_error_message(error_messages::DOWNLOAD_FAILED));
     return;
   }
 
@@ -1141,20 +1149,20 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
   auto extract_id = beatmap_downloader.create_extract(beatmapset_id);
   if (!extract_id) {
     spdlog::error("[!bg] Failed to create extract for beatmapset {}", beatmapset_id);
-    event.reply(dpp::message("❌ Failed to extract beatmap files"));
+    event.reply(message_presenter.build_error_message(error_messages::EXTRACT_FAILED));
     return;
   }
 
   // Find background file in extract
   auto extract_path = beatmap_downloader.get_extract_path(*extract_id);
   if (!extract_path) {
-    event.reply(dpp::message("❌ Extract not found"));
+    event.reply(message_presenter.build_error_message(error_messages::EXTRACT_NOT_FOUND));
     return;
   }
 
   auto bg_filename = beatmap_downloader.find_background_in_extract(*extract_path);
   if (!bg_filename) {
-    event.reply(dpp::message("❌ No background image found for this beatmap"));
+    event.reply(message_presenter.build_error_message(error_messages::NO_BACKGROUND));
     return;
   }
 
@@ -1180,7 +1188,7 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
   std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
   auto beatmap_result = beatmap_resolver_service.resolve(stored_value);
   if (!beatmap_result) {
-    event.reply(beatmap_result.error_message);
+    event.reply(message_presenter.build_error_message(beatmap_result.error_message));
     return;
   }
   uint32_t beatmap_id = beatmap_result.beatmap_id;
@@ -1190,7 +1198,7 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
   std::string beatmap_json = request.get_beatmap(std::to_string(beatmap_id));
 
   if (beatmap_json.empty()) {
-    event.reply("Failed to fetch beatmap information.");
+    event.reply(message_presenter.build_error_message("Failed to fetch beatmap information."));
     return;
   }
 
@@ -1230,7 +1238,7 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
   );
 
   if (pp_values.empty()) {
-    event.reply("Failed to calculate PP values.");
+    event.reply(message_presenter.build_error_message("Failed to calculate PP values."));
     return;
   }
 
@@ -1268,7 +1276,7 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
   std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
   auto beatmap_result = beatmap_resolver_service.resolve(stored_value);
   if (!beatmap_result) {
-    event.reply(beatmap_result.error_message);
+    event.reply(message_presenter.build_error_message(beatmap_result.error_message));
     return;
   }
   uint32_t beatmap_id = beatmap_result.beatmap_id;
@@ -1278,7 +1286,7 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
   std::string beatmap_json = request.get_beatmap(std::to_string(beatmap_id));
 
   if (beatmap_json.empty()) {
-    event.reply("Failed to fetch beatmap information.");
+    event.reply(message_presenter.build_error_message("Failed to fetch beatmap information."));
     return;
   }
 
@@ -1306,7 +1314,7 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
   // Get .osu file path using performance service
   auto osu_file_path = performance_service.get_osu_file_direct(beatmap_id);
   if (!osu_file_path) {
-    event.reply("Failed to download .osu file.");
+    event.reply(message_presenter.build_error_message("Failed to download .osu file."));
     return;
   }
 
@@ -1333,7 +1341,7 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
   );
 
   if (!result.has_value()) {
-    event.reply("Failed to simulate score. Please try again.");
+    event.reply(message_presenter.build_error_message("Failed to simulate score. Please try again."));
     spdlog::error("[SIM] Failed to simulate score for beatmap {} with {}% accuracy and mods {}",
       beatmap_id, accuracy * 100, mods_filter);
     return;
@@ -1389,7 +1397,7 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
   std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
   if (beatmap_id.empty()) {
-    event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
+    event.reply(message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
     return;
   }
 
@@ -1402,10 +1410,10 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
       std::chrono::steady_clock::now() - start).count();
 
     if (elapsed > 8) {
-      event.reply(dpp::message(
-        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+      event.reply(message_presenter.build_error_message(
+        fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
     } else {
-      event.reply(dpp::message("❌ Peppy didn't respond"));
+      event.reply(message_presenter.build_error_message(error_messages::API_NO_RESPONSE));
     }
     spdlog::error("Unable to send request");
     return;
@@ -1419,7 +1427,7 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
   // Download .osz file if needed
   if (!beatmap_downloader.download_osz(beatmapset_id)) {
     spdlog::error("[!song] download_osz failed for beatmapset {}", beatmapset_id);
-    event.reply(dpp::message("❌ Failed to download beatmap"));
+    event.reply(message_presenter.build_error_message(error_messages::DOWNLOAD_FAILED));
     return;
   }
 
@@ -1429,20 +1437,20 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
   auto extract_id = beatmap_downloader.create_extract(beatmapset_id);
   if (!extract_id) {
     spdlog::error("[!song] Failed to create extract for beatmapset {}", beatmapset_id);
-    event.reply(dpp::message("❌ Failed to extract beatmap files"));
+    event.reply(message_presenter.build_error_message(error_messages::EXTRACT_FAILED));
     return;
   }
 
   // Find audio file in extract
   auto extract_path = beatmap_downloader.get_extract_path(*extract_id);
   if (!extract_path) {
-    event.reply(dpp::message("❌ Extract not found"));
+    event.reply(message_presenter.build_error_message(error_messages::EXTRACT_NOT_FOUND));
     return;
   }
 
   auto audio_filename = beatmap_downloader.find_audio_in_extract(*extract_path);
   if (!audio_filename) {
-    event.reply(dpp::message("❌ No audio file found for this beatmap"));
+    event.reply(message_presenter.build_error_message(error_messages::NO_AUDIO));
     return;
   }
 
@@ -1452,17 +1460,7 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
 
   std::string footer_text = beatmap_downloader.build_download_footer(beatmapset_id);
 
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(beatmap.to_string())
-    .set_url(beatmap.get_beatmap_url())
-    .set_description(fmt::format("[Download audio]({})", audio_url))
-    .set_footer(dpp::embed_footer().set_text(footer_text));
-
-  dpp::message msg;
-  msg.add_embed(embed);
-
-  event.reply(msg);
+  event.reply(message_presenter.build_audio(beatmap, audio_url, footer_text));
 
   auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -1481,7 +1479,7 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
   // Resolve osu user_id using service
   auto resolve_result = user_resolver_service.resolve(parsed.username, event.msg.author.id);
   if (!resolve_result) {
-    event.reply(dpp::message(resolve_result.error_message));
+    event.reply(message_presenter.build_error_message(resolve_result.error_message));
     return;
   }
   int64_t osu_user_id = resolve_result.osu_user_id;
@@ -1506,7 +1504,7 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
       event.reply(dpp::message(
         fmt::format("request timeout: osu! api took too long to respond ({}s)", elapsed)));
     } else {
-      event.reply(dpp::message("failed to fetch recent scores"));
+      event.reply(message_presenter.build_error_message(error_messages::FETCH_SCORES_FAILED));
     }
     return;
   }
@@ -1516,7 +1514,7 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
   try {
     json scores_json = json::parse(scores_response);
     if (!scores_json.is_array() || scores_json.empty()) {
-      event.reply(dpp::message("no recent scores found"));
+      event.reply(message_presenter.build_error_message(error_messages::NO_RECENT_SCORES));
       return;
     }
 
@@ -1526,15 +1524,15 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
       scores.push_back(score);
     }
   } catch (const json::exception& e) {
-    event.reply(dpp::message("failed to parse scores"));
+    event.reply(message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
     spdlog::error("Failed to parse scores: {}", e.what());
     return;
   }
 
   // Validate score index
   if (parsed.score_index >= scores.size()) {
-    event.reply(dpp::message(fmt::format("score index {} out of range (max: {})",
-      parsed.score_index + 1, scores.size())));
+    event.reply(message_presenter.build_error_message(
+      fmt::format(error_messages::SCORE_INDEX_OUT_OF_RANGE_FORMAT, parsed.score_index + 1, scores.size())));
     return;
   }
 
@@ -1590,7 +1588,7 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
   auto beatmap_result = beatmap_resolver_service.resolve(stored_value);
   if (!beatmap_result) {
-    event.reply(beatmap_result.error_message);
+    event.reply(message_presenter.build_error_message(beatmap_result.error_message));
     return;
   }
   uint32_t beatmap_id = beatmap_result.beatmap_id;
@@ -1601,7 +1599,7 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   // Resolve osu user_id using service
   auto resolve_result = user_resolver_service.resolve(parsed.username, event.msg.author.id);
   if (!resolve_result) {
-    event.reply(dpp::message(resolve_result.error_message));
+    event.reply(message_presenter.build_error_message(resolve_result.error_message));
     return;
   }
   int64_t osu_user_id = resolve_result.osu_user_id;
@@ -1612,7 +1610,7 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   // Get beatmap info
   std::string beatmap_json = request.get_beatmap(std::to_string(beatmap_id));
   if (beatmap_json.empty()) {
-    event.reply("Failed to fetch beatmap information.");
+    event.reply(message_presenter.build_error_message("Failed to fetch beatmap information."));
     return;
   }
 
@@ -1622,13 +1620,13 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   // Fetch all scores for this user on this beatmap
   std::string scores_json = request.get_user_beatmap_score(std::to_string(beatmap_id), std::to_string(osu_user_id), true);
   if (scores_json.empty()) {
-    event.reply(dpp::message(fmt::format("No scores found for this beatmap")));
+    event.reply(message_presenter.build_error_message("No scores found for this beatmap."));
     return;
   }
 
   json scores_data = json::parse(scores_json);
   if (!scores_data.contains("scores") || !scores_data["scores"].is_array()) {
-    event.reply(dpp::message("Failed to parse scores data"));
+    event.reply(message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
     return;
   }
 
@@ -1664,10 +1662,10 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   }
 
   if (scores_array.empty()) {
-    std::string msg = parsed.mods_filter.empty()
-      ? "No scores found for this beatmap"
-      : fmt::format("No scores found with +{} mods", parsed.mods_filter);
-    event.reply(dpp::message(msg));
+    std::string error_msg = parsed.mods_filter.empty()
+      ? std::string(error_messages::NO_SCORES_ON_BEATMAP)
+      : fmt::format(error_messages::NO_SCORES_WITH_MODS_FORMAT, parsed.mods_filter);
+    event.reply(message_presenter.build_error_message(error_msg));
     return;
   }
 
@@ -1739,261 +1737,13 @@ void Bot::message_create_event(const dpp::message_create_t& event) {
     event.msg.author.id.str(), event.msg.author.username,
     event.msg.channel_id.str(), event.msg.content);
 
-  std::lock_guard<std::mutex> lock(mutex);
-  chat_context_service.update_context(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
-
-  // Case-insensitive command check
-  std::string content_lower = event.msg.content;
-  std::transform(content_lower.begin(), content_lower.end(), content_lower.begin(),
-    [](unsigned char c) { return std::tolower(c); });
-
-  if (content_lower.find("!lb") == 0 || event.msg.content.find("!ди") == 0) {
-    // Parse mods parameter (e.g., "!lb +hddt" or "!lb +hd+dt")
-    std::string mods_filter;
-    size_t plus_pos = event.msg.content.find('+');
-    if (plus_pos != std::string::npos) {
-      mods_filter = event.msg.content.substr(plus_pos + 1);
-      // Remove spaces and convert to uppercase
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), ' '), mods_filter.end());
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), '+'), mods_filter.end());
-      std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(),
-        [](unsigned char c) { return std::toupper(c); });
-    }
-
-    std::jthread(&Bot::create_lb_message, this, std::move(event), mods_filter).detach();
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    chat_context_service.update_context(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
   }
 
-  if (content_lower.find("!rs") == 0 || event.msg.content.find("!кы") == 0) {
-    // Parse mode (e.g., "!rs:taiko", "!rs:mania", default "osu")
-    std::string content = event.msg.content;
-    std::string mode = "osu";
-
-    size_t cmd_end = 3; // Length of "!rs"
-    if (content.find("!кы") == 0) {
-      cmd_end = 7; // Length of "!кы" in bytes (UTF-8)
-    }
-
-    // Check for mode specification (e.g., !rs:taiko)
-    size_t colon_pos = content.find(':');
-    if (colon_pos != std::string::npos && colon_pos < cmd_end + 10) {
-      size_t mode_end = content.find(' ', colon_pos);
-      if (mode_end == std::string::npos) {
-        mode_end = content.length();
-      }
-      mode = content.substr(colon_pos + 1, mode_end - colon_pos - 1);
-      std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
-
-      // Validate mode
-      if (mode != "osu" && mode != "taiko" && mode != "catch" && mode != "mania" &&
-          mode != "fruits" && mode != "ctb") {
-        event.reply("Invalid mode. Supported modes: `osu`, `taiko`, `catch`/`fruits`, `mania`");
-        return;
-      }
-
-      // Normalize mode names
-      if (mode == "ctb") mode = "catch";
-      if (mode == "fruits") mode = "catch";
-
-      cmd_end = mode_end; // Update cmd_end to skip the mode part
-    }
-
-    std::string params = content.length() > cmd_end ? content.substr(cmd_end) : "";
-    // Trim leading spaces
-    size_t start = params.find_first_not_of(" \t");
-    if (start != std::string::npos) {
-      params = params.substr(start);
-    } else {
-      params = "";
-    }
-
-    std::jthread(&Bot::create_rs_message, this, std::move(event), mode, params).detach();
-  }
-
-  if (content_lower.find("!c") == 0 || content_lower.find("!compare") == 0) {
-    // Parse username and mods
-    std::string content = event.msg.content;
-    size_t cmd_start = content.find('!');
-    size_t cmd_end = content.find(' ', cmd_start);
-    if (cmd_end == std::string::npos) {
-      cmd_end = content.length();
-    }
-
-    std::string params = content.length() > cmd_end ? content.substr(cmd_end) : "";
-    // Trim leading spaces
-    size_t start = params.find_first_not_of(" \t");
-    if (start != std::string::npos) {
-      params = params.substr(start);
-    } else {
-      params = "";
-    }
-
-    std::jthread(&Bot::create_compare_message, this, std::move(event), params).detach();
-  }
-
-  if (content_lower.find("!bg") == 0) {
-    std::jthread(&Bot::create_bg_message, this, std::move(event)).detach();
-  }
-
-  if (content_lower.find("!song") == 0 || content_lower.find("!audio") == 0) {
-    std::jthread(&Bot::create_audio_message, this, std::move(event)).detach();
-  }
-
-  if (content_lower.find("!m") == 0 || content_lower.find("!map") == 0) {
-    // Parse mods parameter (e.g., "!m +hddt" or "!map +hd")
-    std::string mods_filter;
-    size_t plus_pos = event.msg.content.find('+');
-    if (plus_pos != std::string::npos) {
-      mods_filter = event.msg.content.substr(plus_pos + 1);
-      // Remove spaces and convert to uppercase
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), ' '), mods_filter.end());
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), '+'), mods_filter.end());
-      std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(),
-        [](unsigned char c) { return std::toupper(c); });
-    }
-
-    std::jthread(&Bot::create_map_message, this, std::move(event), mods_filter).detach();
-  }
-
-  if (content_lower.find("!sim") == 0) {
-    // Parse mode (e.g., "!sim:taiko", "!sim:mania", default "osu")
-    std::string content = event.msg.content;
-    std::string mode = "osu";
-
-    size_t colon_pos = content.find(':');
-    if (colon_pos != std::string::npos && colon_pos < content.find(' ')) {
-      size_t mode_end = content.find(' ', colon_pos);
-      mode = content.substr(colon_pos + 1, mode_end - colon_pos - 1);
-      std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
-
-      // Validate mode
-      if (mode != "osu" && mode != "taiko" && mode != "catch" && mode != "mania") {
-        event.reply("Invalid mode. Supported modes: `osu`, `taiko`, `catch`, `mania`");
-        return;
-      }
-    }
-
-    // Find percentage
-    size_t percent_pos = content.find('%');
-    if (percent_pos == std::string::npos) {
-      event.reply("Usage: `!sim[:mode] <accuracy>% [+mods] [-c COMBO] [-n100 X] [-n50 X] [-n0 X] [-r RATIO]`\n"
-                  "Modes: `osu` (default), `taiko`, `catch`, `mania`\n"
-                  "Examples:\n"
-                  "• `!sim 99% +HDDT` - standard osu!\n"
-                  "• `!sim:taiko 100% +HR` - taiko mode\n"
-                  "• `!sim 100% -n100 5 -c 1500` - 5x100, 1500x combo\n"
-                  "• `!sim:mania 99% -r 0.95` - mania with 95% ratio");
-      return;
-    }
-
-    // Extract accuracy value
-    size_t start_pos = content.find_first_of("0123456789");
-    if (start_pos == std::string::npos || start_pos >= percent_pos) {
-      event.reply("Invalid accuracy format. Example: `!sim 99%`");
-      return;
-    }
-
-    std::string acc_str = content.substr(start_pos, percent_pos - start_pos);
-    double accuracy = 0.0;
-    try {
-      accuracy = std::stod(acc_str) / 100.0; // Convert percentage to 0.0-1.0
-
-      if (accuracy < 0.0 || accuracy > 1.0) {
-        event.reply("Accuracy must be between 0% and 100%.");
-        return;
-      }
-    } catch (const std::exception& e) {
-      event.reply("Invalid accuracy value. Example: `!sim 99%`");
-      return;
-    }
-
-    // Parse mods parameter (same as !m command)
-    std::string mods_filter;
-    size_t plus_pos = content.find('+');
-    if (plus_pos != std::string::npos) {
-      // Extract mods but stop at any - parameter
-      size_t mods_end = content.find(" -", plus_pos);
-      std::string mods_substr = (mods_end != std::string::npos)
-        ? content.substr(plus_pos + 1, mods_end - plus_pos - 1)
-        : content.substr(plus_pos + 1);
-
-      mods_filter = mods_substr;
-      // Remove spaces and convert to uppercase
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), ' '), mods_filter.end());
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), '+'), mods_filter.end());
-      std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(),
-        [](unsigned char c) { return std::toupper(c); });
-    }
-
-    // Parse hit count parameters (-n100, -n50, -n0)
-    int count_100 = -1;
-    int count_50 = -1;
-    int misses = 0;
-
-    auto parse_param = [&content](const std::string& param) -> int {
-      size_t param_pos = content.find(param);
-      if (param_pos != std::string::npos) {
-        size_t value_start = param_pos + param.length();
-        // Skip spaces
-        while (value_start < content.length() && content[value_start] == ' ') {
-          value_start++;
-        }
-        // Extract number
-        size_t value_end = value_start;
-        while (value_end < content.length() && std::isdigit(content[value_end])) {
-          value_end++;
-        }
-        if (value_end > value_start) {
-          try {
-            return std::stoi(content.substr(value_start, value_end - value_start));
-          } catch (...) {}
-        }
-      }
-      return -1;
-    };
-
-    count_100 = parse_param("-n100");
-    count_50 = parse_param("-n50");
-    int n0 = parse_param("-n0");
-    if (n0 >= 0) {
-      misses = n0;
-    }
-
-    // Parse combo parameter (-c)
-    int combo = 0;
-    int combo_param = parse_param("-c");
-    if (combo_param > 0) {
-      combo = combo_param;
-    }
-
-    // Parse ratio parameter (-r, mania only)
-    double ratio = -1.0;
-    auto parse_ratio = [&content]() -> double {
-      size_t ratio_pos = content.find("-r");
-      if (ratio_pos != std::string::npos) {
-        size_t value_start = ratio_pos + 2;
-        while (value_start < content.length() && content[value_start] == ' ') {
-          value_start++;
-        }
-        size_t value_end = value_start;
-        while (value_end < content.length() &&
-               (std::isdigit(content[value_end]) || content[value_end] == '.')) {
-          value_end++;
-        }
-        if (value_end > value_start) {
-          try {
-            return std::stod(content.substr(value_start, value_end - value_start));
-          } catch (...) {}
-        }
-      }
-      return -1.0;
-    };
-
-    if (mode == "mania") {
-      ratio = parse_ratio();
-    }
-
-    std::jthread(&Bot::create_sim_message, this, std::move(event), accuracy, mode, mods_filter, combo, count_100, count_50, misses, ratio).detach();
-  }
+  // Route to command handlers
+  command_router.route(event);
 }
 
 void Bot::message_update_event(const dpp::message_update_t& event) {
@@ -2074,8 +1824,8 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
 
     if (req.empty()) {
       if (elapsed > 8) {
-        event.edit_original_response(dpp::message(
-          fmt::format("Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+        event.edit_original_response(message_presenter.build_error_message(
+          fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
       } else {
         event.edit_original_response(dpp::message(fmt::format("Can't find {} on Bancho.", u_from_com)));
       }
@@ -2137,7 +1887,7 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
     std::string stored_id = chat_context_service.get_beatmap_id(event.command.channel_id);
     std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
     if (beatmap_id.empty()) {
-      event.edit_original_response(dpp::message("Can't find the map. Please send the map link and use this command again."));
+      event.edit_original_response(message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
       return;
     }
 
@@ -2151,8 +1901,8 @@ void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
 
     if (response_score.empty() || response_beatmap.empty()) {
       if (elapsed > 8) {
-        event.edit_original_response(dpp::message(
-          fmt::format("Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
+        event.edit_original_response(message_presenter.build_error_message(
+          fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
       } else {
         event.edit_original_response(dpp::message("Can't find score on this map."));
       }
@@ -2335,8 +2085,21 @@ Bot::Bot(const std::string& token, bool delete_commands)
     ready_event(event, delete_commands);
   });
 
+  // Register text commands
+  register_commands();
+
   // Start HTTP health check server
   http_server->start();
+}
+
+void Bot::register_commands() {
+  command_router.register_command(std::make_unique<commands::LbCommand>(*this));
+  command_router.register_command(std::make_unique<commands::RsCommand>(*this));
+  command_router.register_command(std::make_unique<commands::BgCommand>(*this));
+  command_router.register_command(std::make_unique<commands::AudioCommand>(*this));
+  command_router.register_command(std::make_unique<commands::MapCommand>(*this));
+  command_router.register_command(std::make_unique<commands::CompareCommand>(*this));
+  command_router.register_command(std::make_unique<commands::SimCommand>(*this));
 }
 
 void Bot::start() {

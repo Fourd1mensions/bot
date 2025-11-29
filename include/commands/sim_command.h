@@ -1,0 +1,37 @@
+#pragma once
+
+#include "commands/command.h"
+
+class Bot;
+
+namespace commands {
+
+class SimCommand : public ICommand {
+public:
+    explicit SimCommand(Bot& bot);
+
+    std::vector<std::string> get_aliases() const override;
+    void execute(const CommandContext& ctx) override;
+
+private:
+    Bot& bot_;
+
+    struct ParsedParams {
+        double accuracy = 0.0;
+        std::string mode = "osu";
+        std::string mods_filter;
+        int combo = 0;
+        int count_100 = -1;
+        int count_50 = -1;
+        int misses = 0;
+        double ratio = -1.0;
+        bool valid = true;
+        std::string error_message;
+    };
+
+    ParsedParams parse(const std::string& content) const;
+    int parse_int_param(const std::string& content, const std::string& param) const;
+    double parse_ratio(const std::string& content) const;
+};
+
+} // namespace commands

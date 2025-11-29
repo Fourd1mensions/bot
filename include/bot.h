@@ -20,6 +20,7 @@
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
+#include <commands/command_router.h>
 
 class Random {
 private:
@@ -64,6 +65,9 @@ private:
   services::CommandParamsService      command_params_service;
   services::UserResolverService       user_resolver_service;
 
+  // Command routing
+  commands::CommandRouter             command_router;
+
   // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
   dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
   void                  remove_message_components(dpp::snowflake channel_id, dpp::snowflake message_id);
@@ -76,16 +80,10 @@ private:
   float                 apply_speed_mods_to_bpm(float bpm, const std::string& mods) const;
   uint32_t              apply_speed_mods_to_length(uint32_t length_seconds, const std::string& mods) const;
 
-  // TODO: delete all this shit
- void                  create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
-  void                  create_bg_message(const dpp::message_create_t& event);
-  void                  create_audio_message(const dpp::message_create_t& event);
-  void                  create_rs_message(const dpp::message_create_t& event, const std::string& mode = "osu", const std::string& params = "");
-  void                  create_compare_message(const dpp::message_create_t& event, const std::string& params = "");
-  void                  create_map_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
-  void                  create_sim_message(const dpp::message_create_t& event, double accuracy, const std::string& mode = "osu", const std::string& mods_filter = "", int combo = 0, int count_100 = -1, int count_50 = -1, int misses = 0, double ratio = -1.0);
   dpp::message          build_rs_page(RecentScoreState& state);
-  // TODO: check guild members 
+
+  // Register text commands with the router
+  void                  register_commands(); 
 
   // Handle events
 
@@ -102,4 +100,13 @@ public:
   Bot(const std::string& token, bool delete_commands);
   void start();
   void shutdown();
+
+  // Command handlers (called by command classes)
+  void create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
+  void create_bg_message(const dpp::message_create_t& event);
+  void create_audio_message(const dpp::message_create_t& event);
+  void create_rs_message(const dpp::message_create_t& event, const std::string& mode = "osu", const std::string& params = "");
+  void create_compare_message(const dpp::message_create_t& event, const std::string& params = "");
+  void create_map_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
+  void create_sim_message(const dpp::message_create_t& event, double accuracy, const std::string& mode = "osu", const std::string& mods_filter = "", int combo = 0, int count_100 = -1, int count_50 = -1, int misses = 0, double ratio = -1.0);
 };

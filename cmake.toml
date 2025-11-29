@@ -31,7 +31,7 @@ required = true
 
 [target.discord-bot]
 type = "executable"
-sources = ["src/*.cpp", "src/services/*.cpp"]
+sources = ["src/*.cpp", "src/services/*.cpp", "src/commands/*.cpp"]
 include-directories = ["include"]
 compile-features = ["cxx_std_23"]
 cmake-before = """
