@@ -8,6 +8,16 @@
 
 namespace services {
 
+dpp::message MessagePresenterService::build_error_message(std::string_view error_text) const {
+    auto embed = dpp::embed()
+        .set_color(dpp::colors::red)
+        .set_description(std::string(error_text));
+
+    dpp::message msg;
+    msg.add_embed(embed);
+    return msg;
+}
+
 dpp::message MessagePresenterService::build_leaderboard_page(
     const Beatmap& beatmap,
     const std::vector<ScorePresentation>& scores_on_page,
@@ -43,19 +53,6 @@ dpp::message MessagePresenterService::build_leaderboard_page(
     // Add pagination buttons only if more than one page
     if (total_pages > 1) {
         msg.add_component(build_pagination_row("lb_", current_page, total_pages, false));
-
-        // Add page selector row
-        dpp::component selector_row;
-        selector_row.set_type(dpp::cot_action_row);
-
-        dpp::component page_input = dpp::component()
-            .set_type(dpp::cot_button)
-            .set_id("lb_select")
-            .set_label("Go to page...")
-            .set_style(dpp::cos_secondary);
-
-        selector_row.add_component(page_input);
-        msg.add_component(selector_row);
     }
 
     return msg;
@@ -295,6 +292,48 @@ dpp::message MessagePresenterService::build_background(
     return msg;
 }
 
+dpp::message MessagePresenterService::build_audio(
+    const Beatmap& beatmap,
+    const std::string& audio_url,
+    const std::string& source
+) const {
+    auto embed = dpp::embed()
+        .set_color(dpp::colors::viola_purple)
+        .set_title(beatmap.to_string())
+        .set_url(beatmap.get_beatmap_url())
+        .set_description(fmt::format("[Download audio]({})", audio_url))
+        .set_footer(dpp::embed_footer().set_text(source));
+
+    dpp::message msg;
+    msg.add_embed(embed);
+    return msg;
+}
+
+dpp::message MessagePresenterService::build_from_cache_data(
+    const RecentScoreCacheData& cache_data,
+    const PaginationInfo& pagination
+) const {
+    auto embed = dpp::embed()
+        .set_color(dpp::colors::viola_purple)
+        .set_title(cache_data.title)
+        .set_url(cache_data.url)
+        .set_description(cache_data.description)
+        .set_thumbnail(cache_data.thumbnail);
+
+    embed.add_field("", cache_data.beatmap_info, false);
+    embed.set_footer(dpp::embed_footer().set_text(cache_data.footer))
+         .set_timestamp(cache_data.timestamp);
+
+    dpp::message msg;
+    msg.add_embed(embed);
+
+    if (pagination.total > 1) {
+        msg.add_component(build_pagination_row("rs_", pagination.current, pagination.total, true));
+    }
+
+    return msg;
+}
+
 dpp::component MessagePresenterService::build_pagination_row(
     const std::string& prefix,
     size_t current,
@@ -327,10 +366,9 @@ dpp::component MessagePresenterService::build_pagination_row(
 
     dpp::component page_indicator = dpp::component()
         .set_type(dpp::cot_button)
-        .set_id(prefix + "index")
+        .set_id(prefix + "select")
         .set_label(fmt::format("{}/{}", current + 1, total))
-        .set_style(dpp::cos_secondary)
-        .set_disabled(true);
+        .set_style(dpp::cos_secondary);
 
     dpp::component next_button = dpp::component()
         .set_type(dpp::cot_button)

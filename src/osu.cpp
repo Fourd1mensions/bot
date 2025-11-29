@@ -34,11 +34,15 @@ void Score::from_json(const json& j) {
       beatmap_id = score_j.value("beatmap_id", 0);
     }
 
-    const auto& stat_j = score_j.at("statistics");
-    count_miss = stat_j.value("count_miss", 0);
-    count_50   = stat_j.value("count_50", 0);
-    count_100  = stat_j.value("count_100", 0);
-    count_300  = stat_j.value("count_300", 0);
+    if (score_j.contains("statistics") && score_j["statistics"].is_object()) {
+      const auto& stat_j = score_j.at("statistics");
+      count_miss = stat_j.contains("count_miss") && !stat_j["count_miss"].is_null() ? stat_j["count_miss"].get<uint32_t>() : 0;
+      count_50   = stat_j.contains("count_50") && !stat_j["count_50"].is_null() ? stat_j["count_50"].get<uint32_t>() : 0;
+      count_100  = stat_j.contains("count_100") && !stat_j["count_100"].is_null() ? stat_j["count_100"].get<uint32_t>() : 0;
+      count_300  = stat_j.contains("count_300") && !stat_j["count_300"].is_null() ? stat_j["count_300"].get<uint32_t>() : 0;
+    } else {
+      count_miss = count_50 = count_100 = count_300 = 0;
+    }
 
     mode = score_j.value("mode", "osu");
 

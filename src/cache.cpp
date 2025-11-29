@@ -66,6 +66,7 @@ std::string MemcachedCache::build_key(const std::string& key) const {
 }
 
 bool MemcachedCache::set(const std::string& key, const std::string& value, std::chrono::seconds ttl) {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
     std::string full_key = build_key(key);
     memcached_return_t rc = memcached_set(
         memc_,
@@ -86,6 +87,7 @@ bool MemcachedCache::set(const std::string& key, const std::string& value, std::
 }
 
 std::optional<std::string> MemcachedCache::get(const std::string& key) {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
     std::string full_key = build_key(key);
     size_t value_length;
     uint32_t flags;
@@ -119,6 +121,7 @@ std::optional<std::string> MemcachedCache::get(const std::string& key) {
 }
 
 bool MemcachedCache::del(const std::string& key) {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
     std::string full_key = build_key(key);
     memcached_return_t rc = memcached_delete(memc_, full_key.c_str(), full_key.length(), 0);
 

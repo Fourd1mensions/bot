@@ -6,6 +6,7 @@
 #include <memory>
 #include <chrono>
 #include <vector>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include "osu.h"
 #include "state/session_state.h"
@@ -66,6 +67,7 @@ private:
 
     memcached_st* memc_;
     std::string prefix_ = "patchouli:";
+    mutable std::mutex cache_mutex_; // Protect memcached operations from concurrent access
 
     // Helper to build prefixed keys
     std::string build_key(const std::string& key) const;

@@ -492,39 +492,40 @@ void Database::register_pending_button_removal(dpp::snowflake channel_id, dpp::s
     });
 }
 
-std::vector<std::pair<dpp::snowflake, dpp::snowflake>> Database::get_expired_button_removals() {
+std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::string>> Database::get_expired_button_removals() {
     return execute([](pqxx::connection& conn) {
         pqxx::work txn(conn);
 
         auto result = txn.exec(
-            "SELECT channel_id, message_id FROM pending_button_removals "
+            "SELECT channel_id, message_id, removal_type FROM pending_button_removals "
             "WHERE expires_at <= CURRENT_TIMESTAMP"
         );
 
-        std::vector<std::pair<dpp::snowflake, dpp::snowflake>> removals;
+        std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::string>> removals;
         removals.reserve(result.size());
 
         for (const auto& row : result) {
             dpp::snowflake channel_id(row["channel_id"].as<int64_t>());
             dpp::snowflake message_id(row["message_id"].as<int64_t>());
-            removals.emplace_back(channel_id, message_id);
+            std::string removal_type = row["removal_type"].as<std::string>();
+            removals.emplace_back(channel_id, message_id, removal_type);
         }
 
         return removals;
     });
 }
 
-std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::chrono::system_clock::time_point>>
+std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::chrono::system_clock::time_point, std::string>>
 Database::get_all_pending_removals() {
     return execute([](pqxx::connection& conn) {
         pqxx::work txn(conn);
 
         auto result = txn.exec(
-            "SELECT channel_id, message_id, expires_at FROM pending_button_removals "
+            "SELECT channel_id, message_id, expires_at, removal_type FROM pending_button_removals "
             "ORDER BY expires_at ASC"
         );
 
-        std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::chrono::system_clock::time_point>> removals;
+        std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::chrono::system_clock::time_point, std::string>> removals;
         removals.reserve(result.size());
 
         for (const auto& row : result) {
@@ -538,7 +539,8 @@ Database::get_all_pending_removals() {
             ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
             auto expires_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
 
-            removals.emplace_back(channel_id, message_id, expires_at);
+            std::string removal_type = row["removal_type"].as<std::string>();
+            removals.emplace_back(channel_id, message_id, expires_at, removal_type);
         }
 
         return removals;

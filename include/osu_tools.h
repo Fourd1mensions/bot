@@ -305,10 +305,10 @@ public:
     return detail::parse_json_response<DifficultyResult>(*output,
       [](const json& j) -> DifficultyResult {
         return DifficultyResult{
-          .star_rating = j.at("star_rating").get<double>(),
-          .aim_difficulty = j.at("aim_difficulty").get<double>(),
-          .speed_difficulty = j.at("speed_difficulty").get<double>(),
-          .max_combo = j.at("max_combo").get<int>()
+          .star_rating = j.value("star_rating", 0.0),
+          .aim_difficulty = j.value("aim_difficulty", 0.0),
+          .speed_difficulty = j.value("speed_difficulty", 0.0),
+          .max_combo = j.value("max_combo", 0)
         };
       });
   }
@@ -396,19 +396,19 @@ public:
 
     return detail::parse_json_response<PerformanceResult>(*output,
       [](const json& j) -> PerformanceResult {
-        const auto& perf_attrs = j.at("performance_attributes");
-        const auto& diff_attrs = j.at("difficulty_attributes");
+        const auto& perf_attrs = j.contains("performance_attributes") ? j["performance_attributes"] : j;
+        const auto& diff_attrs = j.contains("difficulty_attributes") ? j["difficulty_attributes"] : j;
 
         return PerformanceResult{
-          .pp = perf_attrs.at("pp").get<double>(),
-          .aim_pp = perf_attrs.at("aim").get<double>(),
-          .speed_pp = perf_attrs.at("speed").get<double>(),
-          .accuracy_pp = perf_attrs.at("accuracy").get<double>(),
+          .pp = perf_attrs.value("pp", 0.0),
+          .aim_pp = perf_attrs.value("aim", 0.0),
+          .speed_pp = perf_attrs.value("speed", 0.0),
+          .accuracy_pp = perf_attrs.value("accuracy", 0.0),
           .difficulty = DifficultyResult{
-            .star_rating = diff_attrs.at("star_rating").get<double>(),
-            .aim_difficulty = diff_attrs.at("aim_difficulty").get<double>(),
-            .speed_difficulty = diff_attrs.at("speed_difficulty").get<double>(),
-            .max_combo = diff_attrs.at("max_combo").get<int>()
+            .star_rating = diff_attrs.value("star_rating", 0.0),
+            .aim_difficulty = diff_attrs.value("aim_difficulty", 0.0),
+            .speed_difficulty = diff_attrs.value("speed_difficulty", 0.0),
+            .max_combo = diff_attrs.value("max_combo", 0)
           }
         };
       });

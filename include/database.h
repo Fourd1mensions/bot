@@ -122,8 +122,8 @@ public:
     // Pending button removals table operations
     void register_pending_button_removal(dpp::snowflake channel_id, dpp::snowflake message_id,
                                          std::chrono::system_clock::time_point expires_at);
-    std::vector<std::pair<dpp::snowflake, dpp::snowflake>> get_expired_button_removals();
-    std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::chrono::system_clock::time_point>> get_all_pending_removals();
+    std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::string>> get_expired_button_removals();
+    std::vector<std::tuple<dpp::snowflake, dpp::snowflake, std::chrono::system_clock::time_point, std::string>> get_all_pending_removals();
     bool remove_pending_button_removal(dpp::snowflake channel_id, dpp::snowflake message_id);
 
     // Health check
