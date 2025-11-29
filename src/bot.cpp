@@ -1162,30 +1162,8 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
   std::string bg_url = fmt::format("{}/osu/{}/{}",
     config.public_url, *extract_id, utils::url_encode(*bg_filename));
 
-  // Get metadata from database for footer info
-  std::string footer_text;
-  try {
-    auto& db = db::Database::instance();
-    auto file_info = db.get_beatmap_file(beatmapset_id);
-
-    if (file_info && file_info->created_at) {
-      std::string time_ago = utils::format_time_ago(*file_info->created_at);
-      std::string mirror = file_info->mirror_hostname.value_or("cache");
-
-      if (mirror == "cache") {
-        footer_text = fmt::format("cached • {}", time_ago);
-      } else {
-        footer_text = fmt::format("{} • {}", mirror, time_ago);
-      }
-    } else {
-      std::string mirror = beatmap_downloader.get_last_used_mirror();
-      footer_text = mirror == "cache" ? "cached" : mirror;
-    }
-  } catch (const std::exception& e) {
-    footer_text = beatmap_downloader.get_last_used_mirror() == "cache" ? "cached" : "downloaded";
-  }
-
   // Create embed with background image using presenter service
+  std::string footer_text = beatmap_downloader.build_download_footer(beatmapset_id);
   dpp::message msg = message_presenter.build_background(beatmap, bg_url, footer_text);
   event.reply(msg);
 
@@ -1472,28 +1450,7 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
   std::string audio_url = fmt::format("{}/osu/{}/{}",
     config.public_url, *extract_id, utils::url_encode(*audio_filename));
 
-  // Get metadata from database for footer info
-  std::string footer_text;
-  try {
-    auto& db = db::Database::instance();
-    auto file_info = db.get_beatmap_file(beatmapset_id);
-
-    if (file_info && file_info->created_at) {
-      std::string time_ago = utils::format_time_ago(*file_info->created_at);
-      std::string mirror = file_info->mirror_hostname.value_or("cache");
-
-      if (mirror == "cache") {
-        footer_text = fmt::format("cached • {}", time_ago);
-      } else {
-        footer_text = fmt::format("{} • {}", mirror, time_ago);
-      }
-    } else {
-      std::string mirror = beatmap_downloader.get_last_used_mirror();
-      footer_text = mirror == "cache" ? "cached" : mirror;
-    }
-  } catch (const std::exception& e) {
-    footer_text = beatmap_downloader.get_last_used_mirror() == "cache" ? "cached" : "downloaded";
-  }
+  std::string footer_text = beatmap_downloader.build_download_footer(beatmapset_id);
 
   auto embed = dpp::embed()
     .set_color(dpp::colors::viola_purple)
@@ -1740,20 +1697,9 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
     std::string mods_str = score.get_mods();
     if (mods_str.empty()) mods_str = "NM";
 
-    std::string rank_emoji;
-    std::string rank = score.get_rank();
-    if (rank == "XH" || rank == "X") rank_emoji = "<:rankingSSH:1320169012810514532>";
-    else if (rank == "SH") rank_emoji = "<:rankingSH:1320169010814210048>";
-    else if (rank == "S") rank_emoji = "<:rankingS:1320169009434132501>";
-    else if (rank == "A") rank_emoji = "<:rankingA:1320169005894787162>";
-    else if (rank == "B") rank_emoji = "<:rankingB:1320169007396704286>";
-    else if (rank == "C") rank_emoji = "<:rankingC:1320169008491585607>";
-    else if (rank == "D") rank_emoji = "<:rankingD:1320169004011819008>";
-    else rank_emoji = rank;
-
     content += fmt::format("**#{}** {} **+{}** • **{:.2f}pp** • {:.2f}%\n",
       i + 1,
-      rank_emoji,
+      utils::get_rank_emoji(score.get_rank()),
       mods_str,
       score.get_pp(),
       score.get_accuracy() * 100.0

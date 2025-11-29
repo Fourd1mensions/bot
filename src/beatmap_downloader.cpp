@@ -1,7 +1,9 @@
 #include <beatmap_downloader.h>
 #include <database.h>
+#include <utils.h>
 
 #include <cpr/cpr.h>
+#include <fmt/format.h>
 #include <spdlog/spdlog.h>
 #include <zip.h>
 #include <zlib.h>
@@ -637,4 +639,26 @@ std::optional<fs::path> BeatmapDownloader::download_osu_file(uint32_t beatmap_id
   spdlog::error("[OSU_FILE] Failed to download .osu file for beatmap {}", beatmap_id);
   fs::remove(temp_path);
   return std::nullopt;
+}
+
+std::string BeatmapDownloader::build_download_footer(uint32_t beatmapset_id) const {
+  try {
+    auto& db = db::Database::instance();
+    auto file_info = db.get_beatmap_file(beatmapset_id);
+
+    if (file_info && file_info->created_at) {
+      std::string time_ago = utils::format_time_ago(*file_info->created_at);
+      std::string mirror = file_info->mirror_hostname.value_or("cache");
+
+      if (mirror == "cache") {
+        return fmt::format("cached • {}", time_ago);
+      }
+      return fmt::format("{} • {}", mirror, time_ago);
+    }
+
+    std::string mirror = last_used_mirror_;
+    return mirror == "cache" ? "cached" : mirror;
+  } catch (const std::exception& e) {
+    return last_used_mirror_ == "cache" ? "cached" : "downloaded";
+  }
 }
