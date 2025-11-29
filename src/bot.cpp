@@ -1559,59 +1559,13 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
   // Parse parameters using service
   auto parsed = command_params_service.parse_recent_params(params, mode);
 
-  // Resolve osu user_id from parsed username
-  int64_t osu_user_id = 0;
-
-  if (parsed.username.empty()) {
-    // Use caller's linked account
-    auto& db = db::Database::instance();
-    auto osu_id_opt = db.get_osu_user_id(event.msg.author.id);
-    if (!osu_id_opt) {
-      event.reply(dpp::message("you need to link your osu! account first with /set"));
-      return;
-    }
-    osu_user_id = *osu_id_opt;
-  } else {
-    // Check if target_user is a Discord mention
-    auto mention_id = services::CommandParamsService::parse_discord_mention(parsed.username);
-    if (mention_id) {
-      try {
-        dpp::snowflake mentioned_discord_id = std::stoull(*mention_id);
-
-        // Look up osu! user ID from database
-        auto& db = db::Database::instance();
-        auto osu_id_opt = db.get_osu_user_id(mentioned_discord_id);
-
-        if (!osu_id_opt) {
-          event.reply(dpp::message(fmt::format("user <@{}> hasn't linked their osu! account yet", *mention_id)));
-          return;
-        }
-
-        osu_user_id = *osu_id_opt;
-        spdlog::info("[RS] Using mentioned user: Discord ID {} -> osu! ID {}", *mention_id, osu_user_id);
-      } catch (const std::exception& e) {
-        event.reply(dpp::message("invalid user mention"));
-        spdlog::error("Failed to parse Discord mention: {}", e.what());
-        return;
-      }
-    } else {
-      // Look up user by username
-      std::string user_response = request.get_user(parsed.username, false);
-      if (user_response.empty()) {
-        event.reply(dpp::message(fmt::format("user '{}' not found", parsed.username)));
-        return;
-      }
-
-      try {
-        json user_json = json::parse(user_response);
-        osu_user_id = user_json.value("id", 0);
-      } catch (const json::exception& e) {
-        event.reply(dpp::message("failed to parse user data"));
-        spdlog::error("Failed to parse user response: {}", e.what());
-        return;
-      }
-    }
+  // Resolve osu user_id using service
+  auto resolve_result = user_resolver_service.resolve(parsed.username, event.msg.author.id);
+  if (!resolve_result) {
+    event.reply(dpp::message(resolve_result.error_message));
+    return;
   }
+  int64_t osu_user_id = resolve_result.osu_user_id;
 
   // Show typing indicator
   bot.channel_typing(event.msg.channel_id);
@@ -1740,57 +1694,13 @@ void Bot::create_compare_message(const dpp::message_create_t& event, const std::
   // Parse parameters using service
   auto parsed = command_params_service.parse_compare_params(params);
 
-  // Resolve osu user_id from parsed username
-  int64_t osu_user_id = 0;
-
-  if (parsed.username.empty()) {
-    // Use caller's linked account
-    auto& db = db::Database::instance();
-    auto osu_id_opt = db.get_osu_user_id(event.msg.author.id);
-    if (!osu_id_opt) {
-      event.reply(dpp::message("you need to link your osu! account first with /set"));
-      return;
-    }
-    osu_user_id = *osu_id_opt;
-  } else {
-    // Check if target_user is a Discord mention
-    auto mention_id = services::CommandParamsService::parse_discord_mention(parsed.username);
-    if (mention_id) {
-      try {
-        dpp::snowflake mentioned_discord_id = std::stoull(*mention_id);
-        auto& db = db::Database::instance();
-        auto osu_id_opt = db.get_osu_user_id(mentioned_discord_id);
-
-        if (!osu_id_opt) {
-          event.reply(dpp::message(fmt::format("user <@{}> hasn't linked their osu! account yet", *mention_id)));
-          return;
-        }
-
-        osu_user_id = *osu_id_opt;
-        spdlog::info("[COMPARE] Using mentioned user: Discord ID {} -> osu! ID {}", *mention_id, osu_user_id);
-      } catch (const std::exception& e) {
-        event.reply(dpp::message("invalid user mention"));
-        spdlog::error("Failed to parse Discord mention: {}", e.what());
-        return;
-      }
-    } else {
-      // Look up user by username
-      std::string user_response = request.get_user(parsed.username, false);
-      if (user_response.empty()) {
-        event.reply(dpp::message(fmt::format("user '{}' not found", parsed.username)));
-        return;
-      }
-
-      try {
-        json user_json = json::parse(user_response);
-        osu_user_id = user_json.value("id", 0);
-      } catch (const json::exception& e) {
-        event.reply(dpp::message("failed to parse user data"));
-        spdlog::error("Failed to parse user response: {}", e.what());
-        return;
-      }
-    }
+  // Resolve osu user_id using service
+  auto resolve_result = user_resolver_service.resolve(parsed.username, event.msg.author.id);
+  if (!resolve_result) {
+    event.reply(dpp::message(resolve_result.error_message));
+    return;
   }
+  int64_t osu_user_id = resolve_result.osu_user_id;
 
   // Show typing indicator
   bot.channel_typing(event.msg.channel_id);
@@ -2481,7 +2391,8 @@ Bot::Bot(const std::string& token, bool delete_commands)
     : bot(token),
       arena(tbb::task_arena(16)),
       beatmap_resolver_service(request),
-      performance_service(beatmap_downloader) {
+      performance_service(beatmap_downloader),
+      user_resolver_service(request) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
 
   // Configure spdlog with structured logging pattern
