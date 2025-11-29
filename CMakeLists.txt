@@ -122,6 +122,7 @@ set(discord-bot_SOURCES
 	"src/requests.cpp"
 	"src/services/beatmap_resolver_service.cpp"
 	"src/services/chat_context_service.cpp"
+	"src/services/message_presenter_service.cpp"
 	"src/services/user_mapping_service.cpp"
 	"src/utils.cpp"
 )

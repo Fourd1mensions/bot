@@ -225,3 +225,11 @@ std::string utils::url_decode(const std::string& value) {
   return decoded.str();
 }
 
+utils::ModFlags utils::parse_mod_flags(const std::string& mods) {
+  ModFlags flags;
+  flags.has_ez = mods.find("EZ") != std::string::npos;
+  flags.has_hr = mods.find("HR") != std::string::npos;
+  flags.has_dt = mods.find("DT") != std::string::npos || mods.find("NC") != std::string::npos;
+  flags.has_ht = mods.find("HT") != std::string::npos;
+  return flags;
+}
