@@ -13,6 +13,7 @@
 #include <services/chat_context_service.h>
 #include <services/user_mapping_service.h>
 #include <services/beatmap_resolver_service.h>
+#include <services/message_presenter_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -55,10 +56,11 @@ private:
   services::ChatContextService      chat_context_service;
   services::UserMappingService      user_mapping_service;
   services::BeatmapResolverService  beatmap_resolver_service;
+  services::MessagePresenterService message_presenter;
 
   // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
   dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
-  void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
+  void                  remove_message_components(dpp::snowflake channel_id, dpp::snowflake message_id);
   void                  schedule_button_removal(dpp::snowflake channel_id, dpp::snowflake message_id, std::chrono::minutes ttl);
   void                  process_pending_button_removals();
   std::string           get_username_cached(int64_t user_id);

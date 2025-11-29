@@ -73,7 +73,6 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string
 
   size_t start = state.current_page * SCORES_PER_PAGE;
   size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
-  size_t scores_on_page = end - start;
 
   // Use mods_filter from state if available, otherwise use parameter
   const std::string& active_mods = state.mods_filter.empty() ? mods_filter : state.mods_filter;
@@ -102,12 +101,8 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string
           // Parse beatmap difficulty
           auto beatmap_opt = osu_parser::parse_osu_file(osu_file_path->string());
           if (beatmap_opt.has_value()) {
-            bool has_ez = active_mods.find("EZ") != std::string::npos;
-            bool has_hr = active_mods.find("HR") != std::string::npos;
-            bool has_dt = active_mods.find("DT") != std::string::npos || active_mods.find("NC") != std::string::npos;
-            bool has_ht = active_mods.find("HT") != std::string::npos;
-
-            auto modded_diff = osu_parser::apply_mods(*beatmap_opt, has_ez, has_hr, has_dt, has_ht);
+            auto mod_flags = utils::parse_mod_flags(active_mods);
+            auto modded_diff = osu_parser::apply_mods(*beatmap_opt, mod_flags.has_ez, mod_flags.has_hr, mod_flags.has_dt, mod_flags.has_ht);
             approach_rate = modded_diff.approach_rate;
             overall_difficulty = modded_diff.overall_difficulty;
             has_beatmap_data = true;
@@ -167,17 +162,10 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string
       caller_rank_text);
   }
 
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(title)
-    .set_url(state.beatmap.get_beatmap_url())
-    .set_thumbnail(state.beatmap.get_image_url())
-    .set_footer(dpp::embed_footer().set_text(footer_text))
-    .set_timestamp(time(0));
-
+  // Build score presentations for the current page
+  std::vector<services::ScorePresentation> scores_on_page;
   for (size_t i = start; i < end; i++) {
     const auto& score = state.scores[i];
-    dpp::embed_field field;
 
     // Calculate PP if API returns 0 (for Loved maps)
     double display_pp = score.get_pp();
@@ -209,64 +197,23 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string
       header = score.get_header();
     }
 
-    field.name      = fmt::format("{}) {}", i + 1, header);
-    field.value     = score.get_body(state.beatmap.get_max_combo());
-    field.is_inline = false;
-    embed.fields.push_back(field);
+    scores_on_page.push_back({
+      .rank = i + 1,
+      .header = header,
+      .body = score.get_body(state.beatmap.get_max_combo()),
+      .display_pp = display_pp
+    });
   }
 
-  dpp::message msg;
-  msg.add_embed(embed);
-
-  // Add pagination buttons if there's more than one page
-  if (state.total_pages > 1) {
-    dpp::component action_row;
-    action_row.set_type(dpp::cot_action_row);
-
-    dpp::component first_button;
-    first_button.set_type(dpp::cot_button)
-      .set_id("lb_first")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("⏮️")
-      .set_disabled(state.current_page == 0);
-
-    dpp::component prev_button;
-    prev_button.set_type(dpp::cot_button)
-      .set_id("lb_prev")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("⬅️")
-      .set_disabled(state.current_page == 0);
-
-    dpp::component page_indicator;
-    page_indicator.set_type(dpp::cot_button)
-      .set_id("lb_jump")
-      .set_label(fmt::format("{}/{}", state.current_page + 1, state.total_pages))
-      .set_style(dpp::cos_secondary);
-
-    dpp::component next_button;
-    next_button.set_type(dpp::cot_button)
-      .set_id("lb_next")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("➡️")
-      .set_disabled(state.current_page >= state.total_pages - 1);
-
-    dpp::component last_button;
-    last_button.set_type(dpp::cot_button)
-      .set_id("lb_last")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("⏭️")
-      .set_disabled(state.current_page >= state.total_pages - 1);
-
-    action_row.add_component(first_button);
-    action_row.add_component(prev_button);
-    action_row.add_component(page_indicator);
-    action_row.add_component(next_button);
-    action_row.add_component(last_button);
-
-    msg.add_component(action_row);
-  }
-
-  return msg;
+  // Use presenter service to build the message
+  return message_presenter.build_leaderboard_page(
+    state.beatmap,
+    scores_on_page,
+    footer_text,
+    active_mods,
+    state.total_pages,
+    state.current_page
+  );
 }
 
 dpp::message Bot::build_rs_page(RecentScoreState& state) {
@@ -299,45 +246,10 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
       dpp::message msg;
       msg.add_embed(embed);
 
-      // Add pagination buttons
+      // Add pagination buttons using presenter service
       if (state.scores.size() > 1) {
-        dpp::component action_row;
-        action_row.set_type(dpp::cot_action_row);
-
-        dpp::component first_button;
-        first_button.set_type(dpp::cot_button).set_style(dpp::cos_secondary);
-        if (state.current_index == 0) {
-          first_button.set_id("rs_refresh").set_emoji("🔄");
-        } else {
-          first_button.set_id("rs_first").set_emoji("⏮️");
-        }
-
-        dpp::component prev_button = dpp::component()
-          .set_type(dpp::cot_button).set_id("rs_prev")
-          .set_style(dpp::cos_secondary).set_emoji("⬅️")
-          .set_disabled(state.current_index == 0);
-
-        dpp::component page_indicator = dpp::component()
-          .set_type(dpp::cot_button).set_id("rs_index")
-          .set_label(fmt::format("{}/{}", state.current_index + 1, state.scores.size()))
-          .set_style(dpp::cos_secondary).set_disabled(true);
-
-        dpp::component next_button = dpp::component()
-          .set_type(dpp::cot_button).set_id("rs_next")
-          .set_style(dpp::cos_secondary).set_emoji("➡️")
-          .set_disabled(state.current_index >= state.scores.size() - 1);
-
-        dpp::component last_button = dpp::component()
-          .set_type(dpp::cot_button).set_id("rs_last")
-          .set_style(dpp::cos_secondary).set_emoji("⏭️")
-          .set_disabled(state.current_index >= state.scores.size() - 1);
-
-        action_row.add_component(first_button);
-        action_row.add_component(prev_button);
-        action_row.add_component(page_indicator);
-        action_row.add_component(next_button);
-        action_row.add_component(last_button);
-        msg.add_component(action_row);
+        msg.add_component(message_presenter.build_pagination_row(
+          "rs_", state.current_index, state.scores.size(), true));
       }
 
       spdlog::debug("[RS] Using cached page data for index {}", state.current_index);
@@ -371,33 +283,6 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
       } catch (...) {}
     }
   }
-
-  // Build title with mods
-  std::string title = beatmap.to_string();
-  if (!score.get_mods().empty() && score.get_mods() != "NM") {
-    title += fmt::format(" +{}", score.get_mods());
-  }
-
-  // Build description in new format
-  std::string emoji_id;
-  if (score.get_rank() == "F")
-    emoji_id = "<:RankingF:1278036373332295843>";
-  else if (score.get_rank() == "D")
-    emoji_id = "<:RankingD:1278036354248474674>";
-  else if (score.get_rank() == "C")
-    emoji_id = "<:RankingC:1278036342441250998>";
-  else if (score.get_rank() == "B")
-    emoji_id = "<:RankingB:1278036331099852810>";
-  else if (score.get_rank() == "A")
-    emoji_id = "<:RankingA:1278036315421671424>";
-  else if (score.get_rank() == "S")
-    emoji_id = "<:RankingS:1278036387433680968>";
-  else if (score.get_rank() == "SH")
-    emoji_id = "<:RankingSH:1278036405230108744>";
-  else if (score.get_rank() == "X")
-    emoji_id = "<:RankingSS:1304449505873367130>";
-  else if (score.get_rank() == "XH")
-    emoji_id = "<:RankingSSH:1304449533006057544>";
 
   // Get AR/OD/CS/HP/total_objects from cache or parse .osu file
   float approach_rate = 9.0f;  // Default values
@@ -450,13 +335,8 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
             // Parse beatmap difficulty and hit objects
             auto beatmap_opt = osu_parser::parse_osu_file(osu_file_path->string());
             if (beatmap_opt.has_value()) {
-              std::string mods = score.get_mods();
-              bool has_ez = mods.find("EZ") != std::string::npos;
-              bool has_hr = mods.find("HR") != std::string::npos;
-              bool has_dt = mods.find("DT") != std::string::npos || mods.find("NC") != std::string::npos;
-              bool has_ht = mods.find("HT") != std::string::npos;
-
-              auto modded_diff = osu_parser::apply_mods(*beatmap_opt, has_ez, has_hr, has_dt, has_ht);
+              auto mod_flags = utils::parse_mod_flags(score.get_mods());
+              auto modded_diff = osu_parser::apply_mods(*beatmap_opt, mod_flags.has_ez, mod_flags.has_hr, mod_flags.has_dt, mod_flags.has_ht);
               approach_rate = modded_diff.approach_rate;
               overall_difficulty = modded_diff.overall_difficulty;
               circle_size = modded_diff.circle_size;
@@ -546,223 +426,107 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
     }
   }
 
-  // Build description with FC PP (only show FC PP for osu!standard with misses)
-  std::string pp_line;
+  // Prepare PP info for presenter
+  services::PPInfo pp_info{
+    .current_pp = current_pp,
+    .fc_pp = fc_perf.total_pp,
+    .fc_accuracy = 0.0,
+    .has_fc_pp = false
+  };
+
+  // Calculate FC accuracy if applicable
   if (score.get_mode() == "osu" && score.get_count_miss() > 0 && fc_perf.total_pp > current_pp) {
-    // Calculate FC accuracy
     int fc_total_hits = score.get_count_300() + score.get_count_100() + score.get_count_50() + score.get_count_miss();
-    double fc_accuracy = ((score.get_count_300() + score.get_count_miss()) * 300.0 + score.get_count_100() * 100.0 + score.get_count_50() * 50.0) / (fc_total_hits * 300.0) * 100.0;
-
-    pp_line = fmt::format("▸ **{:.2f}PP** ({:.2f}PP for {:.2f}% FC) ▸ {:.2f}%",
-      current_pp,
-      fc_perf.total_pp,
-      fc_accuracy,
-      score.get_accuracy() * 100
-    );
-  } else {
-    pp_line = fmt::format("▸ **{:.2f}PP** ▸ {:.2f}%",
-      current_pp,
-      score.get_accuracy() * 100
-    );
+    pp_info.fc_accuracy = ((score.get_count_300() + score.get_count_miss()) * 300.0 + score.get_count_100() * 100.0 + score.get_count_50() * 50.0) / (fc_total_hits * 300.0) * 100.0;
+    pp_info.has_fc_pp = true;
   }
 
-  // Build description - only show completion% if < 100% or rank is F
-  std::string rank_line;
-  if (completion_percent < 100.0f || score.get_rank() == "F") {
-    rank_line = fmt::format("▸ {} **({:.2f}%)**", emoji_id, completion_percent);
-  } else {
-    rank_line = fmt::format("▸ {}", emoji_id);
-  }
+  // Prepare difficulty info for presenter
+  services::DifficultyInfo difficulty_info{
+    .approach_rate = approach_rate,
+    .overall_difficulty = overall_difficulty,
+    .circle_size = circle_size,
+    .hp_drain_rate = hp_drain_rate
+  };
 
-  std::string description = fmt::format(
-    "{} {}\n▸ {:L} ▸ **x{}/{}** ▸ [{}/{}/{}/{}]",
-    rank_line,
-    pp_line,
-    score.get_total_score(),
-    score.get_max_combo(),
-    beatmap.get_max_combo(),
-    score.get_count_300(),
-    score.get_count_100(),
-    score.get_count_50(),
-    score.get_count_miss()
-  );
+  // Prepare pagination info
+  services::PaginationInfo pagination{
+    .current = state.current_index,
+    .total = state.scores.size(),
+    .has_refresh = true,
+    .refresh_count = state.refresh_count
+  };
 
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(title)
-    .set_url(beatmap.get_beatmap_url())
-    .set_description(description)
-    .set_thumbnail(beatmap.get_image_url());
-
-  // Add difficulty info field with mod-corrected values
+  // Calculate modded BPM and length
   float modded_bpm = apply_speed_mods_to_bpm(beatmap.get_bpm(), score.get_mods());
   uint32_t modded_length = apply_speed_mods_to_length(beatmap.get_total_length(), score.get_mods());
 
-  std::string beatmap_info = fmt::format(
-    "▸ {} BPM • {}:{:02d} ▸ AR `{:.1f}` OD `{:.1f}` CS `{:.1f}` HP `{:.1f}`",
-    static_cast<int>(modded_bpm),
-    modded_length / 60,
-    modded_length % 60,
-    approach_rate,
-    overall_difficulty,
-    circle_size,
-    hp_drain_rate
-  );
-
-  embed.add_field("", beatmap_info, false);
-
-  // Build footer
+  // Build message using presenter service
   std::string score_type = state.use_best_scores ? "best" : "recent";
-  std::string footer_text = fmt::format("{} score #{}/{}{}",
+  dpp::message msg = message_presenter.build_recent_score_page(
+    score,
+    beatmap,
+    difficulty_info,
+    pp_info,
+    pagination,
     score_type,
-    state.current_index + 1,
-    state.scores.size(),
-    state.refresh_count > 0 ? fmt::format(" • refreshed {}x", state.refresh_count) : ""
+    completion_percent,
+    modded_bpm,
+    modded_length
   );
 
-  embed.set_footer(dpp::embed_footer().set_text(footer_text))
-       .set_timestamp(utils::ISO8601_to_UNIX(score.get_created_at()));
-
-  dpp::message msg;
-  msg.add_embed(embed);
-
-  // Add pagination buttons if there's more than one score
-  if (state.scores.size() > 1) {
-    dpp::component action_row;
-    action_row.set_type(dpp::cot_action_row);
-
-    // First button: refresh when at index 0, otherwise jump to first
-    dpp::component first_button;
-    first_button.set_type(dpp::cot_button)
-      .set_style(dpp::cos_secondary);
-
-    if (state.current_index == 0) {
-      // Refresh button
-      first_button.set_id("rs_refresh")
-        .set_emoji("🔄");
-    } else {
-      // Jump to first
-      first_button.set_id("rs_first")
-        .set_emoji("⏮️");
-    }
-
-    dpp::component prev_button;
-    prev_button.set_type(dpp::cot_button)
-      .set_id("rs_prev")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("⬅️")
-      .set_disabled(state.current_index == 0);
-
-    dpp::component page_indicator;
-    page_indicator.set_type(dpp::cot_button)
-      .set_id("rs_index")
-      .set_label(fmt::format("{}/{}", state.current_index + 1, state.scores.size()))
-      .set_style(dpp::cos_secondary)
-      .set_disabled(true);
-
-    dpp::component next_button;
-    next_button.set_type(dpp::cot_button)
-      .set_id("rs_next")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("➡️")
-      .set_disabled(state.current_index >= state.scores.size() - 1);
-
-    dpp::component last_button;
-    last_button.set_type(dpp::cot_button)
-      .set_id("rs_last")
-      .set_style(dpp::cos_secondary)
-      .set_emoji("⏭️")
-      .set_disabled(state.current_index >= state.scores.size() - 1);
-
-    action_row.add_component(first_button);
-    action_row.add_component(prev_button);
-    action_row.add_component(page_indicator);
-    action_row.add_component(next_button);
-    action_row.add_component(last_button);
-
-    msg.add_component(action_row);
-  }
-
-  // Cache the page content for fast navigation
+  // Cache the page content for fast navigation using presenter's cache data builder
   try {
+    auto cache_data = message_presenter.build_recent_score_cache_data(
+      score, beatmap, difficulty_info, pp_info, pagination,
+      score_type, completion_percent, modded_bpm, modded_length
+    );
+
     json page_data;
-    page_data["title"] = title;
-    page_data["url"] = beatmap.get_beatmap_url();
-    page_data["description"] = description;
-    page_data["thumbnail"] = beatmap.get_image_url();
-    page_data["beatmap_info"] = beatmap_info;
-    page_data["footer"] = footer_text;
-    page_data["timestamp"] = utils::ISO8601_to_UNIX(score.get_created_at());
+    page_data["title"] = cache_data.title;
+    page_data["url"] = cache_data.url;
+    page_data["description"] = cache_data.description;
+    page_data["thumbnail"] = cache_data.thumbnail;
+    page_data["beatmap_info"] = cache_data.beatmap_info;
+    page_data["footer"] = cache_data.footer;
+    page_data["timestamp"] = cache_data.timestamp;
 
     state.page_content_cache[state.current_index] = page_data.dump();
     spdlog::debug("[RS] Cached page data for index {}", state.current_index);
   } catch (const std::exception& e) {
     spdlog::warn("[RS] Failed to cache page data: {}", e.what());
-    // Non-critical, continue anyway
   }
 
   return msg;
 }
 
-void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id) {
-  // Fetch state from Memcached
-  std::optional<LeaderboardState> state_opt;
-  try {
-    auto& cache = cache::MemcachedCache::instance();
-    state_opt = cache.get_leaderboard(message_id.str());
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to fetch leaderboard state from cache: {}", e.what());
-    return;
-  }
-
-  if (!state_opt) {
-    return; // Already expired or cleaned up
-  }
-
-  const auto& state = *state_opt;
-  constexpr size_t SCORES_PER_PAGE = 5;
-  size_t start = state.current_page * SCORES_PER_PAGE;
-  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
-  size_t scores_on_page = end - start;
-
-  // Build message without components
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(state.beatmap.to_string())
-    .set_url(state.beatmap.get_beatmap_url())
-    .set_thumbnail(state.beatmap.get_image_url())
-    .set_footer(dpp::embed_footer().set_text(
-      fmt::format("Page {}/{} • {}/{} {} shown",
-        state.current_page + 1,
-        state.total_pages,
-        scores_on_page,
-        state.scores.size(),
-        scores_on_page == 1 ? "score" : "scores")
-    ));
-
-  for (size_t i = start; i < end; i++) {
-    dpp::embed_field field;
-    field.name      = fmt::format("{}) {}", i + 1, state.scores[i].get_header());
-    field.value     = state.scores[i].get_body(state.beatmap.get_max_combo());
-    field.is_inline = false;
-    embed.fields.push_back(field);
-  }
-
-  dpp::message msg(channel_id, embed);
-  msg.id = message_id;
-
-  // Edit message to remove components
-  bot.message_edit(msg, [this, message_id](const dpp::confirmation_callback_t& callback) {
-    if (!callback.is_error()) {
-      // Delete from Memcached
-      try {
-        auto& cache = cache::MemcachedCache::instance();
-        cache.delete_leaderboard(message_id.str());
-        spdlog::info("Leaderboard pagination expired for message {}", message_id.str());
-      } catch (const std::exception& e) {
-        spdlog::warn("Failed to delete leaderboard from cache: {}", e.what());
-      }
+void Bot::remove_message_components(dpp::snowflake channel_id, dpp::snowflake message_id) {
+  // Get the message first, then remove components
+  bot.message_get(message_id, channel_id, [this, message_id](const dpp::confirmation_callback_t& callback) {
+    if (callback.is_error()) {
+      spdlog::warn("Failed to get message {} for button removal", message_id.str());
+      return;
     }
+
+    auto msg = callback.get<dpp::message>();
+    msg.components.clear();
+
+    // Edit message to remove components only
+    bot.message_edit(msg, [this, message_id](const dpp::confirmation_callback_t& edit_callback) {
+      if (!edit_callback.is_error()) {
+        // Delete from Memcached (try both leaderboard and recent_scores)
+        try {
+          auto& cache = cache::MemcachedCache::instance();
+          cache.delete_leaderboard(message_id.str());
+          cache.delete_recent_scores(message_id.str());
+          spdlog::info("Buttons removed for message {}", message_id.str());
+        } catch (const std::exception& e) {
+          spdlog::debug("Cache cleanup for message {}: {}", message_id.str(), e.what());
+        }
+      } else {
+        spdlog::warn("Failed to edit message {} to remove buttons: {}", message_id.str(), edit_callback.get_error().message);
+      }
+    });
   });
 }
 
@@ -780,7 +544,9 @@ void Bot::schedule_button_removal(dpp::snowflake channel_id, dpp::snowflake mess
   // Schedule removal thread
   std::jthread([this, channel_id, message_id, ttl]() {
     std::this_thread::sleep_for(ttl);
-    invalidate_leaderboard(channel_id, message_id);
+
+    // Remove components (works for any message type)
+    remove_message_components(channel_id, message_id);
 
     // Remove from database after invalidation
     try {
@@ -804,8 +570,8 @@ void Bot::process_pending_button_removals() {
     auto expired = db.get_expired_button_removals();
     if (!expired.empty()) {
       spdlog::info("Found {} expired button removals, processing immediately", expired.size());
-      for (const auto& [channel_id, message_id] : expired) {
-        invalidate_leaderboard(channel_id, message_id);
+      for (const auto& [channel_id, message_id, removal_type] : expired) {
+        remove_message_components(channel_id, message_id);
         db.remove_pending_button_removal(channel_id, message_id);
       }
     }
@@ -816,10 +582,10 @@ void Bot::process_pending_button_removals() {
       auto now = std::chrono::system_clock::now();
       spdlog::info("Found {} pending button removals to schedule", pending.size());
 
-      for (const auto& [channel_id, message_id, expires_at] : pending) {
+      for (const auto& [channel_id, message_id, expires_at, removal_type] : pending) {
         // Skip if already expired (shouldn't happen, but safety check)
         if (expires_at <= now) {
-          invalidate_leaderboard(channel_id, message_id);
+          remove_message_components(channel_id, message_id);
           db.remove_pending_button_removal(channel_id, message_id);
           continue;
         }
@@ -834,7 +600,7 @@ void Bot::process_pending_button_removals() {
             std::this_thread::sleep_for(wait_duration);
           }
 
-          invalidate_leaderboard(channel_id, message_id);
+          remove_message_components(channel_id, message_id);
 
           try {
             auto& db = db::Database::instance();
@@ -1360,14 +1126,15 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
       // Continue anyway - we'll still schedule button removal
     }
 
-    // Schedule button removal after 5 minutes for all leaderboards
-    // (even if caching failed - need to clean up the non-functional buttons)
-    dpp::snowflake msg_id = reply_msg.id;
-    dpp::snowflake chan_id = reply_msg.channel_id;
+    // Schedule button removal only if there's more than one page
+    if (lb_state.total_pages > 1) {
+      dpp::snowflake msg_id = reply_msg.id;
+      dpp::snowflake chan_id = reply_msg.channel_id;
 
-    // If cache failed, remove buttons sooner (1 minute instead of 5)
-    auto ttl = cache_success ? std::chrono::minutes(5) : std::chrono::minutes(1);
-    schedule_button_removal(chan_id, msg_id, ttl);
+      // Remove buttons after 2 minutes
+      auto ttl = std::chrono::minutes(2);
+      schedule_button_removal(chan_id, msg_id, ttl);
+    }
   });
 }
 
@@ -1463,17 +1230,8 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
     footer_text = beatmap_downloader.get_last_used_mirror() == "cache" ? "cached" : "downloaded";
   }
 
-  // Create embed with background image
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(beatmap.to_string())
-    .set_url(beatmap.get_beatmap_url())
-    .set_image(bg_url)
-    .set_footer(dpp::embed_footer().set_text(footer_text));
-
-  dpp::message msg;
-  msg.add_embed(embed);
-
+  // Create embed with background image using presenter service
+  dpp::message msg = message_presenter.build_background(beatmap, bg_url, footer_text);
   event.reply(msg);
 
   auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -1567,12 +1325,8 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
     return;
   }
 
-  bool has_ez = mods_filter.find("EZ") != std::string::npos;
-  bool has_hr = mods_filter.find("HR") != std::string::npos;
-  bool has_dt = mods_filter.find("DT") != std::string::npos || mods_filter.find("NC") != std::string::npos;
-  bool has_ht = mods_filter.find("HT") != std::string::npos;
-
-  auto modded_diff = osu_parser::apply_mods(*base_diff, has_ez, has_hr, has_dt, has_ht);
+  auto mod_flags = utils::parse_mod_flags(mods_filter);
+  auto modded_diff = osu_parser::apply_mods(*base_diff, mod_flags.has_ez, mod_flags.has_hr, mod_flags.has_dt, mod_flags.has_ht);
 
   // Use osu-tools for accurate star rating and PP calculation
   std::vector<double> acc_levels = {0.90, 0.95, 0.99, 1.00};
@@ -1608,100 +1362,32 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
     }
   }
 
-  // Build embed message
-  dpp::embed embed;
+  // Prepare difficulty info for presenter
+  services::DifficultyInfo difficulty_info{
+    .approach_rate = modded_diff.approach_rate,
+    .overall_difficulty = modded_diff.overall_difficulty,
+    .circle_size = modded_diff.circle_size,
+    .hp_drain_rate = modded_diff.hp_drain_rate,
+    .star_rating = actual_star_rating,
+    .aim_difficulty = aim_difficulty,
+    .speed_difficulty = speed_difficulty,
+    .max_combo = max_combo
+  };
 
-  // Title with mods
-  std::string embed_title = title;
-  embed.set_title(embed_title);
-  embed.set_url(beatmap.get_beatmap_url());
-
-  // Background image from API (no need to download .osz)
-  embed.set_image(beatmap.get_image_url());
-
-  // Star rating in description
-  std::string mode_display = beatmap_mode;
-  std::transform(mode_display.begin(), mode_display.end(), mode_display.begin(), ::toupper);
-
-  std::string description = fmt::format(":star: **{:.2f}★**", actual_star_rating);
-  if (beatmap_mode != "osu") {
-    description += fmt::format(" [{}]", mode_display);
-  }
-  embed.set_description(description);
-
-  // PP Values field
-  std::string pp_field;
-  for (size_t i = 0; i < acc_levels.size(); i++) {
-    pp_field += fmt::format("**{:.0f}%** — {:.0f}pp\n", acc_levels[i] * 100, pp_values[i]);
-  }
-  embed.add_field("Performance Points", pp_field, true);
-
-  // Difficulty attributes field
-  std::string diff_field = fmt::format(
-    "**AR** {:.1f} • **OD** {:.1f}\n"
-    "**CS** {:.1f} • **HP** {:.1f}\n"
-    "**Aim** {:.2f}★ • **Speed** {:.2f}★\n"
-    "**Max Combo:** {}x",
-    modded_diff.approach_rate,
-    modded_diff.overall_difficulty,
-    modded_diff.circle_size,
-    modded_diff.hp_drain_rate,
-    aim_difficulty,
-    speed_difficulty,
-    max_combo
-  );
-  embed.add_field("Difficulty", diff_field, true);
-
-  // Map info field (BPM, length) with speed mod adjustments
+  // Calculate modded BPM and length for speed mods
   float modded_bpm = apply_speed_mods_to_bpm(beatmap.get_bpm(), mods_filter);
   uint32_t modded_length = apply_speed_mods_to_length(beatmap.get_total_length(), mods_filter);
-  int minutes = modded_length / 60;
-  int seconds = modded_length % 60;
-  std::string map_info = fmt::format(
-    "**BPM:** {:.0f}\n**Length:** {}:{:02d}",
+
+  // Build message using presenter service
+  dpp::message msg = message_presenter.build_map_info(
+    beatmap,
+    difficulty_info,
+    pp_values,
+    mods_filter,
+    beatmapset_id,
     modded_bpm,
-    minutes,
-    seconds
+    modded_length
   );
-  embed.add_field("Map Info", map_info, true);
-
-  // Download links
-  std::string download_links = fmt::format(
-    "[osu!direct](https://osu.ppy.sh/d/{}) • "
-    "[Kana](https://kana.nisemonic.net/osu/d/{}) • "
-    "[Nerinyan](https://api.nerinyan.moe/d/{}) • "
-    "[Catboy](https://catboy.best/d/{})",
-    beatmapset_id, beatmapset_id, beatmapset_id, beatmapset_id
-  );
-  embed.add_field("Download", download_links, false);
-
-  // Background and audio links
-  std::string media_links = fmt::format(
-    "[Background](https://kana.nisemonic.net/osu/bg/{}) • "
-    "[Audio](https://kana.nisemonic.net/osu/audio/{})",
-    beatmapset_id, beatmapset_id
-  );
-  embed.add_field("Media", media_links, false);
-
-  // Color based on star rating
-  uint32_t color;
-  if (actual_star_rating < 2.0) {
-    color = 0x4290F5; // Easy (blue)
-  } else if (actual_star_rating < 2.7) {
-    color = 0x4FC0FF; // Normal (light blue)
-  } else if (actual_star_rating < 4.0) {
-    color = 0xFFB641; // Hard (yellow)
-  } else if (actual_star_rating < 5.3) {
-    color = 0xFF6682; // Insane (pink)
-  } else if (actual_star_rating < 6.5) {
-    color = 0xC967E5; // Expert (purple)
-  } else {
-    color = 0x000000; // Expert+ (black)
-  }
-  embed.set_color(color);
-
-  dpp::message msg;
-  msg.add_embed(embed);
   event.reply(msg);
 }
 
@@ -2170,11 +1856,15 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
       spdlog::error("Failed to cache recent score state: {}", e.what());
     }
 
-    // Schedule button removal after 5 minutes
-    dpp::snowflake msg_id = reply_msg.id;
-    dpp::snowflake chan_id = reply_msg.channel_id;
-    auto ttl = cache_success ? std::chrono::minutes(5) : std::chrono::minutes(1);
-    schedule_button_removal(chan_id, msg_id, ttl);
+    // Schedule button removal only if there's more than one score
+    if (rs_state.scores.size() > 1) {
+      dpp::snowflake msg_id = reply_msg.id;
+      dpp::snowflake chan_id = reply_msg.channel_id;
+
+      // Remove buttons after 2 minutes
+      auto ttl = std::chrono::minutes(2);
+      schedule_button_removal(chan_id, msg_id, ttl);
+    }
   });
 }
 

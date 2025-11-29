@@ -95,4 +95,15 @@ namespace utils {
 
   // URL decode a string (decode %XX sequences)
   std::string url_decode(const std::string& value);
+
+  // Mod flags for beatmap difficulty calculation
+  struct ModFlags {
+    bool has_ez = false;
+    bool has_hr = false;
+    bool has_dt = false;
+    bool has_ht = false;
+  };
+
+  // Parse mod string (e.g., "HDDT", "HRHD") into mod flags
+  ModFlags parse_mod_flags(const std::string& mods);
 } // namespace utils
