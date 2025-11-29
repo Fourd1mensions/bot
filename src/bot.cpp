@@ -84,32 +84,15 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string
   uint32_t beatmap_id = state.beatmap.get_beatmap_id();
   uint32_t beatmapset_id = state.beatmap.get_beatmapset_id();
 
-  // Store .osu file path for full PP calculation
-  std::optional<std::string> osu_file_path_opt;
-
-  // Download and parse beatmap for accurate PP calculation
-  if (beatmap_downloader.download_osz(beatmapset_id)) {
-    auto extract_id = beatmap_downloader.create_extract(beatmapset_id);
-    if (extract_id) {
-      auto extract_path = beatmap_downloader.get_extract_path(*extract_id);
-      if (extract_path) {
-        // Use new pp_helper to find correct .osu file by beatmap ID
-        auto osu_file_path = osu_parser::find_osu_file(*extract_path, beatmap_id);
-        if (osu_file_path) {
-          osu_file_path_opt = osu_file_path->string();
-
-          // Parse beatmap difficulty
-          auto beatmap_opt = osu_parser::parse_osu_file(osu_file_path->string());
-          if (beatmap_opt.has_value()) {
-            auto mod_flags = utils::parse_mod_flags(active_mods);
-            auto modded_diff = osu_parser::apply_mods(*beatmap_opt, mod_flags.has_ez, mod_flags.has_hr, mod_flags.has_dt, mod_flags.has_ht);
-            approach_rate = modded_diff.approach_rate;
-            overall_difficulty = modded_diff.overall_difficulty;
-            has_beatmap_data = true;
-            spdlog::debug("[LB] Parsed beatmap data for PP calculation: AR={:.2f} OD={:.2f}", approach_rate, overall_difficulty);
-          }
-        }
-      }
+  // Get .osu file path and difficulty using performance service
+  auto osu_file_path_opt = performance_service.get_osu_file_path(beatmapset_id, beatmap_id);
+  if (osu_file_path_opt) {
+    auto diff_opt = performance_service.get_difficulty(beatmapset_id, beatmap_id, active_mods);
+    if (diff_opt) {
+      approach_rate = diff_opt->approach_rate;
+      overall_difficulty = diff_opt->overall_difficulty;
+      has_beatmap_data = true;
+      spdlog::debug("[LB] Got beatmap data from performance service: AR={:.2f} OD={:.2f}", approach_rate, overall_difficulty);
     }
   }
 
@@ -284,14 +267,15 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
     }
   }
 
-  // Get AR/OD/CS/HP/total_objects from cache or parse .osu file
-  float approach_rate = 9.0f;  // Default values
+  // Get AR/OD/CS/HP/total_objects from cache or performance service
+  float approach_rate = 9.0f;
   float overall_difficulty = 9.0f;
   float circle_size = 5.0f;
   float hp_drain_rate = 5.0f;
   int total_objects = 0;
   uint32_t beatmap_id = score.get_beatmap_id();
-  std::optional<std::string> osu_file_path_opt;  // For full PP calculation
+  uint32_t beatmapset_id = beatmap.get_beatmapset_id();
+  std::optional<std::string> osu_file_path_opt;
 
   // Check cache first
   auto difficulty_cache_it = state.beatmap_difficulty_cache.find(beatmap_id);
@@ -301,56 +285,27 @@ dpp::message Bot::build_rs_page(RecentScoreState& state) {
     circle_size = std::get<2>(difficulty_cache_it->second);
     hp_drain_rate = std::get<3>(difficulty_cache_it->second);
     total_objects = std::get<4>(difficulty_cache_it->second);
-    spdlog::debug("[PP] Using cached AR={:.2f} OD={:.2f} CS={:.2f} HP={:.2f} objects={} for beatmap {}",
-      approach_rate, overall_difficulty, circle_size, hp_drain_rate, total_objects, beatmap_id);
+    spdlog::debug("[PP] Using cached difficulty for beatmap {}", beatmap_id);
 
-    // Still need to find .osu file for PP calculation
-    uint32_t beatmapset_id = beatmap.get_beatmapset_id();
-    if (beatmap_downloader.download_osz(beatmapset_id)) {
-      auto extract_id = beatmap_downloader.create_extract(beatmapset_id);
-      if (extract_id) {
-        auto extract_path = beatmap_downloader.get_extract_path(*extract_id);
-        if (extract_path) {
-          auto osu_file_path = osu_parser::find_osu_file(*extract_path, beatmap_id);
-          if (osu_file_path) {
-            osu_file_path_opt = osu_file_path->string();
-          }
-        }
-      }
-    }
+    // Get .osu file path for PP calculation
+    osu_file_path_opt = performance_service.get_osu_file_path(beatmapset_id, beatmap_id);
   } else {
-    // Not in cache, try to parse .osu file
-    uint32_t beatmapset_id = beatmap.get_beatmapset_id();
+    // Use performance service to get difficulty
+    osu_file_path_opt = performance_service.get_osu_file_path(beatmapset_id, beatmap_id);
+    if (osu_file_path_opt) {
+      auto diff_opt = performance_service.get_difficulty(beatmapset_id, beatmap_id, score.get_mods());
+      if (diff_opt) {
+        approach_rate = diff_opt->approach_rate;
+        overall_difficulty = diff_opt->overall_difficulty;
+        circle_size = diff_opt->circle_size;
+        hp_drain_rate = diff_opt->hp_drain_rate;
+        total_objects = diff_opt->total_objects;
 
-    if (beatmap_downloader.download_osz(beatmapset_id)) {
-      auto extract_id = beatmap_downloader.create_extract(beatmapset_id);
-      if (extract_id) {
-        auto extract_path = beatmap_downloader.get_extract_path(*extract_id);
-        if (extract_path) {
-          // Use new pp_helper to find correct .osu file
-          auto osu_file_path = osu_parser::find_osu_file(*extract_path, beatmap_id);
-          if (osu_file_path) {
-            osu_file_path_opt = osu_file_path->string();
+        // Add to cache
+        state.beatmap_difficulty_cache[beatmap_id] = std::make_tuple(
+          approach_rate, overall_difficulty, circle_size, hp_drain_rate, total_objects);
 
-            // Parse beatmap difficulty and hit objects
-            auto beatmap_opt = osu_parser::parse_osu_file(osu_file_path->string());
-            if (beatmap_opt.has_value()) {
-              auto mod_flags = utils::parse_mod_flags(score.get_mods());
-              auto modded_diff = osu_parser::apply_mods(*beatmap_opt, mod_flags.has_ez, mod_flags.has_hr, mod_flags.has_dt, mod_flags.has_ht);
-              approach_rate = modded_diff.approach_rate;
-              overall_difficulty = modded_diff.overall_difficulty;
-              circle_size = modded_diff.circle_size;
-              hp_drain_rate = modded_diff.hp_drain_rate;
-              total_objects = modded_diff.total_objects;
-            }
-
-            // Add to cache
-            state.beatmap_difficulty_cache[beatmap_id] = std::make_tuple(approach_rate, overall_difficulty, circle_size, hp_drain_rate, total_objects);
-
-            spdlog::debug("[PP] Parsed and cached AR={:.2f} OD={:.2f} CS={:.2f} HP={:.2f} objects={} for beatmap {}",
-              approach_rate, overall_difficulty, circle_size, hp_drain_rate, total_objects, beatmap_id);
-          }
-        }
+        spdlog::debug("[PP] Got and cached difficulty from performance service for beatmap {}", beatmap_id);
       }
     }
   }
@@ -1302,76 +1257,33 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
     spdlog::debug("[MAP] Failed to cache beatmap mapping: {}", e.what());
   }
 
-  // Download individual .osu file (much faster than downloading entire .osz)
-  auto osu_file_path = beatmap_downloader.download_osu_file(beatmap_id);
-  if (!osu_file_path) {
-    event.reply("Failed to download .osu file.");
-    return;
-  }
-
-  // Now register the .osu file with beatmapset_id if not already done
-  try {
-    auto& db = db::Database::instance();
-    auto file_size = std::filesystem::file_size(*osu_file_path);
-    db.register_osu_file(beatmap_id, beatmapset_id, osu_file_path->string(), file_size);
-  } catch (const std::exception& e) {
-    spdlog::debug("[MAP] Failed to register .osu file: {}", e.what());
-  }
-
-  // Parse beatmap and get modded difficulty for AR/OD/CS/HP display
-  auto base_diff = osu_parser::parse_osu_file(osu_file_path->string());
-  if (!base_diff.has_value()) {
-    event.reply("Failed to parse .osu file.");
-    return;
-  }
-
-  auto mod_flags = utils::parse_mod_flags(mods_filter);
-  auto modded_diff = osu_parser::apply_mods(*base_diff, mod_flags.has_ez, mod_flags.has_hr, mod_flags.has_dt, mod_flags.has_ht);
-
-  // Use osu-tools for accurate star rating and PP calculation
+  // Calculate PP at multiple accuracy levels using performance service
   std::vector<double> acc_levels = {0.90, 0.95, 0.99, 1.00};
-  std::vector<double> pp_values;
+  services::BeatmapDifficultyAttrs perf_difficulty;
 
-  double actual_star_rating = 0.0;
-  double aim_difficulty = 0.0;
-  double speed_difficulty = 0.0;
-  int max_combo = 0;
+  auto pp_values = performance_service.calculate_pp_at_accuracies(
+    beatmap_id,
+    beatmap_mode,
+    mods_filter,
+    acc_levels,
+    &perf_difficulty
+  );
 
-  // Calculate PP for each accuracy level using official osu-tools
-  for (double acc : acc_levels) {
-    auto result = osu_tools::simulate_performance(
-      osu_file_path->string(),
-      acc,
-      beatmap_mode,
-      mods_filter.empty() ? "NM" : mods_filter
-    );
-
-    if (result.has_value()) {
-      pp_values.push_back(result->pp);
-
-      // Use difficulty values from the first calculation
-      if (acc == acc_levels[0]) {
-        actual_star_rating = result->difficulty.star_rating;
-        aim_difficulty = result->difficulty.aim_difficulty;
-        speed_difficulty = result->difficulty.speed_difficulty;
-        max_combo = result->difficulty.max_combo;
-      }
-    } else {
-      spdlog::error("[MAP] Failed to calculate PP for {}% accuracy", acc * 100);
-      pp_values.push_back(0.0);
-    }
+  if (pp_values.empty()) {
+    event.reply("Failed to calculate PP values.");
+    return;
   }
 
   // Prepare difficulty info for presenter
   services::DifficultyInfo difficulty_info{
-    .approach_rate = modded_diff.approach_rate,
-    .overall_difficulty = modded_diff.overall_difficulty,
-    .circle_size = modded_diff.circle_size,
-    .hp_drain_rate = modded_diff.hp_drain_rate,
-    .star_rating = actual_star_rating,
-    .aim_difficulty = aim_difficulty,
-    .speed_difficulty = speed_difficulty,
-    .max_combo = max_combo
+    .approach_rate = perf_difficulty.approach_rate,
+    .overall_difficulty = perf_difficulty.overall_difficulty,
+    .circle_size = perf_difficulty.circle_size,
+    .hp_drain_rate = perf_difficulty.hp_drain_rate,
+    .star_rating = perf_difficulty.star_rating,
+    .aim_difficulty = perf_difficulty.aim_difficulty,
+    .speed_difficulty = perf_difficulty.speed_difficulty,
+    .max_combo = perf_difficulty.max_combo
   };
 
   // Calculate modded BPM and length for speed mods
@@ -1451,33 +1363,33 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
     spdlog::debug("[SIM] Failed to cache beatmap mapping: {}", e.what());
   }
 
-  // Download individual .osu file (much faster than downloading entire .osz)
-  auto osu_file_path = beatmap_downloader.download_osu_file(beatmap_id);
+  // Get .osu file path using performance service
+  auto osu_file_path = performance_service.get_osu_file_direct(beatmap_id);
   if (!osu_file_path) {
     event.reply("Failed to download .osu file.");
     return;
   }
 
-  // Register the .osu file in database with file size
-  try {
-    auto& db = db::Database::instance();
-    auto file_size = std::filesystem::file_size(*osu_file_path);
-    db.register_osu_file(beatmap_id, beatmapset_id, osu_file_path->string(), file_size);
-  } catch (const std::exception& e) {
-    spdlog::debug("[SIM] Failed to register .osu file: {}", e.what());
-  }
+  // Calculate PP using performance service
+  services::SimulateParams sim_params{
+    .accuracy = accuracy,
+    .mods = mods_filter.empty() ? "NM" : mods_filter,
+    .combo = combo,
+    .misses = misses,
+    .count_100 = count_100,
+    .count_50 = count_50
+  };
 
-  // Use osu-tools to simulate the score
+  // Use osu-tools directly for the full result (we need difficulty info too)
   auto result = osu_tools::simulate_performance(
-    osu_file_path->string(),
+    *osu_file_path,
     accuracy,
-    mode,        // game mode
-    mods_filter.empty() ? "NM" : mods_filter,
-    combo,       // combo
-    misses,      // misses
-    count_100,   // count_100
-    count_50,    // count_50
-    ratio        // ratio (mania only)
+    mode,
+    sim_params.mods,
+    combo,
+    misses,
+    count_100,
+    count_50
   );
 
   if (!result.has_value()) {
@@ -2673,7 +2585,8 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
 Bot::Bot(const std::string& token, bool delete_commands)
     : bot(token),
       arena(tbb::task_arena(16)),
-      beatmap_resolver_service(request) {
+      beatmap_resolver_service(request),
+      performance_service(beatmap_downloader) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content;
 
   // Configure spdlog with structured logging pattern

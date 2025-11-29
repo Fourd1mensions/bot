@@ -164,7 +164,7 @@ private:
 };
 
 /// @brief Escape path for shell command (safe for all special characters)
-[[nodiscard]] std::string shell_escape(std::string_view str) {
+[[nodiscard]] inline std::string shell_escape(std::string_view str) {
   std::string result;
   result.reserve(str.length() * 2);  // Reserve extra space for escaping
 
@@ -182,7 +182,7 @@ private:
 }
 
 /// @brief Execute shell command and capture output
-[[nodiscard]] std::optional<std::string> execute_command(std::string_view command) {
+[[nodiscard]] inline std::optional<std::string> execute_command(std::string_view command) {
   try {
     PipeHandle pipe(command.data());
 
@@ -202,7 +202,7 @@ private:
 }
 
 /// @brief Parse mods string and convert to command arguments
-[[nodiscard]] std::string build_mods_args(std::string_view mods) {
+[[nodiscard]] inline std::string build_mods_args(std::string_view mods) {
   if (mods.empty() || mods == "NM") {
     return "";
   }
