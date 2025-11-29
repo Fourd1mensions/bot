@@ -1198,33 +1198,15 @@ void Bot::create_bg_message(const dpp::message_create_t& event) {
 }
 
 void Bot::create_map_message(const dpp::message_create_t& event, const std::string& mods_filter) {
+  // Resolve beatmap from context
   std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
-  if (stored_value.empty()) {
-    event.reply("No beatmap found in this channel. Please send a beatmap link first.");
+  auto beatmap_result = beatmap_resolver_service.resolve(stored_value);
+  if (!beatmap_result) {
+    event.reply(beatmap_result.error_message);
     return;
   }
-
-  // Parse beatmap ID and beatmapset ID
-  uint32_t beatmap_id = 0;
-  uint32_t beatmapset_id = 0;
-
-  if (stored_value.starts_with("set:")) {
-    beatmapset_id = std::stoul(stored_value.substr(4));
-    spdlog::info("[MAP] Using beatmapset ID: {}", beatmapset_id);
-    // Get beatmap ID from set
-    std::string beatmap_id_json = request.get_beatmap_id_from_set(std::to_string(beatmapset_id));
-    if (!beatmap_id_json.empty()) {
-      beatmap_id = std::stoul(beatmap_id_json);
-    }
-  } else {
-    beatmap_id = std::stoul(stored_value);
-    spdlog::info("[MAP] Using beatmap ID: {}", beatmap_id);
-  }
-
-  if (beatmap_id == 0) {
-    event.reply("Failed to resolve beatmap ID.");
-    return;
-  }
+  uint32_t beatmap_id = beatmap_result.beatmap_id;
+  uint32_t beatmapset_id = beatmap_result.beatmapset_id;
 
   // Get beatmap info from API
   std::string beatmap_json = request.get_beatmap(std::to_string(beatmap_id));
@@ -1304,33 +1286,15 @@ void Bot::create_map_message(const dpp::message_create_t& event, const std::stri
 }
 
 void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy, const std::string& mode, const std::string& mods_filter, int combo, int count_100, int count_50, int misses, double ratio) {
+  // Resolve beatmap from context
   std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
-  if (stored_value.empty()) {
-    event.reply("No beatmap found in this channel. Please send a beatmap link first.");
+  auto beatmap_result = beatmap_resolver_service.resolve(stored_value);
+  if (!beatmap_result) {
+    event.reply(beatmap_result.error_message);
     return;
   }
-
-  // Parse beatmap ID and beatmapset ID
-  uint32_t beatmap_id = 0;
-  uint32_t beatmapset_id = 0;
-
-  if (stored_value.starts_with("set:")) {
-    beatmapset_id = std::stoul(stored_value.substr(4));
-    spdlog::info("[SIM] Using beatmapset ID: {}", beatmapset_id);
-    // Get beatmap ID from set
-    std::string beatmap_id_json = request.get_beatmap_id_from_set(std::to_string(beatmapset_id));
-    if (!beatmap_id_json.empty()) {
-      beatmap_id = std::stoul(beatmap_id_json);
-    }
-  } else {
-    beatmap_id = std::stoul(stored_value);
-    spdlog::info("[SIM] Using beatmap ID: {}", beatmap_id);
-  }
-
-  if (beatmap_id == 0) {
-    event.reply("Failed to resolve beatmap ID.");
-    return;
-  }
+  uint32_t beatmap_id = beatmap_result.beatmap_id;
+  uint32_t beatmapset_id = beatmap_result.beatmapset_id;
 
   // Get beatmap info from API
   std::string beatmap_json = request.get_beatmap(std::to_string(beatmap_id));
@@ -1341,9 +1305,7 @@ void Bot::create_sim_message(const dpp::message_create_t& event, double accuracy
   }
 
   auto beatmap_data = json::parse(beatmap_json);
-  if (beatmap_id == 0 && beatmap_data.contains("beatmap_id")) {
-    beatmap_id = beatmap_data["beatmap_id"].get<uint32_t>();
-  }
+  // Get beatmapset_id from API response if not already set
   if (beatmapset_id == 0 && beatmap_data.contains("beatmapset_id")) {
     beatmapset_id = beatmap_data["beatmapset_id"].get<uint32_t>();
   }
@@ -1667,29 +1629,14 @@ void Bot::create_rs_message(const dpp::message_create_t& event, const std::strin
 void Bot::create_compare_message(const dpp::message_create_t& event, const std::string& params) {
   auto start = std::chrono::steady_clock::now();
 
-  // Get current beatmap from context
+  // Resolve beatmap from context
   std::string stored_value = chat_context_service.get_beatmap_id(event.msg.channel_id);
-  if (stored_value.empty()) {
-    event.reply("No beatmap found in this channel. Please send a beatmap link first.");
+  auto beatmap_result = beatmap_resolver_service.resolve(stored_value);
+  if (!beatmap_result) {
+    event.reply(beatmap_result.error_message);
     return;
   }
-
-  // Parse beatmap ID
-  uint32_t beatmap_id = 0;
-  if (stored_value.starts_with("set:")) {
-    uint32_t beatmapset_id = std::stoul(stored_value.substr(4));
-    std::string beatmap_id_json = request.get_beatmap_id_from_set(std::to_string(beatmapset_id));
-    if (!beatmap_id_json.empty()) {
-      beatmap_id = std::stoul(beatmap_id_json);
-    }
-  } else {
-    beatmap_id = std::stoul(stored_value);
-  }
-
-  if (beatmap_id == 0) {
-    event.reply("Failed to resolve beatmap ID.");
-    return;
-  }
+  uint32_t beatmap_id = beatmap_result.beatmap_id;
 
   // Parse parameters using service
   auto parsed = command_params_service.parse_compare_params(params);
