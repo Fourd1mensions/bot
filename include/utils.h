@@ -109,4 +109,30 @@ namespace utils {
 
   // Get Discord emoji string for osu! rank (X, XH, S, SH, A, B, C, D)
   std::string get_rank_emoji(const std::string& rank);
+
+  // Apply DT/NC/HT speed mods to BPM
+  inline float apply_speed_mods_to_bpm(float bpm, const std::string& mods) {
+    bool has_dt = mods.find("DT") != std::string::npos || mods.find("NC") != std::string::npos;
+    bool has_ht = mods.find("HT") != std::string::npos;
+
+    if (has_dt) {
+      return bpm * 1.5f;  // DT/NC increases speed by 50%
+    } else if (has_ht) {
+      return bpm * 0.75f; // HT decreases speed by 25%
+    }
+    return bpm;
+  }
+
+  // Apply DT/NC/HT speed mods to song length
+  inline uint32_t apply_speed_mods_to_length(uint32_t length_seconds, const std::string& mods) {
+    bool has_dt = mods.find("DT") != std::string::npos || mods.find("NC") != std::string::npos;
+    bool has_ht = mods.find("HT") != std::string::npos;
+
+    if (has_dt) {
+      return static_cast<uint32_t>(length_seconds / 1.5f);  // DT/NC shortens map by 1.5x
+    } else if (has_ht) {
+      return static_cast<uint32_t>(length_seconds / 0.75f); // HT lengthens map by 0.75x
+    }
+    return length_seconds;
+  }
 } // namespace utils

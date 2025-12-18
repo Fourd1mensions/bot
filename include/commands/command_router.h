@@ -5,6 +5,8 @@
 #include <vector>
 #include <thread>
 
+struct ServiceContainer;
+
 namespace commands {
 
 /**
@@ -20,6 +22,11 @@ public:
     CommandRouter& operator=(const CommandRouter&) = delete;
 
     /**
+     * Set the service container for commands.
+     */
+    void set_services(ServiceContainer* services) { services_ = services; }
+
+    /**
      * Register a command handler.
      */
     void register_command(std::unique_ptr<ICommand> command);
@@ -33,6 +40,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<ICommand>> commands_;
+    ServiceContainer* services_ = nullptr;
 };
 
 } // namespace commands

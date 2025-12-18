@@ -1,11 +1,22 @@
 #include "commands/sim_command.h"
-#include <bot.h>
+#include "services/service_container.h"
+#include "services/chat_context_service.h"
+#include "services/beatmap_resolver_service.h"
+#include "services/message_presenter_service.h"
+#include "services/beatmap_performance_service.h"
+#include <requests.h>
+#include <osu.h>
+#include <osu_tools.h>
+#include <database.h>
+#include <spdlog/spdlog.h>
+#include <fmt/format.h>
 #include <algorithm>
 #include <cctype>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 namespace commands {
-
-SimCommand::SimCommand(Bot& bot) : bot_(bot) {}
 
 std::vector<std::string> SimCommand::get_aliases() const {
     return {"!sim"};
@@ -147,15 +158,129 @@ SimCommand::ParsedParams SimCommand::parse(const std::string& content) const {
 }
 
 void SimCommand::execute(const CommandContext& ctx) {
-    auto parsed = parse(ctx.content);
-
-    if (!parsed.valid) {
-        ctx.event.reply(parsed.error_message);
+    auto* s = ctx.services;
+    if (!s) {
+        spdlog::error("[!sim] ServiceContainer is null");
         return;
     }
 
-    bot_.create_sim_message(ctx.event, parsed.accuracy, parsed.mode, parsed.mods_filter,
-        parsed.combo, parsed.count_100, parsed.count_50, parsed.misses, parsed.ratio);
+    auto parsed = parse(ctx.content);
+    const auto& event = ctx.event;
+
+    if (!parsed.valid) {
+        event.reply(parsed.error_message);
+        return;
+    }
+
+    // Resolve beatmap from context
+    std::string stored_value = s->chat_context_service.get_beatmap_id(event.msg.channel_id);
+    auto beatmap_result = s->beatmap_resolver_service.resolve(stored_value);
+    if (!beatmap_result) {
+        event.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
+        return;
+    }
+    uint32_t beatmap_id = beatmap_result.beatmap_id;
+    uint32_t beatmapset_id = beatmap_result.beatmapset_id;
+
+    // Get beatmap info from API
+    std::string beatmap_json = s->request.get_beatmap(std::to_string(beatmap_id));
+
+    if (beatmap_json.empty()) {
+        event.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
+        return;
+    }
+
+    auto beatmap_data = json::parse(beatmap_json);
+    // Get beatmapset_id from API response if not already set
+    if (beatmapset_id == 0 && beatmap_data.contains("beatmapset_id")) {
+        beatmapset_id = beatmap_data["beatmapset_id"].get<uint32_t>();
+    }
+
+    Beatmap beatmap(beatmap_data);
+    std::string beatmap_mode = beatmap.get_mode();
+    std::string title = beatmap.to_string();
+    if (!parsed.mods_filter.empty()) {
+        title += fmt::format(" +{}", parsed.mods_filter);
+    }
+
+    // Cache beatmap_id -> beatmapset_id mapping for faster lookups
+    try {
+        auto& db = db::Database::instance();
+        db.cache_beatmap_id(beatmap_id, beatmapset_id, beatmap_mode);
+    } catch (const std::exception& e) {
+        spdlog::debug("[SIM] Failed to cache beatmap mapping: {}", e.what());
+    }
+
+    // Get .osu file path using performance service
+    auto osu_file_path = s->performance_service.get_osu_file_direct(beatmap_id);
+    if (!osu_file_path) {
+        event.reply(s->message_presenter.build_error_message("Failed to download .osu file."));
+        return;
+    }
+
+    // Calculate PP using osu-tools
+    std::string mods = parsed.mods_filter.empty() ? "NM" : parsed.mods_filter;
+
+    auto result = osu_tools::simulate_performance(
+        *osu_file_path,
+        parsed.accuracy,
+        parsed.mode,
+        mods,
+        parsed.combo,
+        parsed.misses,
+        parsed.count_100,
+        parsed.count_50
+    );
+
+    if (!result.has_value()) {
+        event.reply(s->message_presenter.build_error_message("Failed to simulate score. Please try again."));
+        spdlog::error("[SIM] Failed to simulate score for beatmap {} with {}% accuracy and mods {}",
+            beatmap_id, parsed.accuracy * 100, parsed.mods_filter);
+        return;
+    }
+
+    // Build response message
+    std::string mode_display = parsed.mode;
+    std::transform(mode_display.begin(), mode_display.end(), mode_display.begin(), ::toupper);
+
+    std::string content = fmt::format("**Simulated Play on {}**", title);
+    if (parsed.mode != "osu") {
+        content += fmt::format(" [{}]", mode_display);
+    }
+    content += "\n";
+    content += fmt::format(":star: **{:.2f}★**\n\n", result->difficulty.star_rating);
+
+    content += "**Score Parameters:**\n";
+    content += fmt::format("• Accuracy: **{:.2f}%**\n", parsed.accuracy * 100);
+    if (parsed.count_100 >= 0 || parsed.count_50 >= 0 || parsed.misses > 0) {
+        content += "• Hit counts:";
+        if (parsed.count_100 >= 0) content += fmt::format(" **{}**x100", parsed.count_100);
+        if (parsed.count_50 >= 0) content += fmt::format(" **{}**x50", parsed.count_50);
+        if (parsed.misses > 0) content += fmt::format(" **{}**xMiss", parsed.misses);
+        content += "\n";
+    }
+    content += fmt::format("• Mods: **{}**\n", mods);
+    if (parsed.combo > 0) {
+        content += fmt::format("• Combo: **{}x** (max: **{}x**)\n", parsed.combo, result->difficulty.max_combo);
+    } else {
+        content += fmt::format("• Max Combo: **{}x**\n", result->difficulty.max_combo);
+    }
+    if (parsed.mode == "mania" && parsed.ratio > 0.0) {
+        content += fmt::format("• Ratio: **{:.2f}**\n", parsed.ratio);
+    }
+    content += "\n";
+
+    content += "**Performance:**\n";
+    content += fmt::format("• **{:.0f}pp** total\n", result->pp);
+    content += fmt::format("• Aim: **{:.0f}pp**\n", result->aim_pp);
+    content += fmt::format("• Speed: **{:.0f}pp**\n", result->speed_pp);
+    content += fmt::format("• Accuracy: **{:.0f}pp**\n\n", result->accuracy_pp);
+
+    content += "**Difficulty:**\n";
+    content += fmt::format("• Aim: **{:.2f}★**\n", result->difficulty.aim_difficulty);
+    content += fmt::format("• Speed: **{:.2f}★**\n", result->difficulty.speed_difficulty);
+
+    event.reply(content);
 }
 
 } // namespace commands
