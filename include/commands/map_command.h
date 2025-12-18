@@ -9,7 +9,8 @@ public:
     MapCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
-    void execute(const CommandContext& ctx) override;
+    std::string get_slash_name() const override { return "map"; }
+    void execute_unified(const UnifiedContext& ctx) override;
 
 private:
     std::string parse_mods_filter(const std::string& content) const;

@@ -34,21 +34,20 @@ std::string MapCommand::parse_mods_filter(const std::string& content) const {
     return mods_filter;
 }
 
-void MapCommand::execute(const CommandContext& ctx) {
+void MapCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
-        spdlog::error("[!map] ServiceContainer is null");
+        spdlog::error("[map] ServiceContainer is null");
         return;
     }
 
-    const auto& event = ctx.event;
     std::string mods_filter = parse_mods_filter(ctx.content);
 
     // Resolve beatmap from context
-    std::string stored_value = s->chat_context_service.get_beatmap_id(event.msg.channel_id);
+    std::string stored_value = s->chat_context_service.get_beatmap_id(ctx.channel_id());
     auto beatmap_result = s->beatmap_resolver_service.resolve(stored_value);
     if (!beatmap_result) {
-        event.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
+        ctx.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
         return;
     }
     uint32_t beatmap_id = beatmap_result.beatmap_id;
@@ -58,7 +57,7 @@ void MapCommand::execute(const CommandContext& ctx) {
     std::string beatmap_json = s->request.get_beatmap(std::to_string(beatmap_id));
 
     if (beatmap_json.empty()) {
-        event.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
+        ctx.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
         return;
     }
 
@@ -98,7 +97,7 @@ void MapCommand::execute(const CommandContext& ctx) {
     );
 
     if (pp_values.empty()) {
-        event.reply(s->message_presenter.build_error_message("Failed to calculate PP values."));
+        ctx.reply(s->message_presenter.build_error_message("Failed to calculate PP values."));
         return;
     }
 
@@ -128,7 +127,7 @@ void MapCommand::execute(const CommandContext& ctx) {
         modded_bpm,
         modded_length
     );
-    event.reply(msg);
+    ctx.reply(msg);
 }
 
 } // namespace commands

@@ -157,26 +157,25 @@ SimCommand::ParsedParams SimCommand::parse(const std::string& content) const {
     return result;
 }
 
-void SimCommand::execute(const CommandContext& ctx) {
+void SimCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
-        spdlog::error("[!sim] ServiceContainer is null");
+        spdlog::error("[sim] ServiceContainer is null");
         return;
     }
 
     auto parsed = parse(ctx.content);
-    const auto& event = ctx.event;
 
     if (!parsed.valid) {
-        event.reply(parsed.error_message);
+        ctx.reply(parsed.error_message);
         return;
     }
 
     // Resolve beatmap from context
-    std::string stored_value = s->chat_context_service.get_beatmap_id(event.msg.channel_id);
+    std::string stored_value = s->chat_context_service.get_beatmap_id(ctx.channel_id());
     auto beatmap_result = s->beatmap_resolver_service.resolve(stored_value);
     if (!beatmap_result) {
-        event.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
+        ctx.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
         return;
     }
     uint32_t beatmap_id = beatmap_result.beatmap_id;
@@ -186,7 +185,7 @@ void SimCommand::execute(const CommandContext& ctx) {
     std::string beatmap_json = s->request.get_beatmap(std::to_string(beatmap_id));
 
     if (beatmap_json.empty()) {
-        event.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
+        ctx.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
         return;
     }
 
@@ -214,7 +213,7 @@ void SimCommand::execute(const CommandContext& ctx) {
     // Get .osu file path using performance service
     auto osu_file_path = s->performance_service.get_osu_file_direct(beatmap_id);
     if (!osu_file_path) {
-        event.reply(s->message_presenter.build_error_message("Failed to download .osu file."));
+        ctx.reply(s->message_presenter.build_error_message("Failed to download .osu file."));
         return;
     }
 
@@ -233,7 +232,7 @@ void SimCommand::execute(const CommandContext& ctx) {
     );
 
     if (!result.has_value()) {
-        event.reply(s->message_presenter.build_error_message("Failed to simulate score. Please try again."));
+        ctx.reply(s->message_presenter.build_error_message("Failed to simulate score. Please try again."));
         spdlog::error("[SIM] Failed to simulate score for beatmap {} with {}% accuracy and mods {}",
             beatmap_id, parsed.accuracy * 100, parsed.mods_filter);
         return;
@@ -280,7 +279,7 @@ void SimCommand::execute(const CommandContext& ctx) {
     content += fmt::format("• Aim: **{:.2f}★**\n", result->difficulty.aim_difficulty);
     content += fmt::format("• Speed: **{:.2f}★**\n", result->difficulty.speed_difficulty);
 
-    event.reply(content);
+    ctx.reply(content);
 }
 
 } // namespace commands
