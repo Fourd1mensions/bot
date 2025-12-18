@@ -1,13 +1,13 @@
 #include "commands/lb_command.h"
-#include <bot.h>
+#include "services/service_container.h"
+#include "services/leaderboard_service.h"
 #include <osu.h>
 #include <algorithm>
 #include <regex>
 #include <sstream>
+#include <spdlog/spdlog.h>
 
 namespace commands {
-
-LbCommand::LbCommand(Bot& bot) : bot_(bot) {}
 
 std::vector<std::string> LbCommand::get_aliases() const {
     return {"!lb", "!ди"};
@@ -88,24 +88,30 @@ LbSortMethod LbCommand::parse_sort_method(const std::string& method) const {
         [](unsigned char c) { return std::tolower(c); });
 
     if (lower == "score" || lower == "s") {
-        return ::LbSortMethod::Score;
+        return LbSortMethod::Score;
     }
     if (lower == "acc" || lower == "accuracy" || lower == "a") {
-        return ::LbSortMethod::Acc;
+        return LbSortMethod::Acc;
     }
     if (lower == "combo" || lower == "c") {
-        return ::LbSortMethod::Combo;
+        return LbSortMethod::Combo;
     }
     if (lower == "date" || lower == "recent" || lower == "d" || lower == "r") {
-        return ::LbSortMethod::Date;
+        return LbSortMethod::Date;
     }
     // Default to PP
-    return ::LbSortMethod::PP;
+    return LbSortMethod::PP;
 }
 
 void LbCommand::execute(const CommandContext& ctx) {
+    auto* s = ctx.services;
+    if (!s) {
+        spdlog::error("[!lb] ServiceContainer is null");
+        return;
+    }
+
     auto params = parse_params(ctx.content);
-    bot_.create_lb_message(ctx.event, params.mods_filter, params.beatmap_id, params.sort_method);
+    s->leaderboard_service.create_leaderboard(ctx.event, params.mods_filter, params.beatmap_id, params.sort_method);
 }
 
 } // namespace commands

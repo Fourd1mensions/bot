@@ -6,9 +6,6 @@
 #include <string>
 #include <optional>
 
-// Forward declaration
-class Bot;
-
 namespace commands {
 
 // Use LbSortMethod from session_state.h to avoid duplication
@@ -38,14 +35,12 @@ struct LbParams {
  */
 class LbCommand : public ICommand {
 public:
-    explicit LbCommand(Bot& bot);
+    LbCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
     void execute(const CommandContext& ctx) override;
 
 private:
-    Bot& bot_;
-
     /**
      * Parse all parameters from command content.
      */

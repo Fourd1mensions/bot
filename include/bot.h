@@ -19,6 +19,7 @@
 #include <services/user_resolver_service.h>
 #include <services/beatmap_cache_service.h>
 #include <services/recent_score_service.h>
+#include <services/leaderboard_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -69,24 +70,14 @@ private:
   services::UserResolverService       user_resolver_service;
   std::unique_ptr<services::BeatmapCacheService> beatmap_cache_service;
   std::unique_ptr<services::RecentScoreService> recent_score_service;
+  std::unique_ptr<services::LeaderboardService> leaderboard_service;
 
   // Command routing
   commands::CommandRouter             command_router;
   std::unique_ptr<ServiceContainer>   service_container;
 
-  // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
-  dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
-  void                  remove_message_components(dpp::snowflake channel_id, dpp::snowflake message_id);
-  void                  schedule_button_removal(dpp::snowflake channel_id, dpp::snowflake message_id, std::chrono::minutes ttl);
   void                  process_pending_button_removals();
-  std::string           get_username_cached(int64_t user_id);
   bool                  is_admin(const std::string& user_id) const;
-
-  // Helper functions for mod-adjusted BPM and length
-  float                 apply_speed_mods_to_bpm(float bpm, const std::string& mods) const;
-  uint32_t              apply_speed_mods_to_length(uint32_t length_seconds, const std::string& mods) const;
-
-  dpp::message          build_rs_page(RecentScoreState& state);
 
   // Register text commands with the router
   void                  register_commands(); 
@@ -107,10 +98,4 @@ public:
   void start();
   void shutdown();
 
-  // Command handlers (called by command classes)
-  // Note: Only LbCommand still uses Bot directly, others use ServiceContainer
-  void create_lb_message(const dpp::message_create_t& event,
-                         const std::string& mods_filter = "",
-                         const std::optional<std::string>& beatmap_id_override = std::nullopt,
-                         LbSortMethod sort_method = LbSortMethod::PP);
 };
