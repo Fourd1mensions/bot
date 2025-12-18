@@ -20,6 +20,7 @@
 #include <services/beatmap_cache_service.h>
 #include <services/recent_score_service.h>
 #include <services/leaderboard_service.h>
+#include <handlers/button_handler.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -72,6 +73,9 @@ private:
   std::unique_ptr<services::RecentScoreService> recent_score_service;
   std::unique_ptr<services::LeaderboardService> leaderboard_service;
 
+  // Event handlers
+  std::unique_ptr<handlers::ButtonHandler> button_handler;
+
   // Command routing
   commands::CommandRouter             command_router;
   std::unique_ptr<ServiceContainer>   service_container;
@@ -83,9 +87,6 @@ private:
   void                  register_commands(); 
 
   // Handle events
-
-  void button_click_event(const dpp::button_click_t& event);
-  void form_submit_event(const dpp::form_submit_t& event);
   void message_create_event(const dpp::message_create_t& event);
   void message_update_event(const dpp::message_update_t& event);
   void member_add_event(const dpp::guild_member_add_t& event);
