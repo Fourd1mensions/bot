@@ -2211,7 +2211,23 @@ Bot::Bot(const std::string& token, bool delete_commands)
     ready_event(event, delete_commands);
   });
 
+  // Create service container for command dependency injection
+  service_container = std::make_unique<ServiceContainer>(ServiceContainer{
+    .bot = bot,
+    .request = request,
+    .beatmap_downloader = beatmap_downloader,
+    .config = config,
+    .chat_context_service = chat_context_service,
+    .beatmap_resolver_service = beatmap_resolver_service,
+    .user_resolver_service = user_resolver_service,
+    .message_presenter = message_presenter,
+    .command_params_service = command_params_service,
+    .performance_service = performance_service,
+    .beatmap_cache_service = beatmap_cache_service.get()
+  });
+
   // Register text commands
+  command_router.set_services(service_container.get());
   register_commands();
 
   // Start HTTP health check server
@@ -2221,11 +2237,11 @@ Bot::Bot(const std::string& token, bool delete_commands)
 void Bot::register_commands() {
   command_router.register_command(std::make_unique<commands::LbCommand>(*this));
   command_router.register_command(std::make_unique<commands::RsCommand>(*this));
-  command_router.register_command(std::make_unique<commands::BgCommand>(*this));
-  command_router.register_command(std::make_unique<commands::AudioCommand>(*this));
-  command_router.register_command(std::make_unique<commands::MapCommand>(*this));
+  command_router.register_command(std::make_unique<commands::BgCommand>());  // Uses ServiceContainer
+  command_router.register_command(std::make_unique<commands::AudioCommand>());  // Uses ServiceContainer
+  command_router.register_command(std::make_unique<commands::MapCommand>());  // Uses ServiceContainer
   command_router.register_command(std::make_unique<commands::CompareCommand>(*this));
-  command_router.register_command(std::make_unique<commands::SimCommand>(*this));
+  command_router.register_command(std::make_unique<commands::SimCommand>());  // Uses ServiceContainer
 }
 
 void Bot::start() {

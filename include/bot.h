@@ -22,6 +22,7 @@
 #include <dpp/dpp.h>
 #include <state/session_state.h>
 #include <commands/command_router.h>
+#include <services/service_container.h>
 
 class Random {
 private:
@@ -69,6 +70,7 @@ private:
 
   // Command routing
   commands::CommandRouter             command_router;
+  std::unique_ptr<ServiceContainer>   service_container;
 
   // Note: Leaderboard states are now stored in Memcached with message_id as key (5-min TTL)
   dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");

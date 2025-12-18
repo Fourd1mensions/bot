@@ -19,7 +19,8 @@ bool CommandRouter::route(const dpp::message_create_t& event) {
         .event = event,
         .content = content,
         .content_lower = content_lower,
-        .args = ""
+        .args = "",
+        .services = services_
     };
 
     // Find matching command

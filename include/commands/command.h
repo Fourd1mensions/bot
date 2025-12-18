@@ -5,6 +5,9 @@
 #include <vector>
 #include <functional>
 
+// Forward declaration
+struct ServiceContainer;
+
 namespace commands {
 
 /**
@@ -18,6 +21,7 @@ struct CommandContext {
     std::string content;          // Original message content
     std::string content_lower;    // Lowercase content for matching
     std::string args;             // Arguments after command name
+    ServiceContainer* services;   // Access to all services
 };
 
 /**

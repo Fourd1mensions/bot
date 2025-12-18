@@ -2,20 +2,16 @@
 
 #include "commands/command.h"
 
-class Bot;
-
 namespace commands {
 
 class SimCommand : public ICommand {
 public:
-    explicit SimCommand(Bot& bot);
+    SimCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
     void execute(const CommandContext& ctx) override;
 
 private:
-    Bot& bot_;
-
     struct ParsedParams {
         double accuracy = 0.0;
         std::string mode = "osu";
