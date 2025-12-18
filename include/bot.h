@@ -18,6 +18,7 @@
 #include <services/command_params_service.h>
 #include <services/user_resolver_service.h>
 #include <services/beatmap_cache_service.h>
+#include <services/recent_score_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -67,6 +68,7 @@ private:
   services::CommandParamsService      command_params_service;
   services::UserResolverService       user_resolver_service;
   std::unique_ptr<services::BeatmapCacheService> beatmap_cache_service;
+  std::unique_ptr<services::RecentScoreService> recent_score_service;
 
   // Command routing
   commands::CommandRouter             command_router;
@@ -106,14 +108,9 @@ public:
   void shutdown();
 
   // Command handlers (called by command classes)
+  // Note: Only LbCommand still uses Bot directly, others use ServiceContainer
   void create_lb_message(const dpp::message_create_t& event,
                          const std::string& mods_filter = "",
                          const std::optional<std::string>& beatmap_id_override = std::nullopt,
                          LbSortMethod sort_method = LbSortMethod::PP);
-  void create_bg_message(const dpp::message_create_t& event);
-  void create_audio_message(const dpp::message_create_t& event);
-  void create_rs_message(const dpp::message_create_t& event, const std::string& mode = "osu", const std::string& params = "");
-  void create_compare_message(const dpp::message_create_t& event, const std::string& params = "");
-  void create_map_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
-  void create_sim_message(const dpp::message_create_t& event, double accuracy, const std::string& mode = "osu", const std::string& mods_filter = "", int combo = 0, int count_100 = -1, int count_50 = -1, int misses = 0, double ratio = -1.0);
 };

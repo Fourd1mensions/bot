@@ -134,6 +134,7 @@ set(discord-bot_SOURCES
 	"src/services/chat_context_service.cpp"
 	"src/services/command_params_service.cpp"
 	"src/services/message_presenter_service.cpp"
+	"src/services/recent_score_service.cpp"
 	"src/services/user_mapping_service.cpp"
 	"src/services/user_resolver_service.cpp"
 	"src/utils.cpp"
