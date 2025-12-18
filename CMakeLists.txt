@@ -128,6 +128,7 @@ set(discord-bot_SOURCES
 	"src/migration.cpp"
 	"src/osu.cpp"
 	"src/requests.cpp"
+	"src/services/beatmap_cache_service.cpp"
 	"src/services/beatmap_performance_service.cpp"
 	"src/services/beatmap_resolver_service.cpp"
 	"src/services/chat_context_service.cpp"

@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <regex>
 #include <thread>
 #include <type_traits>
@@ -135,23 +136,29 @@ dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string
   }
 
   // Build footer text based on number of pages
+  std::string sort_text = (state.sort_method != LbSortMethod::PP)
+    ? fmt::format(" • sorted by {}", sort_method_to_string(state.sort_method))
+    : "";
+
   std::string footer_text;
   if (state.total_pages == 1) {
     // Simplified footer for single page
-    footer_text = fmt::format("{} {} shown{}{}",
+    footer_text = fmt::format("{} {} shown{}{}{}",
       state.scores.size(),
       state.scores.size() == 1 ? "score" : "scores",
       active_mods.empty() ? "" : fmt::format(" • Filter: +{}", active_mods),
+      sort_text,
       caller_rank_text);
   } else {
     // Full footer for multiple pages
-    footer_text = fmt::format("Page {}/{} • {}/{} {} shown{}{}",
+    footer_text = fmt::format("Page {}/{} • {}/{} {} shown{}{}{}",
       state.current_page + 1,
       state.total_pages,
       end,
       state.scores.size(),
       end == 1 ? "score" : "scores",
       active_mods.empty() ? "" : fmt::format(" • Filter: +{}", active_mods),
+      sort_text,
       caller_rank_text);
   }
 
@@ -907,10 +914,20 @@ void Bot::button_click_event(const dpp::button_click_t& event) {
   }
 }
 
-void Bot::create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter) {
+void Bot::create_lb_message(const dpp::message_create_t& event,
+                            const std::string& mods_filter,
+                            const std::optional<std::string>& beatmap_id_override,
+                            LbSortMethod sort_method) {
   dpp::snowflake channel_id = event.msg.channel_id;
-  std::string stored_id = chat_context_service.get_beatmap_id(channel_id);
-  std::string beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
+
+  // Use override if provided, otherwise get from chat context
+  std::string beatmap_id;
+  if (beatmap_id_override.has_value()) {
+    beatmap_id = *beatmap_id_override;
+  } else {
+    std::string stored_id = chat_context_service.get_beatmap_id(channel_id);
+    beatmap_id = beatmap_resolver_service.resolve_beatmap_id(stored_id);
+  }
 
   if (beatmap_id.empty()) {
     event.reply(message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
@@ -1052,12 +1069,37 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
     return;
   }
 
-  // sort best user scores
+  // Sort scores based on selected method
   if (scores.size() > 1) {
-    stdr::sort(scores, [](const Score& a, const Score& b) {
-      return std::make_tuple(a.get_pp(), a.get_total_score()) >
-          std::make_tuple(b.get_pp(), b.get_total_score());
-    });
+    switch (sort_method) {
+      case LbSortMethod::Score:
+        stdr::sort(scores, [](const Score& a, const Score& b) {
+          return a.get_total_score() > b.get_total_score();
+        });
+        break;
+      case LbSortMethod::Acc:
+        stdr::sort(scores, [](const Score& a, const Score& b) {
+          return a.get_accuracy() > b.get_accuracy();
+        });
+        break;
+      case LbSortMethod::Combo:
+        stdr::sort(scores, [](const Score& a, const Score& b) {
+          return a.get_max_combo() > b.get_max_combo();
+        });
+        break;
+      case LbSortMethod::Date:
+        stdr::sort(scores, [](const Score& a, const Score& b) {
+          return a.get_created_at() > b.get_created_at();
+        });
+        break;
+      case LbSortMethod::PP:
+      default:
+        stdr::sort(scores, [](const Score& a, const Score& b) {
+          return std::make_tuple(a.get_pp(), a.get_total_score()) >
+              std::make_tuple(b.get_pp(), b.get_total_score());
+        });
+        break;
+    }
   }
 
   if (elapsed > 8) {
@@ -1066,7 +1108,7 @@ void Bot::create_lb_message(const dpp::message_create_t& event, const std::strin
 
   // Create leaderboard state and build first page
   std::string beatmap_mode = beatmap.get_mode(); // Extract mode before moving
-  LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0, beatmap_mode, mods_filter, event.msg.author.id);
+  LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0, beatmap_mode, mods_filter, sort_method, event.msg.author.id);
   dpp::message msg = build_lb_page(lb_state);
 
   // Reply with leaderboard
@@ -1454,13 +1496,69 @@ void Bot::create_audio_message(const dpp::message_create_t& event) {
     return;
   }
 
-  // Construct the audio URL (with URL-encoded filename)
-  std::string audio_url = fmt::format("{}/osu/{}/{}",
-    config.public_url, *extract_id, utils::url_encode(*audio_filename));
+  // Read audio file into memory
+  std::string audio_path = (*extract_path / *audio_filename).string();
+  std::ifstream audio_file(audio_path, std::ios::binary);
+  if (!audio_file) {
+    spdlog::error("[!song] Failed to open audio file: {}", audio_path);
+    event.reply(message_presenter.build_error_message(error_messages::NO_AUDIO));
+    return;
+  }
 
-  std::string footer_text = beatmap_downloader.build_download_footer(beatmapset_id);
+  std::string audio_data((std::istreambuf_iterator<char>(audio_file)),
+                          std::istreambuf_iterator<char>());
+  audio_file.close();
 
-  event.reply(message_presenter.build_audio(beatmap, audio_url, footer_text));
+  // Determine file size limit based on server boost level
+  size_t max_file_size = 10 * 1024 * 1024;  // Default: 10MB (tier 0-1)
+  dpp::guild* guild = dpp::find_guild(event.msg.guild_id);
+  if (guild) {
+    switch (guild->premium_tier) {
+      case dpp::tier_2:
+        max_file_size = 50 * 1024 * 1024;   // 50MB
+        break;
+      case dpp::tier_3:
+        max_file_size = 100 * 1024 * 1024;  // 100MB
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Check file size against server limit
+  if (audio_data.size() > max_file_size) {
+    spdlog::warn("[!song] Audio file too large: {} bytes (limit: {} bytes), falling back to URL",
+                 audio_data.size(), max_file_size);
+    // Fall back to URL
+    std::string audio_url = fmt::format("{}/osu/{}/{}",
+      config.public_url, *extract_id, utils::url_encode(*audio_filename));
+
+    // Build footer with size info and required tier
+    std::string footer_text = beatmap_downloader.build_download_footer(beatmapset_id);
+    double file_mb = static_cast<double>(audio_data.size()) / (1024 * 1024);
+    std::string required_tier;
+    if (audio_data.size() <= 50 * 1024 * 1024) {
+      required_tier = "Tier 2";
+    } else if (audio_data.size() <= 100 * 1024 * 1024) {
+      required_tier = "Tier 3";
+    } else {
+      required_tier = ">100MB";
+    }
+    footer_text += fmt::format(" | File: {:.1f}MB (needs {})", file_mb, required_tier);
+
+    event.reply(message_presenter.build_audio(beatmap, audio_url, footer_text));
+    return;
+  }
+
+  // Create friendly filename: "artist - title.ext"
+  std::string extension = std::filesystem::path(*audio_filename).extension().string();
+  std::string friendly_filename = fmt::format("{} - {}{}", beatmap.get_artist(), beatmap.get_title(), extension);
+
+  // Create message with just the audio file attachment (no embed)
+  dpp::message msg;
+  msg.add_file(friendly_filename, audio_data);
+
+  event.reply(msg);
 
   auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
     std::chrono::steady_clock::now() - start).count();
@@ -1739,7 +1837,7 @@ void Bot::message_create_event(const dpp::message_create_t& event) {
 
   {
     std::lock_guard<std::mutex> lock(mutex);
-    chat_context_service.update_context(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
+    chat_context_service.update_context(event.raw_event, event.msg.content, event.msg.channel_id.str(), event.msg.id.str());
   }
 
   // Route to command handlers
@@ -1752,7 +1850,7 @@ void Bot::message_update_event(const dpp::message_update_t& event) {
   // Check if the updated message is the one tracked in chat context
   dpp::snowflake tracked_msg_id = chat_context_service.get_message_id(channel_id);
   if (tracked_msg_id == event.msg.id) {
-    chat_context_service.update_context(event.raw_event, channel_id, event.msg.id);
+    chat_context_service.update_context(event.raw_event, event.msg.content, channel_id, event.msg.id);
   }
 }
 
@@ -2028,6 +2126,22 @@ void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
 
   // Note: Leaderboard states are now stored in Memcached with automatic expiry
   // No periodic cleanup needed - Memcached handles TTL automatically
+
+  // Set initial presence and start periodic updates
+  if (beatmap_cache_service) {
+    auto update_presence = [this]() {
+      std::string status = beatmap_cache_service->get_status_string();
+      bot.set_presence(dpp::presence(dpp::ps_online, dpp::at_watching, status));
+    };
+
+    // Initial presence
+    update_presence();
+
+    // Update every 60 seconds
+    bot.start_timer([this, update_presence](const dpp::timer&) {
+      update_presence();
+    }, 60);
+  }
 }
 
 Bot::Bot(const std::string& token, bool delete_commands)
@@ -2050,6 +2164,18 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   // Initialize HTTP server with config values
   http_server = std::make_unique<HttpServer>(config.http_host, config.http_port, config.beatmap_mirrors);
+
+  // Initialize beatmap cache service for proactive caching
+  beatmap_cache_service = std::make_unique<services::BeatmapCacheService>(beatmap_downloader, request, bot);
+  beatmap_cache_service->set_error_channel(dpp::snowflake(1284189678035009670ULL));
+
+  // Set up callbacks for proactive beatmap caching
+  chat_context_service.set_beatmapset_callback([this](uint32_t beatmapset_id) {
+    beatmap_cache_service->queue_download(beatmapset_id);
+  });
+  chat_context_service.set_beatmap_callback([this](uint32_t beatmap_id) {
+    beatmap_cache_service->queue_download_by_beatmap_id(beatmap_id);
+  });
 
   // Cleanup database entries for missing beatmap files
   beatmap_downloader.cleanup_missing_files();
@@ -2103,6 +2229,11 @@ void Bot::register_commands() {
 }
 
 void Bot::start() {
+  // Start beatmap cache service
+  if (beatmap_cache_service) {
+    beatmap_cache_service->start();
+  }
+
   // Non-blocking start so main thread can manage shutdown
   bot.start(dpp::st_return);
 }
@@ -2110,7 +2241,12 @@ void Bot::start() {
 void Bot::shutdown() {
   spdlog::info("Shutting down bot...");
 
-  // Stop HTTP server first
+  // Stop beatmap cache service first
+  if (beatmap_cache_service) {
+    beatmap_cache_service->stop();
+  }
+
+  // Stop HTTP server
   if (http_server) {
     http_server->stop();
   }

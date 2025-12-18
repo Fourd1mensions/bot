@@ -93,6 +93,7 @@ public:
     std::vector<BeatmapFile> get_all_beatmap_files();
     bool beatmap_file_exists(int64_t beatmapset_id);
     bool remove_beatmap_file(int64_t beatmapset_id);
+    size_t count_beatmap_files();
 
     // Beatmap extracts table operations (temporary extracted files)
     std::string create_beatmap_extract(int64_t beatmapset_id, const std::string& extract_path,
