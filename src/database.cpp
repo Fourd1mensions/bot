@@ -301,6 +301,15 @@ bool Database::remove_beatmap_file(int64_t beatmapset_id) {
     });
 }
 
+size_t Database::count_beatmap_files() {
+    return execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec("SELECT COUNT(*) FROM beatmap_files");
+        txn.commit();
+        return result[0][0].as<size_t>();
+    });
+}
+
 // Beatmap extracts operations
 std::string Database::create_beatmap_extract(int64_t beatmapset_id, const std::string& extract_path,
                                             std::chrono::hours ttl) {

@@ -127,11 +127,55 @@ SystemMetrics get_system_metrics() {
 
 } // namespace
 
+// RateLimiter implementation
+bool RateLimiter::allow(const std::string& client_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  cleanup_old_requests(client_id);
+
+  auto& client_requests = requests_[client_id];
+  if (client_requests.size() >= max_requests_) {
+    return false;
+  }
+
+  client_requests.push_back(std::chrono::steady_clock::now());
+  return true;
+}
+
+size_t RateLimiter::remaining(const std::string& client_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  cleanup_old_requests(client_id);
+
+  auto it = requests_.find(client_id);
+  if (it == requests_.end()) {
+    return max_requests_;
+  }
+  return max_requests_ > it->second.size() ? max_requests_ - it->second.size() : 0;
+}
+
+void RateLimiter::cleanup_old_requests(const std::string& client_id) {
+  auto it = requests_.find(client_id);
+  if (it == requests_.end()) return;
+
+  auto& client_requests = it->second;
+  auto now = std::chrono::steady_clock::now();
+  auto cutoff = now - window_;
+
+  while (!client_requests.empty() && client_requests.front() < cutoff) {
+    client_requests.pop_front();
+  }
+
+  // Remove empty entries to prevent memory growth
+  if (client_requests.empty()) {
+    requests_.erase(it);
+  }
+}
+
 HttpServer::HttpServer(const std::string& host, uint16_t port,
                        const std::vector<std::string>& mirrors)
     : host_(host), port_(port), app_(std::make_unique<crow::SimpleApp>()),
       downloader_(mirrors.empty() ? std::make_unique<BeatmapDownloader>()
-                                   : std::make_unique<BeatmapDownloader>(mirrors)) {
+                                   : std::make_unique<BeatmapDownloader>(mirrors)),
+      download_limiter_(std::make_unique<RateLimiter>(5, std::chrono::seconds(60))) {
 
   auto& app = *app_;
   app.signal_clear(); // avoid Crow overriding our SIGINT/SIGTERM handlers
@@ -710,20 +754,55 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
   });
 
   // Download .osz files directly
+  // If cached locally - serve directly
+  // If not cached - redirect to mirror and cache in background
   CROW_ROUTE(app, "/osu/d/<int>")
-  ([this](int beatmapset_id) {
+  ([this](const crow::request& req, int beatmapset_id) {
+    std::string client_ip = get_client_ip(req);
+
     // Get .osz file path
     auto osz_path = downloader_->get_osz_path(beatmapset_id);
 
+    // If not found locally, redirect to mirror and cache in background
     if (!osz_path) {
-      return crow::response(404, "Beatmapset not found. Please use the bot to download it first.");
+      // Check rate limit for redirects (to prevent abuse)
+      if (!download_limiter_->allow(client_ip)) {
+        size_t remaining = download_limiter_->remaining(client_ip);
+        crow::response res(429, "Rate limit exceeded. Maximum 5 downloads per minute.");
+        res.set_header("Retry-After", "60");
+        res.set_header("X-RateLimit-Limit", "5");
+        res.set_header("X-RateLimit-Remaining", std::to_string(remaining));
+        res.set_header("X-RateLimit-Reset", "60");
+        return res;
+      }
+
+      // Get mirror URL for redirect
+      std::string mirror_url = downloader_->get_mirror_url(beatmapset_id);
+
+      spdlog::info("[HTTP] Redirecting client {} to mirror for beatmapset {}", client_ip, beatmapset_id);
+
+      // Start background download to cache the file
+      std::thread([this, beatmapset_id]() {
+        spdlog::info("[HTTP] Background caching beatmapset {}", beatmapset_id);
+        if (downloader_->download_osz(beatmapset_id)) {
+          spdlog::info("[HTTP] Successfully cached beatmapset {}", beatmapset_id);
+        } else {
+          spdlog::warn("[HTTP] Failed to cache beatmapset {}", beatmapset_id);
+        }
+      }).detach();
+
+      // Redirect user to mirror
+      crow::response res(302);
+      res.set_header("Location", mirror_url);
+      res.set_header("Cache-Control", "no-cache");
+      return res;
     }
 
     if (!std::filesystem::exists(*osz_path) || !std::filesystem::is_regular_file(*osz_path)) {
       return crow::response(404, "Beatmapset file not found on disk");
     }
 
-    // Read file
+    // Read file from local cache
     std::ifstream file(*osz_path, std::ios::binary);
     if (!file) {
       return crow::response(500, "Failed to read beatmapset file");
@@ -740,6 +819,7 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     res.set_header("Content-Disposition",
                    "attachment; filename=\"" + std::to_string(beatmapset_id) + ".osz\"");
     res.set_header("Content-Length", std::to_string(buffer.size()));
+    res.set_header("X-Cache", "HIT");
 
     return res;
   });
@@ -876,4 +956,26 @@ void HttpServer::run() {
     SPDLOG_ERROR("HTTP server error: {}", e.what());
     running_ = false;
   }
+}
+
+std::string HttpServer::get_client_ip(const crow::request& req) const {
+  // Check X-Forwarded-For header (for reverse proxy setups)
+  auto xff = req.get_header_value("X-Forwarded-For");
+  if (!xff.empty()) {
+    // Take the first IP in the chain (original client)
+    auto comma_pos = xff.find(',');
+    if (comma_pos != std::string::npos) {
+      return xff.substr(0, comma_pos);
+    }
+    return xff;
+  }
+
+  // Check X-Real-IP header
+  auto xri = req.get_header_value("X-Real-IP");
+  if (!xri.empty()) {
+    return xri;
+  }
+
+  // Fall back to remote IP
+  return req.remote_ip_address;
 }

@@ -17,6 +17,7 @@
 #include <services/beatmap_performance_service.h>
 #include <services/command_params_service.h>
 #include <services/user_resolver_service.h>
+#include <services/beatmap_cache_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -64,6 +65,7 @@ private:
   services::BeatmapPerformanceService performance_service;
   services::CommandParamsService      command_params_service;
   services::UserResolverService       user_resolver_service;
+  std::unique_ptr<services::BeatmapCacheService> beatmap_cache_service;
 
   // Command routing
   commands::CommandRouter             command_router;
@@ -102,7 +104,10 @@ public:
   void shutdown();
 
   // Command handlers (called by command classes)
-  void create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
+  void create_lb_message(const dpp::message_create_t& event,
+                         const std::string& mods_filter = "",
+                         const std::optional<std::string>& beatmap_id_override = std::nullopt,
+                         LbSortMethod sort_method = LbSortMethod::PP);
   void create_bg_message(const dpp::message_create_t& event);
   void create_audio_message(const dpp::message_create_t& event);
   void create_rs_message(const dpp::message_create_t& event, const std::string& mode = "osu", const std::string& params = "");

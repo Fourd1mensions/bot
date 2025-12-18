@@ -10,12 +10,14 @@ namespace commands {
 /**
  * Context passed to command handlers.
  * Contains everything needed to execute a command.
+ * Note: event is stored by value to ensure thread safety when
+ * commands execute asynchronously.
  */
 struct CommandContext {
-    const dpp::message_create_t& event;
-    std::string content;        // Original message content
-    std::string content_lower;  // Lowercase content for matching
-    std::string args;           // Arguments after command name
+    dpp::message_create_t event;  // Stored by value for thread safety
+    std::string content;          // Original message content
+    std::string content_lower;    // Lowercase content for matching
+    std::string args;             // Arguments after command name
 };
 
 /**

@@ -142,6 +142,7 @@ bool MemcachedCache::exists(const std::string& key) {
 std::string MemcachedCache::serialize_leaderboard(const LeaderboardState& state) {
     json j;
     j["mods_filter"] = state.mods_filter;
+    j["sort_method"] = static_cast<int>(state.sort_method);
     j["current_page"] = state.current_page;
     j["total_pages"] = state.total_pages;
     j["caller_discord_id"] = static_cast<uint64_t>(state.caller_discord_id);
@@ -161,6 +162,10 @@ std::string MemcachedCache::serialize_leaderboard(const LeaderboardState& state)
     j["beatmap"]["version"] = state.beatmap.version;
     j["beatmap"]["beatmap_url"] = state.beatmap.beatmap_url;
     j["beatmap"]["image_url"] = state.beatmap.image_url;
+    j["beatmap"]["mode"] = state.beatmap.mode;
+    j["beatmap"]["bpm"] = state.beatmap.bpm;
+    j["beatmap"]["total_length"] = state.beatmap.total_length;
+    j["beatmap"]["status"] = static_cast<int>(state.beatmap.status);
 
     // Serialize scores
     j["scores"] = json::array();
@@ -194,6 +199,7 @@ std::optional<LeaderboardState> MemcachedCache::deserialize_leaderboard(const st
 
         LeaderboardState state;
         state.mods_filter = j["mods_filter"];
+        state.sort_method = static_cast<LbSortMethod>(j.value("sort_method", 0)); // Default to PP for backward compatibility
         state.current_page = j["current_page"];
         state.total_pages = j["total_pages"];
         state.caller_discord_id = dpp::snowflake(j.value("caller_discord_id", 0ULL)); // Default to 0 for backward compatibility
@@ -218,6 +224,10 @@ std::optional<LeaderboardState> MemcachedCache::deserialize_leaderboard(const st
         state.beatmap.version = j["beatmap"]["version"];
         state.beatmap.beatmap_url = j["beatmap"]["beatmap_url"];
         state.beatmap.image_url = j["beatmap"]["image_url"];
+        state.beatmap.mode = j["beatmap"].value("mode", "osu");
+        state.beatmap.bpm = j["beatmap"].value("bpm", 0.0f);
+        state.beatmap.total_length = j["beatmap"].value("total_length", 0);
+        state.beatmap.status = static_cast<BeatmapStatus>(j["beatmap"].value("status", 0)); // Default to Pending for backwards compatibility
 
         // Deserialize scores
         for (const auto& score_json : j["scores"]) {

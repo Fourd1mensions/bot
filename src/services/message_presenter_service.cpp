@@ -204,11 +204,17 @@ dpp::message MessagePresenterService::build_map_info(
     embed.set_url(beatmap.get_beatmap_url());
     embed.set_image(beatmap.get_image_url());
 
-    // Star rating in description
+    // Star rating and status in description
     std::string mode_display = beatmap.get_mode();
     std::transform(mode_display.begin(), mode_display.end(), mode_display.begin(), ::toupper);
 
-    std::string description = fmt::format(":star: **{:.2f}★**", difficulty.star_rating);
+    // Get status display string with capitalized first letter
+    std::string status_str = beatmap_status_to_string(beatmap.get_status());
+    if (!status_str.empty()) {
+        status_str[0] = std::toupper(status_str[0]);
+    }
+
+    std::string description = fmt::format(":star: **{:.2f}★** • {}", difficulty.star_rating, status_str);
     if (beatmap.get_mode() != "osu") {
         description += fmt::format(" [{}]", mode_display);
     }
@@ -302,6 +308,22 @@ dpp::message MessagePresenterService::build_audio(
         .set_title(beatmap.to_string())
         .set_url(beatmap.get_beatmap_url())
         .set_description(fmt::format("[Download audio]({})", audio_url))
+        .set_footer(dpp::embed_footer().set_text(source));
+
+    dpp::message msg;
+    msg.add_embed(embed);
+    return msg;
+}
+
+dpp::message MessagePresenterService::build_audio_with_attachment(
+    const Beatmap& beatmap,
+    const std::string& filename,
+    const std::string& source
+) const {
+    auto embed = dpp::embed()
+        .set_color(dpp::colors::viola_purple)
+        .set_title(beatmap.to_string())
+        .set_url(beatmap.get_beatmap_url())
         .set_footer(dpp::embed_footer().set_text(source));
 
     dpp::message msg;

@@ -5,23 +5,47 @@
 
 namespace services {
 
-void ChatContextService::update_context(const std::string& msg, dpp::snowflake channel_id, dpp::snowflake msg_id) {
+void ChatContextService::set_beatmapset_callback(BeatmapsetCallback callback) {
+    beatmapset_callback_ = std::move(callback);
+}
+
+void ChatContextService::set_beatmap_callback(BeatmapCallback callback) {
+    beatmap_callback_ = std::move(callback);
+}
+
+void ChatContextService::update_context(const std::string& raw_event, const std::string& content, dpp::snowflake channel_id, dpp::snowflake msg_id) {
     // Prefer explicit beatmap ID if present, otherwise fall back to beatmapset ID
     std::regex set_regex(R"(https:\/\/osu\.ppy\.sh\/beatmapsets\/(\d+)(?:[^ ]*?#(?:osu|taiko|fruits|mania)\/(\d+))?)");
     std::regex beatmap_regex(R"(https:\/\/osu\.ppy\.sh\/(?:beatmaps\/|b\/)(\d+))");
     std::smatch m;
 
     std::string stored_value;
+    uint32_t beatmapset_id = 0;
+    uint32_t beatmap_id_only = 0;  // When we only have beatmap_id (no beatmapset)
 
-    if (std::regex_search(msg, m, set_regex)) {
-        // m[2] is beatmap id if link contains #mode/<beatmap_id>
-        if (m.size() > 2 && m[2].matched) {
-            stored_value = m.str(2);
-        } else {
-            stored_value = "set:" + m.str(1);
+    // Helper to search in a string
+    auto search_in = [&](const std::string& text, const std::string& source) -> bool {
+        if (std::regex_search(text, m, set_regex)) {
+            beatmapset_id = std::stoul(m.str(1));
+            if (m.size() > 2 && m[2].matched) {
+                stored_value = m.str(2);
+            } else {
+                stored_value = "set:" + m.str(1);
+            }
+            spdlog::info("[CONTEXT] Found beatmapset {} in {} (stored: {})", beatmapset_id, source, stored_value);
+            return true;
+        } else if (std::regex_search(text, m, beatmap_regex)) {
+            stored_value = m.str(1);
+            beatmap_id_only = std::stoul(stored_value);
+            spdlog::info("[CONTEXT] Found beatmap {} in {} (will resolve via API)", stored_value, source);
+            return true;
         }
-    } else if (std::regex_search(msg, m, beatmap_regex)) {
-        stored_value = m.str(1);
+        return false;
+    };
+
+    // First try content (most common), then raw_event (for embeds)
+    if (!search_in(content, "content")) {
+        search_in(raw_event, "raw_event");
     }
 
     if (!stored_value.empty()) {
@@ -37,6 +61,15 @@ void ChatContextService::update_context(const std::string& msg, dpp::snowflake c
         } catch (const std::exception& e) {
             spdlog::error("Failed to save chat context to database: {}", e.what());
         }
+    }
+
+    // Trigger callbacks for proactive caching (outside of lock)
+    if (beatmapset_id > 0 && beatmapset_callback_) {
+        spdlog::info("[CONTEXT] Triggering beatmapset cache callback for {}", beatmapset_id);
+        beatmapset_callback_(beatmapset_id);
+    } else if (beatmap_id_only > 0 && beatmap_callback_) {
+        spdlog::info("[CONTEXT] Triggering beatmap cache callback for {} (will resolve via API)", beatmap_id_only);
+        beatmap_callback_(beatmap_id_only);
     }
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -9,6 +10,17 @@
 
 namespace fs = std::filesystem;
 
+/**
+ * Result of a single download attempt to a mirror
+ */
+struct MirrorAttemptResult {
+  std::string mirror_url;
+  int status_code = 0;
+  std::string error_message;
+  std::chrono::milliseconds duration{0};
+  int64_t bytes_downloaded = 0;
+};
+
 class BeatmapDownloader {
 public:
   BeatmapDownloader();
@@ -17,6 +29,14 @@ public:
   // Downloads .osz file for a given beatmapset_id
   // Returns true if successful, false otherwise
   bool download_osz(uint32_t beatmapset_id);
+
+  /**
+   * Download with detailed attempt information for error reporting.
+   * @param beatmapset_id The beatmapset to download
+   * @param attempts Output vector of attempt results (filled even on success)
+   * @return true if download succeeded
+   */
+  bool download_osz_with_attempts(uint32_t beatmapset_id, std::vector<MirrorAttemptResult>& attempts);
 
   // Downloads individual .osu file for a given beatmap_id
   // Returns path to downloaded file if successful, std::nullopt otherwise
@@ -47,6 +67,9 @@ public:
   // Get the URL of the mirror used for the last successful download (or "cache" if already present)
   std::string get_last_used_mirror() const { return last_used_mirror_; }
 
+  // Get full download URL for a beatmapset from the first available mirror
+  std::string get_mirror_url(uint32_t beatmapset_id) const;
+
   // Validate and clean up database entries where files don't exist on disk
   void cleanup_missing_files();
 
@@ -72,7 +95,8 @@ private:
   // Helper functions
   bool download_osz_with_fallback(uint32_t beatmapset_id, const fs::path& dest_path);
   bool try_download_from_mirror(const std::string& mirror_url, uint32_t beatmapset_id,
-                                 const fs::path& dest_path, int max_retries = 3);
+                                 const fs::path& dest_path);
+  void demote_mirror(size_t index);  // Move failed mirror to end of list
   bool extract_osz(const fs::path& osz_path, const fs::path& extract_dir);
 
   void ensure_directories();

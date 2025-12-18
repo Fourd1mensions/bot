@@ -52,6 +52,13 @@ void BeatmapDownloader::set_mirrors(const std::vector<std::string>& mirrors) {
   spdlog::info("[DOWNLOAD] Updated mirror list ({} mirrors)", mirrors_.size());
 }
 
+std::string BeatmapDownloader::get_mirror_url(uint32_t beatmapset_id) const {
+  if (mirrors_.empty()) {
+    return fmt::format("https://catboy.best/d/{}", beatmapset_id);
+  }
+  return fmt::format("{}/{}", mirrors_[0], beatmapset_id);
+}
+
 void BeatmapDownloader::ensure_directories() {
   try {
     fs::create_directories(osz_dir_);
@@ -77,107 +84,195 @@ std::optional<fs::path> BeatmapDownloader::get_osz_path(uint32_t beatmapset_id) 
 
 bool BeatmapDownloader::try_download_from_mirror(const std::string& mirror_url,
                                                   uint32_t beatmapset_id,
-                                                  const fs::path& dest_path,
-                                                  int max_retries) {
+                                                  const fs::path& dest_path) {
   std::string url = mirror_url + "/" + std::to_string(beatmapset_id);
+  spdlog::info("[DOWNLOAD] Trying: {}", url);
 
-  for (int attempt = 1; attempt <= max_retries; attempt++) {
-    spdlog::info("[DOWNLOAD] Attempt {}/{}: {}", attempt, max_retries, url);
+  // Use temporary file to avoid corruption during download
+  fs::path temp_path = dest_path;
+  temp_path += ".tmp";
 
-    // Use temporary file to avoid corruption during download
-    fs::path temp_path = dest_path;
-    temp_path += ".tmp";
+  std::ofstream output(temp_path, std::ios::binary);
+  if (!output) {
+    spdlog::error("[DOWNLOAD] Failed to open file for writing: {}", temp_path.string());
+    return false;
+  }
 
-    std::ofstream output(temp_path, std::ios::binary);
-    if (!output) {
-      spdlog::error("[DOWNLOAD] Failed to open file for writing: {}", temp_path.string());
+  // 2 second timeout - fail fast and try next mirror
+  auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{2000});
+  output.close();
+
+  spdlog::info("[DOWNLOAD] HTTP response: status={}, bytes={}",
+    response.status_code, response.downloaded_bytes);
+
+  if (response.status_code == 200 && response.downloaded_bytes > 0) {
+    // Verify Content-Length if available
+    auto content_length_it = response.header.find("Content-Length");
+    if (content_length_it != response.header.end()) {
+      try {
+        int64_t expected_size = std::stoll(content_length_it->second);
+        if (response.downloaded_bytes != expected_size) {
+          spdlog::warn("[DOWNLOAD] Size mismatch: downloaded {} bytes, expected {} bytes",
+            response.downloaded_bytes, expected_size);
+          fs::remove(temp_path);
+          return false;
+        }
+      } catch (const std::exception& e) {
+        spdlog::warn("[DOWNLOAD] Failed to parse Content-Length: {}", e.what());
+      }
+    }
+
+    // Verify ZIP file integrity by trying to open it
+    int err = 0;
+    zip_t* archive = zip_open(temp_path.string().c_str(), ZIP_RDONLY, &err);
+    if (!archive) {
+      spdlog::error("[DOWNLOAD] Downloaded file is not a valid ZIP (error code {})", err);
+      fs::remove(temp_path);
+      return false;
+    }
+    zip_close(archive);
+
+    // Move temp file to final destination atomically
+    std::error_code ec;
+    fs::rename(temp_path, dest_path, ec);
+    if (ec) {
+      spdlog::error("[DOWNLOAD] Failed to rename temp file: {}", ec.message());
+      fs::remove(temp_path);
       return false;
     }
 
-    auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{30000});
+    spdlog::info("[DOWNLOAD] Successfully downloaded {} bytes from {}",
+      response.downloaded_bytes, mirror_url);
+    return true;
+  }
+
+  // Failed - clean up temp file
+  fs::remove(temp_path);
+
+  if (response.status_code == 404) {
+    spdlog::warn("[DOWNLOAD] Beatmapset {} not found on {}", beatmapset_id, mirror_url);
+  } else if (response.status_code == 429) {
+    spdlog::warn("[DOWNLOAD] Rate limited by {}", mirror_url);
+  } else {
+    spdlog::warn("[DOWNLOAD] Failed: HTTP {} - {}", response.status_code, response.error.message);
+  }
+
+  return false;
+}
+
+void BeatmapDownloader::demote_mirror(size_t index) {
+  if (index >= mirrors_.size() - 1) return;  // Already at end or invalid
+
+  std::string failed_mirror = mirrors_[index];
+  mirrors_.erase(mirrors_.begin() + index);
+  mirrors_.push_back(failed_mirror);
+
+  spdlog::info("[DOWNLOAD] Demoted {} to end of mirror list", failed_mirror);
+}
+
+bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
+                                                    std::vector<MirrorAttemptResult>& attempts) {
+  spdlog::info("[DOWNLOAD] Starting download with attempts tracking for beatmapset {}", beatmapset_id);
+
+  std::lock_guard<std::mutex> lock(download_mutex_);
+
+  // Check if already exists
+  if (beatmapset_exists(beatmapset_id)) {
+    spdlog::info("[DOWNLOAD] Beatmapset {} already exists, skipping download", beatmapset_id);
+    last_used_mirror_ = "cache";
+    return true;
+  }
+
+  fs::path osz_path = osz_dir_ / (std::to_string(beatmapset_id) + ".osz");
+  fs::path temp_path = osz_path;
+  temp_path += ".tmp";
+
+  for (size_t i = 0; i < mirrors_.size(); i++) {
+    const auto& mirror = mirrors_[i];
+    std::string url = mirror + "/" + std::to_string(beatmapset_id);
+
+    MirrorAttemptResult attempt;
+    attempt.mirror_url = mirror;
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    std::ofstream output(temp_path, std::ios::binary);
+    if (!output) {
+      attempt.error_message = "Failed to open temp file for writing";
+      attempt.duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - start_time);
+      attempts.push_back(attempt);
+      continue;
+    }
+
+    auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{2000});
     output.close();
 
-    spdlog::info("[DOWNLOAD] HTTP response: status={}, bytes={}",
-      response.status_code, response.downloaded_bytes);
+    attempt.status_code = response.status_code;
+    attempt.bytes_downloaded = response.downloaded_bytes;
+    attempt.duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start_time);
 
     if (response.status_code == 200 && response.downloaded_bytes > 0) {
-      // Verify Content-Length if available
-      auto content_length_it = response.header.find("Content-Length");
-      if (content_length_it != response.header.end()) {
-        try {
-          int64_t expected_size = std::stoll(content_length_it->second);
-          if (response.downloaded_bytes != expected_size) {
-            spdlog::warn("[DOWNLOAD] Size mismatch: downloaded {} bytes, expected {} bytes",
-              response.downloaded_bytes, expected_size);
-            fs::remove(temp_path);
-
-            if (attempt < max_retries) {
-              int delay_ms = 1000 * (1 << (attempt - 1));
-              spdlog::info("[DOWNLOAD] Waiting {}ms before retry...", delay_ms);
-              std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-              continue;
-            }
-            return false;
-          }
-        } catch (const std::exception& e) {
-          spdlog::warn("[DOWNLOAD] Failed to parse Content-Length: {}", e.what());
-        }
-      }
-
-      // Verify ZIP file integrity by trying to open it
+      // Verify ZIP
       int err = 0;
       zip_t* archive = zip_open(temp_path.string().c_str(), ZIP_RDONLY, &err);
       if (!archive) {
-        spdlog::error("[DOWNLOAD] Downloaded file is not a valid ZIP (error code {})", err);
+        attempt.error_message = fmt::format("Invalid ZIP file (error {})", err);
+        attempts.push_back(attempt);
         fs::remove(temp_path);
-
-        if (attempt < max_retries) {
-          int delay_ms = 1000 * (1 << (attempt - 1));
-          spdlog::info("[DOWNLOAD] Waiting {}ms before retry...", delay_ms);
-          std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-          continue;
-        }
-        return false;
+        demote_mirror(i);
+        i--;
+        continue;
       }
       zip_close(archive);
 
-      // Move temp file to final destination atomically
+      // Success - move to final path
       std::error_code ec;
-      fs::rename(temp_path, dest_path, ec);
+      fs::rename(temp_path, osz_path, ec);
       if (ec) {
-        spdlog::error("[DOWNLOAD] Failed to rename temp file: {}", ec.message());
+        attempt.error_message = fmt::format("Failed to rename: {}", ec.message());
+        attempts.push_back(attempt);
         fs::remove(temp_path);
-        return false;
+        continue;
       }
 
-      spdlog::info("[DOWNLOAD] Successfully downloaded and verified {} bytes from {}",
-        response.downloaded_bytes, mirror_url);
+      attempts.push_back(attempt);
+      last_used_mirror_ = extract_host(mirror);
+
+      // Register in database
+      try {
+        auto& db = db::Database::instance();
+        int64_t file_size = std::filesystem::file_size(osz_path);
+        db.register_beatmap_file(beatmapset_id, osz_path.string(),
+                                last_used_mirror_ == "cache" ? std::nullopt : std::optional(last_used_mirror_),
+                                file_size);
+      } catch (const std::exception& e) {
+        spdlog::warn("[DOWNLOAD] Failed to register in database: {}", e.what());
+      }
+
       return true;
     }
 
-    // Failed - clean up temp file and maybe retry
+    // Failed
     fs::remove(temp_path);
 
-    if (response.status_code == 429) {
-      spdlog::warn("[DOWNLOAD] Rate limited by {}, attempt {}/{}",
-        mirror_url, attempt, max_retries);
-    } else if (response.status_code == 404) {
-      spdlog::warn("[DOWNLOAD] Beatmapset {} not found on {}",
-        beatmapset_id, mirror_url);
-      return false; // Don't retry 404s
+    if (response.status_code == 404) {
+      attempt.error_message = "Not found (404)";
+    } else if (response.status_code == 429) {
+      attempt.error_message = "Rate limited (429)";
+    } else if (response.status_code == 0) {
+      attempt.error_message = fmt::format("Connection error: {}", response.error.message);
     } else {
-      spdlog::warn("[DOWNLOAD] Failed to download from {}: HTTP {} - {}",
-        mirror_url, response.status_code, response.error.message);
+      attempt.error_message = fmt::format("HTTP {}: {}", response.status_code, response.error.message);
     }
 
-    // Exponential backoff before retry
-    if (attempt < max_retries) {
-      int delay_ms = 1000 * (1 << (attempt - 1)); // 1s, 2s, 4s...
-      spdlog::info("[DOWNLOAD] Waiting {}ms before retry...", delay_ms);
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    }
+    attempts.push_back(attempt);
+    demote_mirror(i);
+    i--;
   }
 
+  last_used_mirror_.clear();
   return false;
 }
 
@@ -196,7 +291,9 @@ bool BeatmapDownloader::download_osz_with_fallback(uint32_t beatmapset_id,
       return true;
     }
 
-    spdlog::warn("[DOWNLOAD] Mirror {} failed, trying next...", mirror);
+    // Demote failed mirror to end of list for future requests
+    demote_mirror(i);
+    i--;  // Adjust index since we removed current element
   }
 
   spdlog::error("[DOWNLOAD] All {} mirrors failed for beatmapset {}",

@@ -4,6 +4,7 @@
 #include <string>
 #include <mutex>
 #include <optional>
+#include <functional>
 #include <dpp/dpp.h>
 
 namespace services {
@@ -14,6 +15,10 @@ namespace services {
  */
 class ChatContextService {
 public:
+    // Callback types
+    using BeatmapsetCallback = std::function<void(uint32_t)>;
+    using BeatmapCallback = std::function<void(uint32_t)>;
+
     ChatContextService() = default;
     ~ChatContextService() = default;
 
@@ -22,12 +27,25 @@ public:
     ChatContextService& operator=(const ChatContextService&) = delete;
 
     /**
+     * Set callback to be called when a beatmapset is detected.
+     * Used for proactive caching.
+     */
+    void set_beatmapset_callback(BeatmapsetCallback callback);
+
+    /**
+     * Set callback to be called when a beatmap (without beatmapset) is detected.
+     * Used for API resolving and caching.
+     */
+    void set_beatmap_callback(BeatmapCallback callback);
+
+    /**
      * Update chat context when a beatmap is mentioned in a message.
-     * @param msg The message content
+     * @param raw_event The raw event JSON (for embeds)
+     * @param content The message content
      * @param channel_id The channel where the message was sent
      * @param msg_id The message ID
      */
-    void update_context(const std::string& msg, dpp::snowflake channel_id, dpp::snowflake msg_id);
+    void update_context(const std::string& raw_event, const std::string& content, dpp::snowflake channel_id, dpp::snowflake msg_id);
 
     /**
      * Get the beatmap ID for the most recent beatmap mentioned in a channel.
@@ -53,6 +71,8 @@ private:
     // Contains channel_id : {message_id : beatmap_id}
     std::unordered_map<dpp::snowflake, std::pair<dpp::snowflake, std::string>> chat_map_;
     mutable std::mutex mutex_;
+    BeatmapsetCallback beatmapset_callback_;
+    BeatmapCallback beatmap_callback_;
 };
 
 } // namespace services

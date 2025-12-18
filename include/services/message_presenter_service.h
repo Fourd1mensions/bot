@@ -171,6 +171,19 @@ public:
     ) const;
 
     /**
+     * Build an audio message for direct file attachment (!song command).
+     * @param beatmap The beatmap
+     * @param filename The audio filename
+     * @param source Source indicator (mirror name or "cached")
+     * @return Complete Discord message with embed (file must be added separately)
+     */
+    dpp::message build_audio_with_attachment(
+        const Beatmap& beatmap,
+        const std::string& filename,
+        const std::string& source
+    ) const;
+
+    /**
      * Build pagination button row.
      * @param prefix Button ID prefix ("lb_" or "rs_")
      * @param current Current page/index (0-indexed)

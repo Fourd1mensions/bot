@@ -134,6 +134,15 @@ void Beatmap::from_json(const json& j) {
     beatmap_url       = j.at("url").get<std::string>();
     // Use "cover" for full-size background image instead of "list"
     image_url         = j.at("beatmapset").at("covers").at("cover").get<std::string>();
+
+    // Parse ranked status - can be in beatmap or beatmapset
+    if (j.contains("ranked")) {
+      status = static_cast<BeatmapStatus>(j["ranked"].get<int>());
+    } else if (j.contains("beatmapset") && j["beatmapset"].contains("ranked")) {
+      status = static_cast<BeatmapStatus>(j["beatmapset"]["ranked"].get<int>());
+    } else {
+      status = BeatmapStatus::Pending;
+    }
   } catch (json::exception e) { spdlog::error("Failed to parse beatmap: {}", e.what()); }
 }
 
