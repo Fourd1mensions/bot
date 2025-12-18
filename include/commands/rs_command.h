@@ -9,8 +9,9 @@ public:
     RsCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
+    std::string get_slash_name() const override { return "rs"; }
     bool matches(const CommandContext& ctx) const override;
-    void execute(const CommandContext& ctx) override;
+    void execute_unified(const UnifiedContext& ctx) override;
 
 private:
     struct ParsedParams {
@@ -20,7 +21,7 @@ private:
         std::string error_message;
     };
 
-    ParsedParams parse(const CommandContext& ctx) const;
+    ParsedParams parse(const std::string& content) const;
 };
 
 } // namespace commands

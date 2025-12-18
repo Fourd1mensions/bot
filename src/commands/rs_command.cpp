@@ -27,13 +27,21 @@ bool RsCommand::matches(const CommandContext& ctx) const {
     return ctx.content_lower.find("!rs") == 0 || ctx.content.find("!кы") == 0;
 }
 
-RsCommand::ParsedParams RsCommand::parse(const CommandContext& ctx) const {
+RsCommand::ParsedParams RsCommand::parse(const std::string& content) const {
     ParsedParams result;
-    std::string content = ctx.content;
 
-    size_t cmd_end = 3; // Length of "!rs"
-    if (content.find("!кы") == 0) {
-        cmd_end = 7; // Length of "!кы" in bytes (UTF-8: 4 bytes for each Cyrillic char + 1 for !)
+    size_t cmd_end = 0;
+    // Find command end - check for known prefixes
+    if (content.find("!rs") == 0) {
+        cmd_end = 3;
+    } else if (content.find("!кы") == 0) {
+        cmd_end = 7; // UTF-8 bytes
+    } else if (content.find("/rs") == 0) {
+        cmd_end = 3;
+    } else {
+        // For slash commands without prefix, params start from beginning
+        result.params = content;
+        return result;
     }
 
     // Check for mode specification (e.g., !rs:taiko)
@@ -75,18 +83,17 @@ RsCommand::ParsedParams RsCommand::parse(const CommandContext& ctx) const {
     return result;
 }
 
-void RsCommand::execute(const CommandContext& ctx) {
+void RsCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
         spdlog::error("[!rs] ServiceContainer is null");
         return;
     }
 
-    auto parsed = parse(ctx);
-    const auto& event = ctx.event;
+    auto parsed = parse(ctx.content);
 
     if (!parsed.valid) {
-        event.reply(parsed.error_message);
+        ctx.reply(parsed.error_message);
         return;
     }
 
@@ -96,15 +103,17 @@ void RsCommand::execute(const CommandContext& ctx) {
     auto cmd_params = s->command_params_service.parse_recent_params(parsed.params, parsed.mode);
 
     // Resolve osu user_id using service
-    auto resolve_result = s->user_resolver_service.resolve(cmd_params.username, event.msg.author.id);
+    auto resolve_result = s->user_resolver_service.resolve(cmd_params.username, ctx.author_id());
     if (!resolve_result) {
-        event.reply(s->message_presenter.build_error_message(resolve_result.error_message));
+        ctx.reply(s->message_presenter.build_error_message(resolve_result.error_message));
         return;
     }
     int64_t osu_user_id = resolve_result.osu_user_id;
 
-    // Show typing indicator
-    s->bot.channel_typing(event.msg.channel_id);
+    // Show typing indicator (only for text commands)
+    if (!ctx.is_slash()) {
+        s->bot.channel_typing(ctx.channel_id());
+    }
 
     // Fetch scores (recent or best)
     std::string scores_response;
@@ -120,10 +129,9 @@ void RsCommand::execute(const CommandContext& ctx) {
             std::chrono::steady_clock::now() - start).count();
 
         if (elapsed > 8) {
-            event.reply(dpp::message(
-                fmt::format("request timeout: osu! api took too long to respond ({}s)", elapsed)));
+            ctx.reply(fmt::format("request timeout: osu! api took too long to respond ({}s)", elapsed));
         } else {
-            event.reply(s->message_presenter.build_error_message(error_messages::FETCH_SCORES_FAILED));
+            ctx.reply(s->message_presenter.build_error_message(error_messages::FETCH_SCORES_FAILED));
         }
         return;
     }
@@ -133,7 +141,7 @@ void RsCommand::execute(const CommandContext& ctx) {
     try {
         json scores_json = json::parse(scores_response);
         if (!scores_json.is_array() || scores_json.empty()) {
-            event.reply(s->message_presenter.build_error_message(error_messages::NO_RECENT_SCORES));
+            ctx.reply(s->message_presenter.build_error_message(error_messages::NO_RECENT_SCORES));
             return;
         }
 
@@ -143,21 +151,21 @@ void RsCommand::execute(const CommandContext& ctx) {
             scores.push_back(score);
         }
     } catch (const json::exception& e) {
-        event.reply(s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
+        ctx.reply(s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
         spdlog::error("Failed to parse scores: {}", e.what());
         return;
     }
 
     // Validate score index
     if (cmd_params.score_index >= scores.size()) {
-        event.reply(s->message_presenter.build_error_message(
+        ctx.reply(s->message_presenter.build_error_message(
             fmt::format(error_messages::SCORE_INDEX_OUT_OF_RANGE_FORMAT, cmd_params.score_index + 1, scores.size())));
         return;
     }
 
     // Create state
     RecentScoreState rs_state(std::move(scores), cmd_params.score_index, cmd_params.mode,
-        cmd_params.include_fails, cmd_params.use_best_scores, osu_user_id, event.msg.author.id);
+        cmd_params.include_fails, cmd_params.use_best_scores, osu_user_id, ctx.author_id());
 
     // Build first page (will parse .osu file for first score only and cache it)
     dpp::message msg = s->recent_score_service.build_page(rs_state);
@@ -166,11 +174,11 @@ void RsCommand::execute(const CommandContext& ctx) {
         std::chrono::steady_clock::now() - start).count();
 
     if (elapsed > 8) {
-        spdlog::warn("[CMD] !rs took {}s to complete (slow API response)", elapsed);
+        spdlog::warn("[CMD] rs took {}s to complete (slow API response)", elapsed);
     }
 
     // Reply with message
-    event.reply(msg, false, [s, rs_state = std::move(rs_state)](const dpp::confirmation_callback_t& callback) mutable {
+    ctx.reply(std::move(msg), false, [s, rs_state = std::move(rs_state)](const dpp::confirmation_callback_t& callback) mutable {
         if (callback.is_error()) {
             spdlog::error("Failed to send recent score message");
             return;
@@ -178,12 +186,10 @@ void RsCommand::execute(const CommandContext& ctx) {
         auto reply_msg = callback.get<dpp::message>();
 
         // Store state in Memcached with 5-minute TTL
-        bool cache_success = false;
         try {
             auto& cache = cache::MemcachedCache::instance();
             cache.cache_recent_scores(reply_msg.id.str(), rs_state);
             spdlog::debug("Stored recent score state for message {} in Memcached", reply_msg.id.str());
-            cache_success = true;
         } catch (const std::exception& e) {
             spdlog::error("Failed to cache recent score state: {}", e.what());
         }
