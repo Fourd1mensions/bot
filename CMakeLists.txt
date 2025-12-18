@@ -122,6 +122,7 @@ set(discord-bot_SOURCES
 	"src/commands/rs_command.cpp"
 	"src/commands/sim_command.cpp"
 	"src/database.cpp"
+	"src/handlers/button_handler.cpp"
 	"src/http_server.cpp"
 	"src/main.cpp"
 	"src/message_builder.cpp"
