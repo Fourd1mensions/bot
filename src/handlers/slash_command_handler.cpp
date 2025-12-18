@@ -103,6 +103,17 @@ void SlashCommandHandler::register_commands(bool delete_existing) {
     bot_.global_command_create(dpp::slashcommand("rs", "Show recent score", bot_.me.id)
         .add_option(dpp::command_option(dpp::co_string, "params", "username, index (#2), mode (:taiko), -b for best, -p for pass only", false))
     );
+    bot_.global_command_create(dpp::slashcommand("bg", "Show beatmap background", bot_.me.id));
+    bot_.global_command_create(dpp::slashcommand("audio", "Get beatmap audio file", bot_.me.id));
+    bot_.global_command_create(dpp::slashcommand("map", "Show beatmap info with PP values", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "params", "+mods (e.g., +HDDT)", false))
+    );
+    bot_.global_command_create(dpp::slashcommand("compare", "Compare your scores on current beatmap", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "params", "username +mods", false))
+    );
+    bot_.global_command_create(dpp::slashcommand("sim", "Simulate PP for accuracy", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "params", "95% +HDDT -c 1500 -n100 5", true))
+    );
 }
 
 void SlashCommandHandler::handle_gandon(const dpp::slashcommand_t& event) {

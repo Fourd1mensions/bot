@@ -44,21 +44,20 @@ std::string CompareCommand::parse_params(const std::string& content) const {
     return params;
 }
 
-void CompareCommand::execute(const CommandContext& ctx) {
+void CompareCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
-        spdlog::error("[!compare] ServiceContainer is null");
+        spdlog::error("[compare] ServiceContainer is null");
         return;
     }
 
     auto start = std::chrono::steady_clock::now();
-    const auto& event = ctx.event;
 
     // Resolve beatmap from context
-    std::string stored_value = s->chat_context_service.get_beatmap_id(event.msg.channel_id);
+    std::string stored_value = s->chat_context_service.get_beatmap_id(ctx.channel_id());
     auto beatmap_result = s->beatmap_resolver_service.resolve(stored_value);
     if (!beatmap_result) {
-        event.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
+        ctx.reply(s->message_presenter.build_error_message(beatmap_result.error_message));
         return;
     }
     uint32_t beatmap_id = beatmap_result.beatmap_id;
@@ -68,20 +67,22 @@ void CompareCommand::execute(const CommandContext& ctx) {
     auto parsed = s->command_params_service.parse_compare_params(params);
 
     // Resolve osu user_id using service
-    auto resolve_result = s->user_resolver_service.resolve(parsed.username, event.msg.author.id);
+    auto resolve_result = s->user_resolver_service.resolve(parsed.username, ctx.author_id());
     if (!resolve_result) {
-        event.reply(s->message_presenter.build_error_message(resolve_result.error_message));
+        ctx.reply(s->message_presenter.build_error_message(resolve_result.error_message));
         return;
     }
     int64_t osu_user_id = resolve_result.osu_user_id;
 
     // Show typing indicator
-    s->bot.channel_typing(event.msg.channel_id);
+    if (!ctx.is_slash()) {
+        s->bot.channel_typing(ctx.channel_id());
+    }
 
     // Get beatmap info
     std::string beatmap_json = s->request.get_beatmap(std::to_string(beatmap_id));
     if (beatmap_json.empty()) {
-        event.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
+        ctx.reply(s->message_presenter.build_error_message("Failed to fetch beatmap information."));
         return;
     }
 
@@ -91,13 +92,13 @@ void CompareCommand::execute(const CommandContext& ctx) {
     // Fetch all scores for this user on this beatmap
     std::string scores_json = s->request.get_user_beatmap_score(std::to_string(beatmap_id), std::to_string(osu_user_id), true);
     if (scores_json.empty()) {
-        event.reply(s->message_presenter.build_error_message("No scores found for this beatmap."));
+        ctx.reply(s->message_presenter.build_error_message("No scores found for this beatmap."));
         return;
     }
 
     json scores_data = json::parse(scores_json);
     if (!scores_data.contains("scores") || !scores_data["scores"].is_array()) {
-        event.reply(s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
+        ctx.reply(s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
         return;
     }
 
@@ -136,7 +137,7 @@ void CompareCommand::execute(const CommandContext& ctx) {
         std::string error_msg = parsed.mods_filter.empty()
             ? std::string(error_messages::NO_SCORES_ON_BEATMAP)
             : fmt::format(error_messages::NO_SCORES_WITH_MODS_FORMAT, parsed.mods_filter);
-        event.reply(s->message_presenter.build_error_message(error_msg));
+        ctx.reply(s->message_presenter.build_error_message(error_msg));
         return;
     }
 
@@ -200,7 +201,7 @@ void CompareCommand::execute(const CommandContext& ctx) {
     spdlog::info("[COMPARE] Fetched {} scores for user {} on beatmap {} in {}ms",
         scores_array.size(), osu_user_id, beatmap_id, elapsed);
 
-    event.reply(content);
+    ctx.reply(content);
 }
 
 } // namespace commands

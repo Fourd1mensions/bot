@@ -17,26 +17,27 @@ std::vector<std::string> BgCommand::get_aliases() const {
     return {"!bg"};
 }
 
-void BgCommand::execute(const CommandContext& ctx) {
+void BgCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
-        spdlog::error("[!bg] ServiceContainer is null");
+        spdlog::error("[bg] ServiceContainer is null");
         return;
     }
 
-    const auto& event = ctx.event;
-    dpp::snowflake channel_id = event.msg.channel_id;
+    dpp::snowflake channel_id = ctx.channel_id();
 
     std::string stored_id = s->chat_context_service.get_beatmap_id(channel_id);
     std::string beatmap_id = s->beatmap_resolver_service.resolve_beatmap_id(stored_id);
 
     if (beatmap_id.empty()) {
-        event.reply(s->message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
+        ctx.reply(s->message_presenter.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
         return;
     }
 
-    // Show typing indicator
-    s->bot.channel_typing(event.msg.channel_id);
+    // Show typing indicator (only for text commands)
+    if (!ctx.is_slash()) {
+        s->bot.channel_typing(channel_id);
+    }
 
     auto start = std::chrono::steady_clock::now();
 
@@ -46,47 +47,47 @@ void BgCommand::execute(const CommandContext& ctx) {
             std::chrono::steady_clock::now() - start).count();
 
         if (elapsed > 8) {
-            event.reply(s->message_presenter.build_error_message(
+            ctx.reply(s->message_presenter.build_error_message(
                 fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
         } else {
-            event.reply(s->message_presenter.build_error_message(error_messages::API_NO_RESPONSE));
+            ctx.reply(s->message_presenter.build_error_message(error_messages::API_NO_RESPONSE));
         }
-        spdlog::error("[!bg] Unable to get beatmap from API");
+        spdlog::error("[bg] Unable to get beatmap from API");
         return;
     }
 
     Beatmap beatmap(response_beatmap);
     uint32_t beatmapset_id = beatmap.get_beatmapset_id();
 
-    spdlog::info("[!bg] Processing beatmapset_id: {}", beatmapset_id);
+    spdlog::info("[bg] Processing beatmapset_id: {}", beatmapset_id);
 
     // Download .osz file if needed
     if (!s->beatmap_downloader.download_osz(beatmapset_id)) {
-        spdlog::error("[!bg] download_osz failed for beatmapset {}", beatmapset_id);
-        event.reply(s->message_presenter.build_error_message(error_messages::DOWNLOAD_FAILED));
+        spdlog::error("[bg] download_osz failed for beatmapset {}", beatmapset_id);
+        ctx.reply(s->message_presenter.build_error_message(error_messages::DOWNLOAD_FAILED));
         return;
     }
 
-    spdlog::info("[!bg] Download complete, creating extract...");
+    spdlog::info("[bg] Download complete, creating extract...");
 
     // Create temporary extract
     auto extract_id = s->beatmap_downloader.create_extract(beatmapset_id);
     if (!extract_id) {
-        spdlog::error("[!bg] Failed to create extract for beatmapset {}", beatmapset_id);
-        event.reply(s->message_presenter.build_error_message(error_messages::EXTRACT_FAILED));
+        spdlog::error("[bg] Failed to create extract for beatmapset {}", beatmapset_id);
+        ctx.reply(s->message_presenter.build_error_message(error_messages::EXTRACT_FAILED));
         return;
     }
 
     // Find background file in extract
     auto extract_path = s->beatmap_downloader.get_extract_path(*extract_id);
     if (!extract_path) {
-        event.reply(s->message_presenter.build_error_message(error_messages::EXTRACT_NOT_FOUND));
+        ctx.reply(s->message_presenter.build_error_message(error_messages::EXTRACT_NOT_FOUND));
         return;
     }
 
     auto bg_filename = s->beatmap_downloader.find_background_in_extract(*extract_path);
     if (!bg_filename) {
-        event.reply(s->message_presenter.build_error_message(error_messages::NO_BACKGROUND));
+        ctx.reply(s->message_presenter.build_error_message(error_messages::NO_BACKGROUND));
         return;
     }
 
@@ -97,13 +98,13 @@ void BgCommand::execute(const CommandContext& ctx) {
     // Create embed with background image using presenter service
     std::string footer_text = s->beatmap_downloader.build_download_footer(beatmapset_id);
     dpp::message msg = s->message_presenter.build_background(beatmap, bg_url, footer_text);
-    event.reply(msg);
+    ctx.reply(msg);
 
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - start).count();
 
     if (elapsed > 8) {
-        spdlog::warn("[CMD] !bg took {}s to complete (slow download or API response)", elapsed);
+        spdlog::warn("[CMD] bg took {}s to complete (slow download or API response)", elapsed);
     }
 }
 

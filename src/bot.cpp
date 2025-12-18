@@ -127,7 +127,9 @@ Bot::Bot(const std::string& token, bool delete_commands)
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     // Call thinking() immediately for commands that make API calls
     const std::string& cmd = event.command.get_command_name();
-    if (cmd == "set" || cmd == "score" || cmd == "weather") {
+    if (cmd == "set" || cmd == "score" || cmd == "weather" ||
+        cmd == "rs" || cmd == "bg" || cmd == "audio" || cmd == "map" ||
+        cmd == "compare" || cmd == "sim" || cmd == "lb") {
       event.thinking();
     }
     std::jthread([this, event = std::move(event)]() mutable {

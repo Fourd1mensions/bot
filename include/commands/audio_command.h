@@ -9,7 +9,8 @@ public:
     AudioCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
-    void execute(const CommandContext& ctx) override;
+    std::string get_slash_name() const override { return "audio"; }
+    void execute_unified(const UnifiedContext& ctx) override;
 };
 
 } // namespace commands

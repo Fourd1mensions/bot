@@ -47,25 +47,43 @@ struct UnifiedContext {
         }, event);
     }
 
+    dpp::snowflake guild_id() const {
+        return std::visit([](auto&& e) -> dpp::snowflake {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, dpp::message_create_t>) {
+                return e.msg.guild_id;
+            } else {
+                return e.command.guild_id;
+            }
+        }, event);
+    }
+
     bool is_slash() const {
         return std::holds_alternative<dpp::slashcommand_t>(event);
     }
 
-    // Reply methods
+    // Reply methods - for slash commands after thinking(), use edit_original_response
     void reply(const std::string& text) const {
         std::visit([&text](auto&& e) {
             using T = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<T, dpp::message_create_t>) {
                 e.reply(text);
             } else {
-                e.reply(dpp::message(text));
+                // After thinking(), must use edit_original_response
+                e.edit_original_response(dpp::message(text));
             }
         }, event);
     }
 
     void reply(const dpp::message& msg) const {
         std::visit([&msg](auto&& e) {
-            e.reply(msg);
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, dpp::message_create_t>) {
+                e.reply(msg);
+            } else {
+                // After thinking(), must use edit_original_response
+                e.edit_original_response(msg);
+            }
         }, event);
     }
 
@@ -75,8 +93,8 @@ struct UnifiedContext {
             if constexpr (std::is_same_v<T, dpp::message_create_t>) {
                 e.reply(std::move(msg), false, callback);
             } else {
-                // For slash commands, use edit_original_response with callback
-                e.reply(std::move(msg), callback);
+                // After thinking(), must use edit_original_response with callback
+                e.edit_original_response(std::move(msg), callback);
             }
         }, event);
     }
