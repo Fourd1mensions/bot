@@ -2,21 +2,17 @@
 
 #include "commands/command.h"
 
-class Bot;
-
 namespace commands {
 
 class RsCommand : public ICommand {
 public:
-    explicit RsCommand(Bot& bot);
+    RsCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
     bool matches(const CommandContext& ctx) const override;
     void execute(const CommandContext& ctx) override;
 
 private:
-    Bot& bot_;
-
     struct ParsedParams {
         std::string mode = "osu";
         std::string params;

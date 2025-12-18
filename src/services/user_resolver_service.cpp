@@ -2,6 +2,7 @@
 #include "services/command_params_service.h"
 #include "requests.h"
 #include "database.h"
+#include "cache.h"
 
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
@@ -81,6 +82,66 @@ UserResolveResult UserResolverService::resolve(
     }
 
     return result;
+}
+
+std::string UserResolverService::get_username_cached(int64_t user_id) {
+    // Try Memcached first (hot cache)
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        if (auto cached = cache.get_username(user_id)) {
+            spdlog::debug("[CACHE] Username HIT (Memcached) for user {} -> {}", user_id, *cached);
+            return *cached;
+        }
+    } catch (const std::exception& e) {
+        spdlog::warn("[CACHE] Memcached get_username failed for user {}: {}", user_id, e.what());
+    }
+
+    // Try PostgreSQL cache (warm cache)
+    try {
+        auto& db = db::Database::instance();
+        if (auto cached = db.get_cached_username(user_id)) {
+            spdlog::debug("[CACHE] Username HIT (PostgreSQL) for user {} -> {}", user_id, *cached);
+
+            // Update Memcached with this username
+            try {
+                auto& cache = cache::MemcachedCache::instance();
+                cache.cache_username(user_id, *cached);
+                spdlog::debug("[CACHE] Promoted username to Memcached");
+            } catch (const std::exception& e) {
+                spdlog::debug("[CACHE] Failed to promote to Memcached: {}", e.what());
+            }
+
+            return *cached;
+        }
+    } catch (const std::exception& e) {
+        spdlog::warn("[CACHE] PostgreSQL get_cached_username failed for user {}: {}", user_id, e.what());
+    }
+
+    // Cache miss - fetch from API
+    spdlog::debug("[CACHE] Username MISS for user {}, fetching from API", user_id);
+    std::string usr_j = request_.get_user(fmt::format("{}", user_id), true);
+    json usr = json::parse(usr_j);
+    std::string username = usr.at("username");
+    spdlog::debug("[CACHE] Fetched username from API: {} -> {}", user_id, username);
+
+    // Cache in both layers
+    try {
+        auto& db = db::Database::instance();
+        db.cache_username(user_id, username);
+        spdlog::debug("[CACHE] Cached username in PostgreSQL");
+    } catch (const std::exception& e) {
+        spdlog::warn("[CACHE] Failed to cache username in PostgreSQL: {}", e.what());
+    }
+
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        cache.cache_username(user_id, username);
+        spdlog::debug("[CACHE] Cached username in Memcached");
+    } catch (const std::exception& e) {
+        spdlog::debug("[CACHE] Failed to cache username in Memcached: {}", e.what());
+    }
+
+    return username;
 }
 
 } // namespace services

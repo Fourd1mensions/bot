@@ -49,6 +49,12 @@ public:
         dpp::snowflake caller_discord_id
     ) const;
 
+    /**
+     * Get username for osu! user ID with multi-layer caching.
+     * Checks Memcached -> PostgreSQL -> API.
+     */
+    std::string get_username_cached(int64_t user_id);
+
 private:
     Request& request_;
 };

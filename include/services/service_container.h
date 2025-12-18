@@ -15,6 +15,7 @@ class MessagePresenterService;
 class CommandParamsService;
 class BeatmapCacheService;
 class BeatmapPerformanceService;
+class RecentScoreService;
 }
 
 /**
@@ -33,5 +34,6 @@ struct ServiceContainer {
   services::MessagePresenterService& message_presenter;
   services::CommandParamsService& command_params_service;
   services::BeatmapPerformanceService& performance_service;
+  services::RecentScoreService& recent_score_service;
   services::BeatmapCacheService* beatmap_cache_service;  // Optional, may be null
 };
