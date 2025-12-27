@@ -67,6 +67,10 @@ Bot::Bot(const std::string& token, bool delete_commands)
       request, beatmap_downloader, chat_context_service, beatmap_resolver_service,
       user_mapping_service, user_resolver_service, message_presenter, performance_service, bot);
 
+  // Initialize beatmap extract service
+  beatmap_extract_service = std::make_unique<services::BeatmapExtractService>(
+      beatmap_downloader, request, chat_context_service, beatmap_resolver_service, message_presenter);
+
   // Initialize handlers
   button_handler = std::make_unique<handlers::ButtonHandler>(
       *leaderboard_service, *recent_score_service, request);
@@ -155,6 +159,7 @@ Bot::Bot(const std::string& token, bool delete_commands)
     .performance_service = performance_service,
     .recent_score_service = *recent_score_service,
     .leaderboard_service = *leaderboard_service,
+    .beatmap_extract_service = *beatmap_extract_service,
     .beatmap_cache_service = beatmap_cache_service.get()
   });
 

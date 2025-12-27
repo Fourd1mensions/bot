@@ -8,6 +8,7 @@
 #include <requests.h>
 #include <osu.h>
 #include <utils.h>
+#include <cache.h>
 #include <database.h>
 #include <error_messages.h>
 #include <spdlog/spdlog.h>
@@ -62,9 +63,57 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
     }
     uint32_t beatmap_id = beatmap_result.beatmap_id;
 
-    // Parse parameters using service
-    std::string params = parse_params(ctx.content);
-    auto parsed = s->command_params_service.parse_compare_params(params);
+    // Parse parameters
+    services::CompareParams parsed;
+    std::vector<std::string> warnings;
+
+    if (ctx.is_slash()) {
+        if (auto username = ctx.get_string_param("username")) {
+            parsed.username = *username;
+        }
+        if (auto mods = ctx.get_string_param("mods")) {
+            auto validation = utils::validate_mods(*mods);
+            parsed.mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                warnings.push_back(validation.incompatible_msg);
+            }
+        }
+    } else {
+        std::string params = parse_params(ctx.content);
+        parsed = s->command_params_service.parse_compare_params(params);
+
+        // Validate mods from text command
+        if (!parsed.mods_filter.empty()) {
+            auto validation = utils::validate_mods(parsed.mods_filter);
+            parsed.mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                warnings.push_back(validation.incompatible_msg);
+            }
+        }
+    }
+
+    // Log warnings
+    for (const auto& w : warnings) {
+        spdlog::info("[compare] Warning: {}", w);
+    }
 
     // Resolve osu user_id using service
     auto resolve_result = s->user_resolver_service.resolve(parsed.username, ctx.author_id());
@@ -152,56 +201,44 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
     // Get username
     std::string username = s->user_resolver_service.get_username_cached(osu_user_id);
 
-    // Build response
-    std::string content = fmt::format("**{}** on **{}**\n", username, beatmap.to_string());
-    if (!parsed.mods_filter.empty()) {
-        content += fmt::format("Filtered by: +{}\n", parsed.mods_filter);
-    }
-    content += fmt::format("Found {} score(s)\n\n", scores_array.size());
-
-    // Show up to 10 scores
-    size_t count = std::min(scores_array.size(), static_cast<size_t>(10));
-    for (size_t i = 0; i < count; ++i) {
-        Score score(scores_array[i]);
-
-        std::string mods_str = score.get_mods();
-        if (mods_str.empty()) mods_str = "NM";
-
-        content += fmt::format("**#{}** {} **+{}** - **{:.2f}pp** - {:.2f}%\n",
-            i + 1,
-            utils::get_rank_emoji(score.get_rank()),
-            mods_str,
-            score.get_pp(),
-            score.get_accuracy() * 100.0
-        );
-
-        content += fmt::format("    {}x/{}x - [{}/{}/{}/{}]",
-            score.get_max_combo(),
-            beatmap.get_max_combo(),
-            score.get_count_300(),
-            score.get_count_100(),
-            score.get_count_50(),
-            score.get_count_miss()
-        );
-
-        if (score.get_passed()) {
-            content += "\n";
-        } else {
-            content += " - **FAILED**\n";
-        }
+    // Build scores vector
+    std::vector<Score> scores;
+    for (const auto& score_json : scores_array) {
+        scores.emplace_back(score_json);
     }
 
-    if (scores_array.size() > 10) {
-        content += fmt::format("\n*...and {} more score(s)*", scores_array.size() - 10);
-    }
+    // Create CompareState
+    CompareState state(std::move(scores), beatmap, username, parsed.mods_filter, ctx.author_id());
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
 
     spdlog::info("[COMPARE] Fetched {} scores for user {} on beatmap {} in {}ms",
-        scores_array.size(), osu_user_id, beatmap_id, elapsed);
+        state.scores.size(), osu_user_id, beatmap_id, elapsed);
 
-    ctx.reply(content);
+    // Build and send embed
+    dpp::message msg = s->message_presenter.build_compare_page(state);
+
+    // Send and cache state for pagination (only if more than 1 page)
+    if (state.total_pages > 1) {
+        ctx.reply(std::move(msg), false, [state](const dpp::confirmation_callback_t& callback) {
+            if (callback.is_error()) {
+                return;
+            }
+
+            // Get message ID from callback and cache state
+            auto msg_result = callback.get<dpp::message>();
+            try {
+                auto& cache_inst = cache::MemcachedCache::instance();
+                cache_inst.cache_compare(msg_result.id.str(), state);
+                spdlog::info("[COMPARE] Cached compare state for message {}", msg_result.id.str());
+            } catch (const std::exception& e) {
+                spdlog::warn("[COMPARE] Failed to cache compare state: {}", e.what());
+            }
+        });
+    } else {
+        ctx.reply(msg);
+    }
 }
 
 } // namespace commands

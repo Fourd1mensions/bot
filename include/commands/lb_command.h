@@ -5,6 +5,7 @@
 #include <state/session_state.h>
 #include <string>
 #include <optional>
+#include <vector>
 
 namespace commands {
 
@@ -18,6 +19,7 @@ struct LbParams {
     std::string mods_filter;              // e.g., "HDDT"
     std::optional<std::string> beatmap_id; // If specified in command
     LbSortMethod sort_method = LbSortMethod::PP;
+    std::vector<std::string> warnings;    // Non-fatal issues found during parsing
 };
 
 /**
@@ -38,7 +40,8 @@ public:
     LbCommand() = default;
 
     std::vector<std::string> get_aliases() const override;
-    void execute(const CommandContext& ctx) override;
+    std::string get_slash_name() const override { return "lb"; }
+    void execute_unified(const UnifiedContext& ctx) override;
 
 private:
     /**
@@ -53,8 +56,9 @@ private:
 
     /**
      * Parse sort method string to enum.
+     * Returns pair of (method, optional warning message).
      */
-    LbSortMethod parse_sort_method(const std::string& method) const;
+    std::pair<LbSortMethod, std::string> parse_sort_method(const std::string& method) const;
 };
 
 } // namespace commands

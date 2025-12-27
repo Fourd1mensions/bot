@@ -20,6 +20,7 @@
 #include <services/beatmap_cache_service.h>
 #include <services/recent_score_service.h>
 #include <services/leaderboard_service.h>
+#include <services/beatmap_extract_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -88,6 +89,7 @@ private:
   std::unique_ptr<services::BeatmapCacheService> beatmap_cache_service;
   std::unique_ptr<services::RecentScoreService> recent_score_service;
   std::unique_ptr<services::LeaderboardService> leaderboard_service;
+  std::unique_ptr<services::BeatmapExtractService> beatmap_extract_service;
 
   // Event handlers
   std::unique_ptr<handlers::ButtonHandler> button_handler;

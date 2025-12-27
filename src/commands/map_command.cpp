@@ -10,7 +10,6 @@
 #include <database.h>
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
-#include <algorithm>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -21,19 +20,6 @@ std::vector<std::string> MapCommand::get_aliases() const {
     return {"!map", "!m"};
 }
 
-std::string MapCommand::parse_mods_filter(const std::string& content) const {
-    std::string mods_filter;
-    size_t plus_pos = content.find('+');
-    if (plus_pos != std::string::npos) {
-        mods_filter = content.substr(plus_pos + 1);
-        mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), ' '), mods_filter.end());
-        mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), '+'), mods_filter.end());
-        std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(),
-            [](unsigned char c) { return std::toupper(c); });
-    }
-    return mods_filter;
-}
-
 void MapCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
@@ -41,7 +27,52 @@ void MapCommand::execute_unified(const UnifiedContext& ctx) {
         return;
     }
 
-    std::string mods_filter = parse_mods_filter(ctx.content);
+    std::string mods_filter;
+    std::vector<std::string> warnings;
+
+    if (ctx.is_slash()) {
+        if (auto mods = ctx.get_string_param("mods")) {
+            auto validation = utils::validate_mods(*mods);
+            mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                warnings.push_back(validation.incompatible_msg);
+            }
+        }
+    } else {
+        std::string raw_mods = utils::extract_mods_from_content(ctx.content);
+        if (!raw_mods.empty()) {
+            auto validation = utils::validate_mods(raw_mods);
+            mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                warnings.push_back(validation.incompatible_msg);
+            }
+        }
+    }
+
+    // Log warnings
+    if (!warnings.empty()) {
+        for (const auto& w : warnings) {
+            spdlog::info("[map] Warning: {}", w);
+        }
+    }
 
     // Resolve beatmap from context
     std::string stored_value = s->chat_context_service.get_beatmap_id(ctx.channel_id());

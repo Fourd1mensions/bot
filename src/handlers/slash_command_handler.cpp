@@ -101,18 +101,49 @@ void SlashCommandHandler::register_commands(bool delete_existing) {
 
     // Commands mapped to text command implementations
     bot_.global_command_create(dpp::slashcommand("rs", "Show recent score", bot_.me.id)
-        .add_option(dpp::command_option(dpp::co_string, "params", "username, index (#2), mode (:taiko), -b for best, -p for pass only", false))
+        .add_option(dpp::command_option(dpp::co_string, "username", "osu! username", false))
+        .add_option(dpp::command_option(dpp::co_integer, "index", "Score index (1-100)", false)
+            .set_min_value(1).set_max_value(100))
+        .add_option(dpp::command_option(dpp::co_string, "mode", "Game mode", false)
+            .add_choice(dpp::command_option_choice("osu!", std::string("osu")))
+            .add_choice(dpp::command_option_choice("taiko", std::string("taiko")))
+            .add_choice(dpp::command_option_choice("catch", std::string("catch")))
+            .add_choice(dpp::command_option_choice("mania", std::string("mania"))))
+        .add_option(dpp::command_option(dpp::co_boolean, "best", "Show best scores instead of recent", false))
+        .add_option(dpp::command_option(dpp::co_boolean, "pass", "Show only passed scores", false))
     );
     bot_.global_command_create(dpp::slashcommand("bg", "Show beatmap background", bot_.me.id));
     bot_.global_command_create(dpp::slashcommand("audio", "Get beatmap audio file", bot_.me.id));
     bot_.global_command_create(dpp::slashcommand("map", "Show beatmap info with PP values", bot_.me.id)
-        .add_option(dpp::command_option(dpp::co_string, "params", "+mods (e.g., +HDDT)", false))
+        .add_option(dpp::command_option(dpp::co_string, "mods", "Mods (e.g., HDDT)", false))
     );
     bot_.global_command_create(dpp::slashcommand("compare", "Compare your scores on current beatmap", bot_.me.id)
-        .add_option(dpp::command_option(dpp::co_string, "params", "username +mods", false))
+        .add_option(dpp::command_option(dpp::co_string, "username", "osu! username", false))
+        .add_option(dpp::command_option(dpp::co_string, "mods", "Filter by mods (e.g., HDDT)", false))
     );
     bot_.global_command_create(dpp::slashcommand("sim", "Simulate PP for accuracy", bot_.me.id)
-        .add_option(dpp::command_option(dpp::co_string, "params", "95% +HDDT -c 1500 -n100 5", true))
+        .add_option(dpp::command_option(dpp::co_number, "accuracy", "Accuracy % (e.g., 99.5)", true)
+            .set_min_value(0.0).set_max_value(100.0))
+        .add_option(dpp::command_option(dpp::co_string, "mods", "Mods (e.g., HDDT)", false))
+        .add_option(dpp::command_option(dpp::co_string, "mode", "Game mode", false)
+            .add_choice(dpp::command_option_choice("osu!", std::string("osu")))
+            .add_choice(dpp::command_option_choice("taiko", std::string("taiko")))
+            .add_choice(dpp::command_option_choice("catch", std::string("catch")))
+            .add_choice(dpp::command_option_choice("mania", std::string("mania"))))
+        .add_option(dpp::command_option(dpp::co_integer, "combo", "Max combo achieved", false))
+        .add_option(dpp::command_option(dpp::co_integer, "n100", "Number of 100s", false))
+        .add_option(dpp::command_option(dpp::co_integer, "n50", "Number of 50s", false))
+        .add_option(dpp::command_option(dpp::co_integer, "misses", "Number of misses", false))
+    );
+    bot_.global_command_create(dpp::slashcommand("lb", "Show server leaderboard for beatmap", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "mods", "Filter by mods (e.g., HDDT)", false))
+        .add_option(dpp::command_option(dpp::co_string, "sort", "Sort method", false)
+            .add_choice(dpp::command_option_choice("PP", std::string("pp")))
+            .add_choice(dpp::command_option_choice("Score", std::string("score")))
+            .add_choice(dpp::command_option_choice("Accuracy", std::string("acc")))
+            .add_choice(dpp::command_option_choice("Combo", std::string("combo")))
+            .add_choice(dpp::command_option_choice("Date", std::string("date"))))
+        .add_option(dpp::command_option(dpp::co_string, "beatmap", "Beatmap URL or ID", false))
     );
 }
 

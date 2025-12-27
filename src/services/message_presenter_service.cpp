@@ -331,6 +331,68 @@ dpp::message MessagePresenterService::build_audio_with_attachment(
     return msg;
 }
 
+dpp::message MessagePresenterService::build_compare_page(const CompareState& state) const {
+    std::string title = state.beatmap.to_string();
+    if (!state.mods_filter.empty()) {
+        title += fmt::format(" +{}", state.mods_filter);
+    }
+
+    std::string description = fmt::format("**{}**'s scores ({} found)\n\n", state.username, state.scores.size());
+
+    // Calculate page bounds
+    size_t start_idx = state.current_page * CompareState::SCORES_PER_PAGE;
+    size_t end_idx = std::min(start_idx + CompareState::SCORES_PER_PAGE, state.scores.size());
+
+    for (size_t i = start_idx; i < end_idx; ++i) {
+        const auto& score = state.scores[i];
+        std::string rank_emoji = get_rank_emoji(score.get_rank());
+        std::string mods_str = score.get_mods().empty() ? "NM" : score.get_mods();
+
+        description += fmt::format("**#{}** {} **+{}** • **{:.2f}pp** • {:.2f}%\n",
+            i + 1,
+            rank_emoji,
+            mods_str,
+            score.get_pp(),
+            score.get_accuracy() * 100.0
+        );
+
+        description += fmt::format("▸ {}x/{} • [{}/{}/{}/{}]",
+            score.get_max_combo(),
+            state.beatmap.get_max_combo(),
+            score.get_count_300(),
+            score.get_count_100(),
+            score.get_count_50(),
+            score.get_count_miss()
+        );
+
+        if (!score.get_passed()) {
+            description += " • **FAILED**";
+        }
+        description += "\n\n";
+    }
+
+    std::string footer_text = fmt::format("Page {}/{}", state.current_page + 1, state.total_pages);
+
+    auto embed = dpp::embed()
+        .set_color(dpp::colors::viola_purple)
+        .set_title(title)
+        .set_url(state.beatmap.get_beatmap_url())
+        .set_thumbnail(state.beatmap.get_image_url())
+        .set_description(description)
+        .set_footer(dpp::embed_footer().set_text(footer_text))
+        .set_timestamp(time(0));
+
+    dpp::message msg;
+    msg.add_embed(embed);
+
+    // Add pagination buttons only if more than one page
+    if (state.total_pages > 1) {
+        msg.add_component(build_pagination_row("cmp_", state.current_page, state.total_pages, false));
+    }
+
+    return msg;
+}
+
 dpp::message MessagePresenterService::build_from_cache_data(
     const RecentScoreCacheData& cache_data,
     const PaginationInfo& pagination

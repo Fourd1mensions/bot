@@ -2,10 +2,12 @@
 #include "services/service_container.h"
 #include "services/leaderboard_service.h"
 #include <osu.h>
+#include <utils.h>
 #include <algorithm>
 #include <regex>
 #include <sstream>
 #include <spdlog/spdlog.h>
+#include <fmt/format.h>
 
 namespace commands {
 
@@ -33,19 +35,36 @@ LbParams LbCommand::parse_params(const std::string& content) const {
 
         // Check for sort flag: -s <method>
         if ((t == "-s" || t == "--sort") && i + 1 < tokens.size()) {
-            params.sort_method = parse_sort_method(tokens[i + 1]);
+            auto [method, warning] = parse_sort_method(tokens[i + 1]);
+            params.sort_method = method;
+            if (!warning.empty()) {
+                params.warnings.push_back(warning);
+            }
             ++i;  // Skip next token
             continue;
         }
 
         // Check for mods: +HD, +HDDT, etc.
         if (t.length() > 1 && t[0] == '+') {
-            std::string mods = t.substr(1);
-            // Remove any extra plus signs and convert to uppercase
-            mods.erase(std::remove(mods.begin(), mods.end(), '+'), mods.end());
-            std::transform(mods.begin(), mods.end(), mods.begin(),
-                [](unsigned char c) { return std::toupper(c); });
-            params.mods_filter = mods;
+            std::string mods_input = t.substr(1);
+            auto validation = utils::validate_mods(mods_input);
+
+            params.mods_filter = validation.normalized;
+
+            // Add warnings for invalid mods
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                params.warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+
+            // Add warning for incompatible mods
+            if (validation.has_incompatible) {
+                params.warnings.push_back(validation.incompatible_msg);
+            }
             continue;
         }
 
@@ -82,36 +101,88 @@ std::optional<std::string> LbCommand::extract_beatmap_id(const std::string& toke
     return std::nullopt;
 }
 
-LbSortMethod LbCommand::parse_sort_method(const std::string& method) const {
+std::pair<LbSortMethod, std::string> LbCommand::parse_sort_method(const std::string& method) const {
     std::string lower = method;
     std::transform(lower.begin(), lower.end(), lower.begin(),
         [](unsigned char c) { return std::tolower(c); });
 
+    if (lower == "pp" || lower == "p") {
+        return {LbSortMethod::PP, ""};
+    }
     if (lower == "score" || lower == "s") {
-        return LbSortMethod::Score;
+        return {LbSortMethod::Score, ""};
     }
     if (lower == "acc" || lower == "accuracy" || lower == "a") {
-        return LbSortMethod::Acc;
+        return {LbSortMethod::Acc, ""};
     }
     if (lower == "combo" || lower == "c") {
-        return LbSortMethod::Combo;
+        return {LbSortMethod::Combo, ""};
     }
     if (lower == "date" || lower == "recent" || lower == "d" || lower == "r") {
-        return LbSortMethod::Date;
+        return {LbSortMethod::Date, ""};
     }
-    // Default to PP
-    return LbSortMethod::PP;
+    // Unknown method - return default with warning
+    return {LbSortMethod::PP, fmt::format("Unknown sort '{}'. Using pp. Valid: pp, score, acc, combo, date", method)};
 }
 
-void LbCommand::execute(const CommandContext& ctx) {
+void LbCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
-        spdlog::error("[!lb] ServiceContainer is null");
+        spdlog::error("[lb] ServiceContainer is null");
         return;
     }
 
-    auto params = parse_params(ctx.content);
-    s->leaderboard_service.create_leaderboard(ctx.event, params.mods_filter, params.beatmap_id, params.sort_method);
+    LbParams params;
+
+    if (ctx.is_slash()) {
+        // Get parameters directly from slash command with validation
+        if (auto mods = ctx.get_string_param("mods")) {
+            auto validation = utils::validate_mods(*mods);
+            params.mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                params.warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                params.warnings.push_back(validation.incompatible_msg);
+            }
+        }
+        if (auto sort = ctx.get_string_param("sort")) {
+            auto [method, warning] = parse_sort_method(*sort);
+            params.sort_method = method;
+            if (!warning.empty()) {
+                params.warnings.push_back(warning);
+            }
+        }
+        if (auto beatmap = ctx.get_string_param("beatmap")) {
+            params.beatmap_id = extract_beatmap_id(*beatmap);
+            if (!params.beatmap_id) {
+                // Maybe it's just a raw ID
+                params.beatmap_id = *beatmap;
+            }
+        }
+    } else {
+        // Parse text command
+        params = parse_params(ctx.content);
+    }
+
+    // Show warnings to user if any
+    if (!params.warnings.empty()) {
+        std::string warning_msg = ":warning: ";
+        for (size_t i = 0; i < params.warnings.size(); ++i) {
+            if (i > 0) warning_msg += " • ";
+            warning_msg += params.warnings[i];
+        }
+        // For now, just log warnings. Could also prepend to response.
+        spdlog::info("[lb] Warnings: {}", warning_msg);
+    }
+
+    s->leaderboard_service.create_leaderboard(ctx, params.mods_filter, params.beatmap_id, params.sort_method);
 }
 
 } // namespace commands

@@ -11,6 +11,10 @@
 class Request;
 class BeatmapDownloader;
 
+namespace commands {
+struct UnifiedContext;
+}
+
 namespace services {
 
 class ChatContextService;
@@ -43,10 +47,20 @@ public:
     dpp::message build_page(const LeaderboardState& state, const std::string& mods_filter = "");
 
     /**
-     * Create and send a leaderboard message.
+     * Create and send a leaderboard message (text command).
      */
     void create_leaderboard(
         const dpp::message_create_t& event,
+        const std::string& mods_filter = "",
+        const std::optional<std::string>& beatmap_id_override = std::nullopt,
+        LbSortMethod sort_method = LbSortMethod::PP
+    );
+
+    /**
+     * Create and send a leaderboard message (unified context for both text and slash).
+     */
+    void create_leaderboard(
+        const commands::UnifiedContext& ctx,
         const std::string& mods_filter = "",
         const std::optional<std::string>& beatmap_id_override = std::nullopt,
         LbSortMethod sort_method = LbSortMethod::PP

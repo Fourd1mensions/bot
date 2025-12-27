@@ -3,6 +3,8 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <algorithm>
+#include <set>
 
 using namespace std::chrono;
 
@@ -232,6 +234,103 @@ utils::ModFlags utils::parse_mod_flags(const std::string& mods) {
   flags.has_dt = mods.find("DT") != std::string::npos || mods.find("NC") != std::string::npos;
   flags.has_ht = mods.find("HT") != std::string::npos;
   return flags;
+}
+
+utils::ModsValidationResult utils::validate_mods(const std::string& mods) {
+  ModsValidationResult result;
+
+  if (mods.empty() || mods == "NM") {
+    result.normalized = "";
+    return result;
+  }
+
+  // Normalize to uppercase
+  std::string upper = mods;
+  std::transform(upper.begin(), upper.end(), upper.begin(),
+    [](unsigned char c) { return std::toupper(c); });
+
+  // Remove spaces and plus signs
+  upper.erase(std::remove_if(upper.begin(), upper.end(),
+    [](char c) { return c == ' ' || c == '+'; }), upper.end());
+
+  // Parse 2-character mod codes
+  std::vector<std::string> found_mods;
+  std::set<std::string> seen_mods;
+
+  for (size_t i = 0; i + 1 < upper.length(); i += 2) {
+    std::string mod = upper.substr(i, 2);
+
+    // Check if valid mod
+    bool is_valid = std::find(VALID_MODS.begin(), VALID_MODS.end(), mod) != VALID_MODS.end();
+
+    if (!is_valid) {
+      result.invalid.push_back(mod);
+    } else if (seen_mods.find(mod) == seen_mods.end()) {
+      found_mods.push_back(mod);
+      seen_mods.insert(mod);
+    }
+  }
+
+  // Handle odd-length string (leftover character)
+  if (upper.length() % 2 == 1) {
+    result.invalid.push_back(std::string(1, upper.back()));
+  }
+
+  // Check for incompatible mods
+  bool has_hr = seen_mods.count("HR") > 0;
+  bool has_ez = seen_mods.count("EZ") > 0;
+  bool has_dt = seen_mods.count("DT") > 0 || seen_mods.count("NC") > 0;
+  bool has_ht = seen_mods.count("HT") > 0;
+
+  if (has_hr && has_ez) {
+    result.has_incompatible = true;
+    result.incompatible_msg = "HR and EZ cannot be used together";
+  } else if (has_dt && has_ht) {
+    result.has_incompatible = true;
+    result.incompatible_msg = "DT/NC and HT cannot be used together";
+  }
+
+  // Build normalized string
+  for (const auto& mod : found_mods) {
+    result.normalized += mod;
+  }
+
+  return result;
+}
+
+std::string utils::extract_mods_from_content(const std::string& content) {
+  size_t plus_pos = content.find('+');
+  if (plus_pos == std::string::npos) {
+    return "";
+  }
+
+  // Find end of mods (next space or end of string)
+  size_t end_pos = content.find(' ', plus_pos);
+  if (end_pos == std::string::npos) {
+    end_pos = content.length();
+  }
+
+  return content.substr(plus_pos + 1, end_pos - plus_pos - 1);
+}
+
+std::string utils::sanitize_filename(const std::string& filename) {
+  std::string result;
+  result.reserve(filename.size() * 2);  // May expand due to multi-byte chars
+  for (char c : filename) {
+    switch (c) {
+      case '"':  result += "\xE2\x80\x9D"; break;  // " -> "
+      case '/':  result += "\xE2\x88\x95"; break;  // / -> ∕
+      case '\\': result += "\xE2\x88\x96"; break;  // \ -> ∖
+      case ':':  result += "\xEF\xBC\x9A"; break;  // : -> ：
+      case '*':  result += "\xE2\x9C\xB1"; break;  // * -> ✱
+      case '?':  result += "\xEF\xBC\x9F"; break;  // ? -> ？
+      case '<':  result += "\xEF\xBC\x9C"; break;  // < -> ＜
+      case '>':  result += "\xEF\xBC\x9E"; break;  // > -> ＞
+      case '|':  result += "\xEF\xBD\x9C"; break;  // | -> ｜
+      default:   result += c; break;
+    }
+  }
+  return result;
 }
 
 std::string utils::get_rank_emoji(const std::string& rank) {

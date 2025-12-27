@@ -13,7 +13,6 @@
 
 using json = nlohmann::json;
 
-// TODO: bring back Config to request.h after rewrite save_config()
 struct Config {
   std::string api_v1_key, client_id, client_secret, auth_code, access_token,
       refresh_token, redirect_uri, weather_api_key;
@@ -26,8 +25,6 @@ struct Config {
 };
 
 namespace utils {
-
-  // TODO: read_config, emoji_json
 
   namespace file {
     std::string read(const std::string& path);
@@ -80,7 +77,7 @@ namespace utils {
 
     return true;
   }
-  // TODO: rewrite this function
+
   bool save_config(const Config& config);
   bool load_config(Config& config);
   time_t ISO8601_to_UNIX(const std::string& datetime);
@@ -106,6 +103,31 @@ namespace utils {
 
   // Parse mod string (e.g., "HDDT", "HRHD") into mod flags
   ModFlags parse_mod_flags(const std::string& mods);
+
+  // Result of mods validation
+  struct ModsValidationResult {
+    std::string normalized;           // Cleaned up mods string (uppercase, no duplicates)
+    std::vector<std::string> invalid; // List of invalid mod codes found
+    bool has_incompatible = false;    // e.g., HR+EZ, DT+HT
+    std::string incompatible_msg;     // Description of incompatibility
+
+    bool is_valid() const { return invalid.empty() && !has_incompatible; }
+  };
+
+  // Valid osu! mod codes
+  inline const std::vector<std::string> VALID_MODS = {
+    "NF", "EZ", "TD", "HD", "HR", "SD", "DT", "RX", "HT", "NC",
+    "FL", "AT", "SO", "AP", "PF", "K4", "K5", "K6", "K7", "K8",
+    "FI", "RN", "CN", "TP", "K9", "KC", "K1", "K3", "K2", "SV2", "MR"
+  };
+
+  // Validate and normalize mods string
+  // Returns validation result with normalized mods and any errors
+  ModsValidationResult validate_mods(const std::string& mods);
+
+  // Extract mods from command content (finds +MODS pattern)
+  // Returns empty string if no mods found
+  std::string extract_mods_from_content(const std::string& content);
 
   // Get Discord emoji string for osu! rank (X, XH, S, SH, A, B, C, D)
   std::string get_rank_emoji(const std::string& rank);
@@ -135,4 +157,8 @@ namespace utils {
     }
     return length_seconds;
   }
+
+  // Sanitize filename by replacing problematic characters with safe Unicode alternatives
+  // Replaces: " / \ : * ? < > |
+  std::string sanitize_filename(const std::string& filename);
 } // namespace utils

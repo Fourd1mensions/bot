@@ -35,6 +35,8 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     }
 
     const Score& score = state.scores[state.current_index];
+    spdlog::info("[RS] build_page called for index {}/{}, beatmap_id={}, api_pp={:.2f}",
+        state.current_index + 1, state.scores.size(), score.get_beatmap_id(), score.get_pp());
 
     // Check cache first for fast navigation
     auto cache_it = state.page_content_cache.find(state.current_index);
@@ -101,6 +103,9 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     uint32_t beatmapset_id = beatmap.get_beatmapset_id();
     std::optional<std::string> osu_file_path_opt;
 
+    spdlog::debug("[PP] Processing beatmap_id={}, beatmapset_id={}, mode={}, api_pp={:.2f}",
+        beatmap_id, beatmapset_id, score.get_mode(), score.get_pp());
+
     // Check cache first
     auto difficulty_cache_it = state.beatmap_difficulty_cache.find(beatmap_id);
     if (difficulty_cache_it != state.beatmap_difficulty_cache.end()) {
@@ -150,6 +155,9 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     } fc_perf;
 
     // Use full beatmap parsing if .osu file is available (osu!standard only)
+    spdlog::debug("[PP] osu_file_path has_value={}, mode={}, current_pp={:.2f}",
+        osu_file_path_opt.has_value(), score.get_mode(), current_pp);
+
     if (osu_file_path_opt.has_value() && score.get_mode() == "osu") {
         if (current_pp <= 0.01) {
             // Use osu-tools for accurate PP calculation
