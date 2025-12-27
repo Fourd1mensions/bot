@@ -43,6 +43,9 @@ private:
     void handle_rs_pagination(const dpp::button_click_t& event, const std::string& button_id);
     void handle_rs_refresh(const dpp::button_click_t& event);
 
+    // Compare button handlers
+    void handle_cmp_pagination(const dpp::button_click_t& event, const std::string& button_id);
+
     // Form handlers
     void handle_lb_jump_modal(const dpp::form_submit_t& event);
 

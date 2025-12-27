@@ -8,6 +8,7 @@
 #include <osu.h>
 #include <osu_tools.h>
 #include <database.h>
+#include <utils.h>
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <algorithm>
@@ -164,11 +165,78 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
         return;
     }
 
-    auto parsed = parse(ctx.content);
+    ParsedParams parsed;
+    std::vector<std::string> warnings;
 
-    if (!parsed.valid) {
-        ctx.reply(parsed.error_message);
-        return;
+    if (ctx.is_slash()) {
+        // Get parameters directly from slash command
+        if (auto accuracy = ctx.get_double_param("accuracy")) {
+            parsed.accuracy = *accuracy / 100.0; // Convert from % to decimal
+        } else {
+            ctx.reply("Accuracy is required.");
+            return;
+        }
+        if (auto mods = ctx.get_string_param("mods")) {
+            auto validation = utils::validate_mods(*mods);
+            parsed.mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                warnings.push_back(validation.incompatible_msg);
+            }
+        }
+        if (auto mode = ctx.get_string_param("mode")) {
+            parsed.mode = *mode;
+        }
+        if (auto combo = ctx.get_int_param("combo")) {
+            parsed.combo = static_cast<int>(*combo);
+        }
+        if (auto n100 = ctx.get_int_param("n100")) {
+            parsed.count_100 = static_cast<int>(*n100);
+        }
+        if (auto n50 = ctx.get_int_param("n50")) {
+            parsed.count_50 = static_cast<int>(*n50);
+        }
+        if (auto misses = ctx.get_int_param("misses")) {
+            parsed.misses = static_cast<int>(*misses);
+        }
+    } else {
+        // Parse text command
+        parsed = parse(ctx.content);
+        if (!parsed.valid) {
+            ctx.reply(parsed.error_message);
+            return;
+        }
+
+        // Validate mods from text command
+        if (!parsed.mods_filter.empty()) {
+            auto validation = utils::validate_mods(parsed.mods_filter);
+            parsed.mods_filter = validation.normalized;
+
+            if (!validation.invalid.empty()) {
+                std::string invalid_list;
+                for (const auto& m : validation.invalid) {
+                    if (!invalid_list.empty()) invalid_list += ", ";
+                    invalid_list += m;
+                }
+                warnings.push_back(fmt::format("Unknown mod(s): {}. Ignored.", invalid_list));
+            }
+            if (validation.has_incompatible) {
+                warnings.push_back(validation.incompatible_msg);
+            }
+        }
+    }
+
+    // Log warnings
+    for (const auto& w : warnings) {
+        spdlog::info("[sim] Warning: {}", w);
     }
 
     // Resolve beatmap from context

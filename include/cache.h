@@ -44,6 +44,11 @@ public:
     std::optional<RecentScoreState> get_recent_scores(const std::string& state_id);
     bool delete_recent_scores(const std::string& state_id);
 
+    // CompareState operations (5 min TTL)
+    bool cache_compare(const std::string& state_id, const CompareState& state);
+    std::optional<CompareState> get_compare(const std::string& state_id);
+    bool delete_compare(const std::string& state_id);
+
     // OAuth token operations (custom TTL based on expires_at)
     bool cache_oauth_tokens(const std::string& access_token, const std::string& refresh_token,
                            std::chrono::seconds expires_in);
@@ -77,6 +82,8 @@ private:
     std::optional<LeaderboardState> deserialize_leaderboard(const std::string& data);
     std::string serialize_recent_scores(const RecentScoreState& state);
     std::optional<RecentScoreState> deserialize_recent_scores(const std::string& data);
+    std::string serialize_compare(const CompareState& state);
+    std::optional<CompareState> deserialize_compare(const std::string& data);
 };
 
 } // namespace cache

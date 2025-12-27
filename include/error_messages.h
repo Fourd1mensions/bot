@@ -42,8 +42,4 @@ constexpr std::string_view NO_SCORES_WITH_MODS_FORMAT =
 constexpr std::string_view SCORE_INDEX_OUT_OF_RANGE_FORMAT =
     "Score index {} out of range (max: {})";
 
-// User errors
-constexpr std::string_view USER_NOT_LINKED =
-    "Please link your osu! account first using `/set <username>`.";
-
 } // namespace error_messages

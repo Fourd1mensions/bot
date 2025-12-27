@@ -99,25 +99,35 @@ struct UnifiedContext {
         }, event);
     }
 
-    // Get parameter from slash command (returns empty string for text commands)
+    // Get parameter from slash command with optional type
     template<typename T>
-    T get_parameter(const std::string& name) const {
-        if (auto* slash = std::get_if<dpp::slashcommand_t>(&event)) {
-            return std::get<T>(slash->get_parameter(name));
-        }
-        return T{};
-    }
-
-    bool has_parameter(const std::string& name) const {
+    std::optional<T> get_param(const std::string& name) const {
         if (auto* slash = std::get_if<dpp::slashcommand_t>(&event)) {
             try {
-                slash->get_parameter(name);
-                return true;
-            } catch (...) {
-                return false;
-            }
+                auto param = slash->get_parameter(name);
+                if (std::holds_alternative<T>(param)) {
+                    return std::get<T>(param);
+                }
+            } catch (...) {}
         }
-        return false;
+        return std::nullopt;
+    }
+
+    // Specialization for getting string from slash or empty for text
+    std::optional<std::string> get_string_param(const std::string& name) const {
+        return get_param<std::string>(name);
+    }
+
+    std::optional<int64_t> get_int_param(const std::string& name) const {
+        return get_param<int64_t>(name);
+    }
+
+    std::optional<double> get_double_param(const std::string& name) const {
+        return get_param<double>(name);
+    }
+
+    std::optional<bool> get_bool_param(const std::string& name) const {
+        return get_param<bool>(name);
     }
 };
 

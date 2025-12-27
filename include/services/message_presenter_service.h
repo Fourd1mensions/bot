@@ -10,6 +10,7 @@ class Score;
 class Beatmap;
 struct LeaderboardState;
 struct RecentScoreState;
+struct CompareState;
 
 namespace services {
 
@@ -182,6 +183,13 @@ public:
         const std::string& filename,
         const std::string& source
     ) const;
+
+    /**
+     * Build a compare scores embed page from CompareState.
+     * @param state The compare state with all scores
+     * @return Complete Discord message with embed and pagination buttons
+     */
+    dpp::message build_compare_page(const CompareState& state) const;
 
     /**
      * Build pagination button row.

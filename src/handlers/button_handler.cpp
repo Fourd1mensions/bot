@@ -1,6 +1,8 @@
 #include "handlers/button_handler.h"
 #include "services/leaderboard_service.h"
 #include "services/recent_score_service.h"
+#include "services/pagination_service.h"
+#include "services/message_presenter_service.h"
 #include <requests.h>
 #include <cache.h>
 #include <osu.h>
@@ -50,6 +52,12 @@ void ButtonHandler::handle_button_click(const dpp::button_click_t& event) {
     // Handle refresh button
     if (button_id == "rs_refresh") {
         handle_rs_refresh(event);
+        return;
+    }
+
+    // Handle compare pagination
+    if (button_id == "cmp_prev" || button_id == "cmp_next" || button_id == "cmp_first" || button_id == "cmp_last") {
+        handle_cmp_pagination(event, button_id);
         return;
     }
 }
@@ -120,16 +128,8 @@ void ButtonHandler::handle_lb_pagination(const dpp::button_click_t& event, const
 
     auto state = *state_opt;
 
-    // Update page number
-    if (button_id == "lb_first") {
-        state.current_page = 0;
-    } else if (button_id == "lb_prev" && state.current_page > 0) {
-        state.current_page--;
-    } else if (button_id == "lb_next" && state.current_page < state.total_pages - 1) {
-        state.current_page++;
-    } else if (button_id == "lb_last") {
-        state.current_page = state.total_pages - 1;
-    } else {
+    // Navigate using PaginationService
+    if (!services::PaginationService::navigate_by_button(state, button_id)) {
         return;
     }
 
@@ -170,16 +170,8 @@ void ButtonHandler::handle_rs_pagination(const dpp::button_click_t& event, const
 
     auto state = *state_opt;
 
-    // Update index for navigation buttons
-    if (button_id == "rs_first") {
-        state.current_index = 0;
-    } else if (button_id == "rs_prev" && state.current_index > 0) {
-        state.current_index--;
-    } else if (button_id == "rs_next" && state.current_index < state.scores.size() - 1) {
-        state.current_index++;
-    } else if (button_id == "rs_last") {
-        state.current_index = state.scores.size() - 1;
-    } else {
+    // Navigate using PaginationService
+    if (!services::PaginationService::navigate_by_button(state, button_id)) {
         return;
     }
 
@@ -305,16 +297,13 @@ void ButtonHandler::handle_lb_jump_modal(const dpp::form_submit_t& event) {
 
         auto state = *state_opt;
 
-        // Validate page number
-        if (page_num < 1 || page_num > static_cast<int>(state.total_pages)) {
+        // Use PaginationService for jump navigation
+        if (!services::PaginationService::navigate(state, services::NavigationAction::JumpTo, page_num)) {
             event.reply(dpp::ir_channel_message_with_source,
                 dpp::message(fmt::format("Invalid page number. Please enter a number between 1 and {}.", state.total_pages))
                     .set_flags(dpp::m_ephemeral));
             return;
         }
-
-        // Update to the requested page (convert to 0-indexed)
-        state.current_page = page_num - 1;
 
         // Save updated state back to Memcached
         try {
@@ -334,6 +323,49 @@ void ButtonHandler::handle_lb_jump_modal(const dpp::form_submit_t& event) {
         event.reply(dpp::ir_channel_message_with_source,
             dpp::message("Invalid input. Please enter a valid number.").set_flags(dpp::m_ephemeral));
     }
+}
+
+void ButtonHandler::handle_cmp_pagination(const dpp::button_click_t& event, const std::string& button_id) {
+    auto msg_id = event.command.message_id;
+
+    // Fetch from Memcached
+    std::optional<CompareState> state_opt;
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        state_opt = cache.get_compare(msg_id.str());
+        spdlog::info("[BTN] Retrieved compare state from cache: {}", state_opt.has_value() ? "success" : "not found");
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to fetch compare from cache: {}", e.what());
+    }
+
+    if (!state_opt) {
+        spdlog::info("[BTN] Ignoring button click for expired/missing compare {}", msg_id.str());
+        return;
+    }
+
+    auto state = *state_opt;
+
+    // Navigate using PaginationService
+    if (!services::PaginationService::navigate_by_button(state, button_id)) {
+        return;
+    }
+
+    // Save updated state back to Memcached
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        cache.cache_compare(msg_id.str(), state);
+        spdlog::info("[BTN] Saved updated compare state to cache, page={}/{}", state.current_page + 1, state.total_pages);
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to save updated compare to cache: {}", e.what());
+    }
+
+    // Build updated message with new page
+    services::MessagePresenterService presenter;
+    dpp::message updated_msg = presenter.build_compare_page(state);
+
+    // Update the message
+    spdlog::info("[BTN] Updating compare message with new page {}", state.current_page + 1);
+    event.reply(dpp::ir_update_message, updated_msg);
 }
 
 } // namespace handlers

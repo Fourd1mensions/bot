@@ -411,6 +411,121 @@ bool MemcachedCache::delete_recent_scores(const std::string& state_id) {
     return del("recent_scores:" + state_id);
 }
 
+// CompareState operations
+bool MemcachedCache::cache_compare(const std::string& state_id, const CompareState& state) {
+    std::string data = serialize_compare(state);
+    return set("compare:" + state_id, data, std::chrono::seconds(300)); // 5 minutes
+}
+
+std::optional<CompareState> MemcachedCache::get_compare(const std::string& state_id) {
+    auto data = get("compare:" + state_id);
+    if (!data) {
+        return std::nullopt;
+    }
+    return deserialize_compare(*data);
+}
+
+bool MemcachedCache::delete_compare(const std::string& state_id) {
+    return del("compare:" + state_id);
+}
+
+std::string MemcachedCache::serialize_compare(const CompareState& state) {
+    json j;
+    j["username"] = state.username;
+    j["mods_filter"] = state.mods_filter;
+    j["current_page"] = state.current_page;
+    j["total_pages"] = state.total_pages;
+    j["caller_discord_id"] = static_cast<uint64_t>(state.caller_discord_id);
+    j["created_at"] = std::chrono::duration_cast<std::chrono::milliseconds>(
+        state.created_at.time_since_epoch()
+    ).count();
+
+    // Serialize beatmap
+    j["beatmap"]["beatmap_id"] = state.beatmap.beatmap_id;
+    j["beatmap"]["beatmapset_id"] = state.beatmap.beatmapset_id;
+    j["beatmap"]["max_combo"] = state.beatmap.max_combo;
+    j["beatmap"]["difficulty_rating"] = state.beatmap.difficulty_rating;
+    j["beatmap"]["artist"] = state.beatmap.artist;
+    j["beatmap"]["title"] = state.beatmap.title;
+    j["beatmap"]["version"] = state.beatmap.version;
+    j["beatmap"]["beatmap_url"] = state.beatmap.beatmap_url;
+    j["beatmap"]["image_url"] = state.beatmap.image_url;
+
+    // Serialize scores
+    j["scores"] = json::array();
+    for (const auto& score : state.scores) {
+        json score_json;
+        score_json["accuracy"] = score.accuracy;
+        score_json["max_combo"] = score.max_combo;
+        score_json["total_score"] = score.total_score;
+        score_json["mods"] = score.mods;
+        score_json["rank"] = score.rank;
+        score_json["count_miss"] = score.count_miss;
+        score_json["count_50"] = score.count_50;
+        score_json["count_100"] = score.count_100;
+        score_json["count_300"] = score.count_300;
+        score_json["pp"] = score.pp;
+        score_json["passed"] = score.passed;
+        j["scores"].push_back(score_json);
+    }
+
+    return j.dump();
+}
+
+std::optional<CompareState> MemcachedCache::deserialize_compare(const std::string& data) {
+    try {
+        json j = json::parse(data);
+
+        CompareState state;
+        state.username = j["username"];
+        state.mods_filter = j["mods_filter"];
+        state.current_page = j["current_page"];
+        state.total_pages = j["total_pages"];
+        state.caller_discord_id = dpp::snowflake(j.value("caller_discord_id", 0ULL));
+
+        if (j.contains("created_at")) {
+            auto millis = j["created_at"].get<int64_t>();
+            state.created_at = std::chrono::steady_clock::time_point(
+                std::chrono::milliseconds(millis)
+            );
+        }
+
+        // Deserialize beatmap
+        state.beatmap.beatmap_id = j["beatmap"]["beatmap_id"];
+        state.beatmap.beatmapset_id = j["beatmap"]["beatmapset_id"];
+        state.beatmap.max_combo = j["beatmap"]["max_combo"];
+        state.beatmap.difficulty_rating = j["beatmap"]["difficulty_rating"];
+        state.beatmap.artist = j["beatmap"]["artist"];
+        state.beatmap.title = j["beatmap"]["title"];
+        state.beatmap.version = j["beatmap"]["version"];
+        state.beatmap.beatmap_url = j["beatmap"]["beatmap_url"];
+        state.beatmap.image_url = j["beatmap"]["image_url"];
+
+        // Deserialize scores
+        for (const auto& score_json : j["scores"]) {
+            Score score;
+            score.accuracy = score_json["accuracy"];
+            score.max_combo = score_json["max_combo"];
+            score.total_score = score_json["total_score"];
+            score.mods = score_json["mods"];
+            score.rank = score_json["rank"];
+            score.count_miss = score_json["count_miss"];
+            score.count_50 = score_json["count_50"];
+            score.count_100 = score_json["count_100"];
+            score.count_300 = score_json["count_300"];
+            score.pp = score_json["pp"];
+            score.passed = score_json.value("passed", true);
+            score.is_empty = false;
+            state.scores.push_back(score);
+        }
+
+        return state;
+    } catch (const json::exception& e) {
+        spdlog::error("Failed to deserialize compare: {}", e.what());
+        return std::nullopt;
+    }
+}
+
 // OAuth token operations
 bool MemcachedCache::cache_oauth_tokens(const std::string& access_token,
                                        const std::string& refresh_token,

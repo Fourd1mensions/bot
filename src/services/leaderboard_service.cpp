@@ -5,6 +5,7 @@
 #include "services/user_resolver_service.h"
 #include "services/message_presenter_service.h"
 #include "services/beatmap_performance_service.h"
+#include <commands/command.h>
 #include <requests.h>
 #include <beatmap_downloader.h>
 #include <osu.h>
@@ -385,6 +386,239 @@ void LeaderboardService::create_leaderboard(
 
     // Reply with leaderboard
     event.reply(msg, false, [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) mutable {
+        if (callback.is_error()) {
+            spdlog::error("Failed to send leaderboard message");
+            return;
+        }
+        auto reply_msg = callback.get<dpp::message>();
+
+        // Store state in Memcached with 5-minute TTL
+        bool cache_success = false;
+        try {
+            auto& cache = cache::MemcachedCache::instance();
+            cache.cache_leaderboard(reply_msg.id.str(), lb_state);
+            spdlog::debug("Stored leaderboard state for message {} in Memcached", reply_msg.id.str());
+            cache_success = true;
+        } catch (const std::exception& e) {
+            spdlog::error("Failed to cache leaderboard state - pagination will not work: {}", e.what());
+        }
+
+        // Schedule button removal only if there's more than one page
+        if (lb_state.total_pages > 1) {
+            dpp::snowflake msg_id = reply_msg.id;
+            dpp::snowflake chan_id = reply_msg.channel_id;
+
+            // Remove buttons after 2 minutes
+            auto ttl = std::chrono::minutes(2);
+            schedule_button_removal(chan_id, msg_id, ttl);
+        }
+    });
+}
+
+void LeaderboardService::create_leaderboard(
+    const commands::UnifiedContext& ctx,
+    const std::string& mods_filter,
+    const std::optional<std::string>& beatmap_id_override,
+    LbSortMethod sort_method)
+{
+    dpp::snowflake channel_id = ctx.channel_id();
+
+    // Use override if provided, otherwise get from chat context
+    std::string beatmap_id;
+    if (beatmap_id_override.has_value()) {
+        beatmap_id = *beatmap_id_override;
+    } else {
+        std::string stored_id = chat_context_service_.get_beatmap_id(channel_id);
+        beatmap_id = beatmap_resolver_service_.resolve_beatmap_id(stored_id);
+    }
+
+    if (beatmap_id.empty()) {
+        ctx.reply(message_presenter_.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
+        return;
+    }
+
+    // Show typing indicator for text commands
+    if (!ctx.is_slash()) {
+        bot_.channel_typing(channel_id);
+    }
+
+    auto start = std::chrono::steady_clock::now();
+
+    std::string response_beatmap = request_.get_beatmap(beatmap_id);
+    if (response_beatmap.empty()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start).count();
+
+        if (elapsed > 8) {
+            ctx.reply(message_presenter_.build_error_message(
+                fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
+        } else {
+            ctx.reply(message_presenter_.build_error_message(error_messages::API_NO_RESPONSE));
+        }
+        spdlog::error("Unable to send request");
+        return;
+    }
+
+    Beatmap beatmap(response_beatmap);
+
+    // Download .osz file asynchronously
+    uint32_t beatmapset_id = beatmap.get_beatmapset_id();
+    std::jthread([this, beatmapset_id]() {
+        beatmap_downloader_.download_osz(beatmapset_id);
+    }).detach();
+
+    // Fetch mod-adjusted beatmap attributes if mods filter is present
+    if (!mods_filter.empty()) {
+        uint32_t mods_bitset = utils::mods_string_to_bitset(mods_filter);
+        std::string attributes_response = request_.get_beatmap_attributes(beatmap_id, mods_bitset);
+        if (!attributes_response.empty()) {
+            try {
+                json attributes_json = json::parse(attributes_response);
+                beatmap.set_modded_attributes(attributes_json);
+            } catch (const json::exception& e) {
+                spdlog::error("Failed to parse beatmap attributes: {}", e.what());
+            }
+        }
+    }
+
+    auto user_mappings = user_mapping_service_.get_all_mappings();
+    std::vector<Score> scores(user_mappings.size());
+
+    // Create stable index mapping to avoid race condition
+    std::unordered_map<std::string, size_t> user_to_index;
+    size_t idx = 0;
+    for (const auto& [dis_id, user_id] : user_mappings) {
+        user_to_index[user_id] = idx++;
+    }
+
+    // Parse required mods for filtering
+    std::vector<std::string> required_mods;
+    if (!mods_filter.empty()) {
+        for (size_t i = 0; i + 1 < mods_filter.length(); i += 2) {
+            required_mods.push_back(mods_filter.substr(i, 2));
+        }
+    }
+
+    spdlog::info("[LB] Fetching scores and usernames for {} users", user_mappings.size());
+
+    // Use TBB for parallel score fetching
+    arena_.execute([&]() { tbb::parallel_for_each(std::begin(user_mappings), std::end(user_mappings),
+        [&](const auto& pair) {
+            const auto& [dis_id, user_id] = pair;
+            auto& score = scores[user_to_index[user_id]];
+            std::string scores_j = request_.get_user_beatmap_score(beatmap_id, user_id, true);
+            if (!scores_j.empty()) {
+                json j = json::parse(scores_j);
+                j = j["scores"];
+
+                // Filter scores by mods if filter is specified
+                if (!required_mods.empty()) {
+                    auto filtered_scores = json::array();
+                    for (const auto& score_json : j) {
+                        // Parse mods from this score
+                        std::string score_mods_str;
+                        if (score_json.contains("mods") && score_json["mods"].is_array()) {
+                            for (const auto& mod : score_json["mods"]) {
+                                score_mods_str += mod.get<std::string>();
+                            }
+                        }
+                        if (score_mods_str.empty()) score_mods_str = "NM";
+
+                        // Check if all required mods are present
+                        bool has_all_mods = true;
+                        for (const auto& required_mod : required_mods) {
+                            if (score_mods_str.find(required_mod) == std::string::npos) {
+                                has_all_mods = false;
+                                break;
+                            }
+                        }
+
+                        if (has_all_mods) {
+                            filtered_scores.push_back(score_json);
+                        }
+                    }
+                    j = filtered_scores;
+                }
+
+                // If we have scores after filtering, take the best one
+                if (!j.empty()) {
+                    // sort specific user's scores
+                    std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
+                        return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
+                    });
+                    score.from_json(j.at(0));
+                    std::string username = user_resolver_service_.get_username_cached(score.get_user_id());
+                    score.set_username(username);
+                }
+            }
+        });
+    });
+
+    // Remove empty scores
+    for (auto it = scores.begin(); it != scores.end();) {
+        if (!it->is_empty) ++it;
+        else scores.erase(it);
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    if (scores.empty()) {
+        if (elapsed > 8) {
+            ctx.reply(message_presenter_.build_error_message(
+                fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
+            spdlog::warn("[CMD] lb took {}s and found no scores (slow API response)", elapsed);
+        } else {
+            ctx.reply(message_presenter_.build_error_message(
+                fmt::format(error_messages::NO_SCORES_ON_BEATMAP_FORMAT, beatmap.to_string())));
+        }
+        return;
+    }
+
+    // Sort scores based on selected method
+    if (scores.size() > 1) {
+        switch (sort_method) {
+            case LbSortMethod::Score:
+                stdr::sort(scores, [](const Score& a, const Score& b) {
+                    return a.get_total_score() > b.get_total_score();
+                });
+                break;
+            case LbSortMethod::Acc:
+                stdr::sort(scores, [](const Score& a, const Score& b) {
+                    return a.get_accuracy() > b.get_accuracy();
+                });
+                break;
+            case LbSortMethod::Combo:
+                stdr::sort(scores, [](const Score& a, const Score& b) {
+                    return a.get_max_combo() > b.get_max_combo();
+                });
+                break;
+            case LbSortMethod::Date:
+                stdr::sort(scores, [](const Score& a, const Score& b) {
+                    return a.get_created_at() > b.get_created_at();
+                });
+                break;
+            case LbSortMethod::PP:
+            default:
+                stdr::sort(scores, [](const Score& a, const Score& b) {
+                    return std::make_tuple(a.get_pp(), a.get_total_score()) >
+                        std::make_tuple(b.get_pp(), b.get_total_score());
+                });
+                break;
+        }
+    }
+
+    if (elapsed > 8) {
+        spdlog::warn("[CMD] lb took {}s to complete (slow API response)", elapsed);
+    }
+
+    // Create leaderboard state and build first page
+    std::string beatmap_mode = beatmap.get_mode();
+    LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0, beatmap_mode, mods_filter, sort_method, ctx.author_id());
+    dpp::message msg = build_page(lb_state);
+
+    // Reply with leaderboard
+    ctx.reply(std::move(msg), false, [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) mutable {
         if (callback.is_error()) {
             spdlog::error("Failed to send leaderboard message");
             return;

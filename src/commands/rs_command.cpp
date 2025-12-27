@@ -86,21 +86,40 @@ RsCommand::ParsedParams RsCommand::parse(const std::string& content) const {
 void RsCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
-        spdlog::error("[!rs] ServiceContainer is null");
+        spdlog::error("[rs] ServiceContainer is null");
         return;
     }
 
-    auto parsed = parse(ctx.content);
+    services::RecentScoreParams cmd_params;
 
-    if (!parsed.valid) {
-        ctx.reply(parsed.error_message);
-        return;
+    if (ctx.is_slash()) {
+        // Get parameters directly from slash command
+        if (auto username = ctx.get_string_param("username")) {
+            cmd_params.username = *username;
+        }
+        if (auto index = ctx.get_int_param("index")) {
+            cmd_params.score_index = static_cast<size_t>(*index - 1); // Convert to 0-based
+        }
+        if (auto mode = ctx.get_string_param("mode")) {
+            cmd_params.mode = *mode;
+        }
+        if (auto best = ctx.get_bool_param("best"); best && *best) {
+            cmd_params.use_best_scores = true;
+        }
+        if (auto pass = ctx.get_bool_param("pass"); pass && *pass) {
+            cmd_params.include_fails = false;
+        }
+    } else {
+        // Parse text command
+        auto parsed = parse(ctx.content);
+        if (!parsed.valid) {
+            ctx.reply(parsed.error_message);
+            return;
+        }
+        cmd_params = s->command_params_service.parse_recent_params(parsed.params, parsed.mode);
     }
 
     auto start = std::chrono::steady_clock::now();
-
-    // Parse parameters using service
-    auto cmd_params = s->command_params_service.parse_recent_params(parsed.params, parsed.mode);
 
     // Resolve osu user_id using service
     auto resolve_result = s->user_resolver_service.resolve(cmd_params.username, ctx.author_id());
