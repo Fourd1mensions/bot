@@ -20,33 +20,59 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> RsCommand::get_aliases() const {
-    return {"!rs", "!кы"};
+    return {"!rs", "!rb", "!кы"};
 }
 
 bool RsCommand::matches(const CommandContext& ctx) const {
-    return ctx.content_lower.find("!rs") == 0 || ctx.content.find("!кы") == 0;
+    auto check_boundary = [](const std::string& str, size_t prefix_len) {
+        if (str.length() == prefix_len) return true;  // Exact match
+        char next = str[prefix_len];
+        return next == ' ' || next == ':' || next == '\t';
+    };
+
+    // Check ASCII aliases in lowercase content
+    if (ctx.content_lower.find("!rs") == 0 && check_boundary(ctx.content_lower, 3)) return true;
+    if (ctx.content_lower.find("!rb") == 0 && check_boundary(ctx.content_lower, 3)) return true;
+    // Check Cyrillic aliases in original content (tolower doesn't work with UTF-8)
+    // Support both lowercase and uppercase variants
+    // Note: "!кы" is 5 bytes in UTF-8 (1 + 2 + 2)
+    if ((ctx.content.find("!кы") == 0 || ctx.content.find("!КЫ") == 0) && check_boundary(ctx.content, 5)) return true;
+    return false;
 }
 
 RsCommand::ParsedParams RsCommand::parse(const std::string& content) const {
     ParsedParams result;
 
-    size_t cmd_end = 0;
-    // Find command end - check for known prefixes
-    if (content.find("!rs") == 0) {
-        cmd_end = 3;
-    } else if (content.find("!кы") == 0) {
-        cmd_end = 7; // UTF-8 bytes
-    } else if (content.find("/rs") == 0) {
-        cmd_end = 3;
-    } else {
+    // Find command end by looking for space or end of string
+    // This works correctly with UTF-8 regardless of byte length
+    size_t cmd_end = content.find(' ');
+    if (cmd_end == std::string::npos) {
+        cmd_end = content.length();
+    }
+
+    // Check if this is a known command prefix
+    bool is_rb = content.find("!rb") == 0;
+    bool is_command = content.find("!rs") == 0 ||
+                      is_rb ||
+                      content.find("!кы") == 0 ||
+                      content.find("!КЫ") == 0 ||  // Support uppercase
+                      content.find("/rs") == 0;
+
+    if (!is_command) {
         // For slash commands without prefix, params start from beginning
         result.params = content;
         return result;
     }
 
+    // !rb is alias for !rs -b (best scores)
+    if (is_rb) {
+        result.use_best = true;
+    }
+
     // Check for mode specification (e.g., !rs:taiko)
+    // Colon must be before the first space to be part of the command
     size_t colon_pos = content.find(':');
-    if (colon_pos != std::string::npos && colon_pos < cmd_end + 10) {
+    if (colon_pos != std::string::npos && colon_pos < cmd_end) {
         size_t mode_end = content.find(' ', colon_pos);
         if (mode_end == std::string::npos) {
             mode_end = content.length();
@@ -117,6 +143,40 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
             return;
         }
         cmd_params = s->command_params_service.parse_recent_params(parsed.params, parsed.mode);
+
+        // !rb is alias for !rs -b
+        if (parsed.use_best) {
+            cmd_params.use_best_scores = true;
+        }
+
+        // Check for parameter validation errors
+        if (cmd_params.has_errors()) {
+            std::string error_msg = ":x: **Parameter error:**\n";
+            for (const auto& err : cmd_params.errors) {
+                error_msg += "• " + err + "\n";
+            }
+            error_msg += "\n";
+            error_msg += std::string(error_messages::RS_USAGE);
+            ctx.reply(error_msg);
+            return;
+        }
+
+        // Show warnings to user if any (non-fatal)
+        if (cmd_params.has_warnings()) {
+            std::string warning_msg = ":warning: ";
+            for (size_t i = 0; i < cmd_params.warnings.size(); ++i) {
+                if (i > 0) warning_msg += "\n:warning: ";
+                warning_msg += cmd_params.warnings[i];
+            }
+            spdlog::info("[rs] Warnings: {}", warning_msg);
+            // Send warning as reply
+            std::visit([&warning_msg](auto&& e) {
+                using T = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<T, dpp::message_create_t>) {
+                    e.reply(warning_msg, true);
+                }
+            }, ctx.event);
+        }
     }
 
     auto start = std::chrono::steady_clock::now();
@@ -168,6 +228,13 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
             Score score;
             score.from_json(score_json);
             scores.push_back(score);
+        }
+
+        // Sort best scores by date (newest first)
+        if (cmd_params.use_best_scores) {
+            std::sort(scores.begin(), scores.end(), [](const Score& a, const Score& b) {
+                return a.get_created_at() > b.get_created_at();
+            });
         }
     } catch (const json::exception& e) {
         ctx.reply(s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));

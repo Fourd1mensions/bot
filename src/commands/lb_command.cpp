@@ -15,6 +15,22 @@ std::vector<std::string> LbCommand::get_aliases() const {
     return {"!lb", "!ди"};
 }
 
+bool LbCommand::matches(const CommandContext& ctx) const {
+    auto check_boundary = [](const std::string& str, size_t prefix_len) {
+        if (str.length() == prefix_len) return true;  // Exact match
+        char next = str[prefix_len];
+        return next == ' ' || next == ':' || next == '\t';
+    };
+
+    // Check ASCII alias in lowercase content
+    if (ctx.content_lower.find("!lb") == 0 && check_boundary(ctx.content_lower, 3)) return true;
+    // Check Cyrillic aliases in original content (tolower doesn't work with UTF-8)
+    // Support both lowercase and uppercase variants
+    // Note: "!ди" is 5 bytes in UTF-8 (1 + 2 + 2)
+    if ((ctx.content.find("!ди") == 0 || ctx.content.find("!ДИ") == 0) && check_boundary(ctx.content, 5)) return true;
+    return false;
+}
+
 LbParams LbCommand::parse_params(const std::string& content) const {
     LbParams params;
 
@@ -34,13 +50,23 @@ LbParams LbCommand::parse_params(const std::string& content) const {
         const auto& t = tokens[i];
 
         // Check for sort flag: -s <method>
-        if ((t == "-s" || t == "--sort") && i + 1 < tokens.size()) {
+        if (t == "-s" || t == "--sort") {
+            if (i + 1 >= tokens.size()) {
+                params.warnings.push_back("Flag `-s` requires a sort method (pp, score, acc, combo, date)");
+                continue;
+            }
             auto [method, warning] = parse_sort_method(tokens[i + 1]);
             params.sort_method = method;
             if (!warning.empty()) {
                 params.warnings.push_back(warning);
             }
             ++i;  // Skip next token
+            continue;
+        }
+
+        // Check for unknown flags
+        if (!t.empty() && t[0] == '-') {
+            params.warnings.push_back(fmt::format("Unknown flag `{}`. Valid: `-s SORT`", t));
             continue;
         }
 
@@ -74,6 +100,9 @@ LbParams LbCommand::parse_params(const std::string& content) const {
             params.beatmap_id = beatmap_id;
             continue;
         }
+
+        // Unknown token - not a URL, ID, flag, or mods
+        params.warnings.push_back(fmt::format("Unknown parameter `{}`. Expected beatmap URL/ID, +MODS, or -s SORT.", t));
     }
 
     return params;
@@ -175,10 +204,19 @@ void LbCommand::execute_unified(const UnifiedContext& ctx) {
     if (!params.warnings.empty()) {
         std::string warning_msg = ":warning: ";
         for (size_t i = 0; i < params.warnings.size(); ++i) {
-            if (i > 0) warning_msg += " • ";
+            if (i > 0) warning_msg += "\n:warning: ";
             warning_msg += params.warnings[i];
         }
-        // For now, just log warnings. Could also prepend to response.
+        // Send warnings as a separate message before proceeding
+        // For text commands, we can send a quick warning
+        if (!ctx.is_slash()) {
+            std::visit([&warning_msg](auto&& e) {
+                using T = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<T, dpp::message_create_t>) {
+                    e.reply(warning_msg, true);  // ephemeral-style (won't actually be ephemeral for text)
+                }
+            }, ctx.event);
+        }
         spdlog::info("[lb] Warnings: {}", warning_msg);
     }
 

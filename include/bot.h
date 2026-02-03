@@ -21,6 +21,8 @@
 #include <services/recent_score_service.h>
 #include <services/leaderboard_service.h>
 #include <services/beatmap_extract_service.h>
+#include <services/webhook_service.h>
+#include <services/message_crawler_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -79,6 +81,7 @@ private:
   tbb::task_arena       arena;
 
   // Services
+  services::WebhookService            webhook_service;
   services::ChatContextService        chat_context_service;
   services::UserMappingService        user_mapping_service;
   services::BeatmapResolverService    beatmap_resolver_service;
@@ -90,6 +93,7 @@ private:
   std::unique_ptr<services::RecentScoreService> recent_score_service;
   std::unique_ptr<services::LeaderboardService> leaderboard_service;
   std::unique_ptr<services::BeatmapExtractService> beatmap_extract_service;
+  std::unique_ptr<services::MessageCrawlerService> message_crawler_service;
 
   // Event handlers
   std::unique_ptr<handlers::ButtonHandler> button_handler;

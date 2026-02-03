@@ -16,6 +16,13 @@ struct RecentScoreParams {
     size_t score_index = 0;         // Score index (0-based)
     bool include_fails = true;      // Include failed scores
     bool use_best_scores = false;   // Use top plays instead of recent
+
+    // Validation
+    std::vector<std::string> warnings;  // Non-fatal issues (unknown flags, etc.)
+    std::vector<std::string> errors;    // Fatal issues (invalid required params)
+
+    bool has_errors() const { return !errors.empty(); }
+    bool has_warnings() const { return !warnings.empty(); }
 };
 
 /**
@@ -24,6 +31,13 @@ struct RecentScoreParams {
 struct CompareParams {
     std::string username;           // Target username (empty = caller)
     std::string mods_filter;        // Mods filter (e.g., "HDDT")
+
+    // Validation
+    std::vector<std::string> warnings;
+    std::vector<std::string> errors;
+
+    bool has_errors() const { return !errors.empty(); }
+    bool has_warnings() const { return !warnings.empty(); }
 };
 
 /**

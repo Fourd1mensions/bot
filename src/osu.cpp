@@ -132,8 +132,9 @@ void Beatmap::from_json(const json& j) {
     title             = j.at("beatmapset").at("title").get<std::string>();
     version           = j.at("version").get<std::string>();
     beatmap_url       = j.at("url").get<std::string>();
-    // Use "cover" for full-size background image instead of "list"
-    image_url         = j.at("beatmapset").at("covers").at("cover").get<std::string>();
+    uint32_t set_id   = j.at("beatmapset").at("id").get<uint32_t>();
+    thumbnail_url     = fmt::format("https://b.ppy.sh/thumb/{}l.jpg", set_id);
+    image_url         = j.at("beatmapset").at("covers").at("slimcover").get<std::string>();
 
     // Parse ranked status - can be in beatmap or beatmapset
     if (j.contains("ranked")) {
@@ -153,6 +154,10 @@ std::string Beatmap::to_string() const {
 
 std::string Beatmap::get_beatmap_url() const {
   return beatmap_url;
+}
+
+std::string Beatmap::get_thumbnail_url() const {
+  return thumbnail_url;
 }
 
 std::string Beatmap::get_image_url() const {

@@ -91,6 +91,11 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
         std::string params = parse_params(ctx.content);
         parsed = s->command_params_service.parse_compare_params(params);
 
+        // Include warnings from parameter parsing
+        for (const auto& w : parsed.warnings) {
+            warnings.push_back(w);
+        }
+
         // Validate mods from text command
         if (!parsed.mods_filter.empty()) {
             auto validation = utils::validate_mods(parsed.mods_filter);
@@ -110,9 +115,23 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
         }
     }
 
-    // Log warnings
-    for (const auto& w : warnings) {
-        spdlog::info("[compare] Warning: {}", w);
+    // Show warnings to user if any
+    if (!warnings.empty()) {
+        std::string warning_msg = ":warning: ";
+        for (size_t i = 0; i < warnings.size(); ++i) {
+            if (i > 0) warning_msg += "\n:warning: ";
+            warning_msg += warnings[i];
+        }
+        spdlog::info("[compare] Warnings: {}", warning_msg);
+        // For text commands, send warning as reply
+        if (!ctx.is_slash()) {
+            std::visit([&warning_msg](auto&& e) {
+                using T = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<T, dpp::message_create_t>) {
+                    e.reply(warning_msg, true);
+                }
+            }, ctx.event);
+        }
     }
 
     // Resolve osu user_id using service

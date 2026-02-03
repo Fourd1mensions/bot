@@ -159,7 +159,7 @@ void BeatmapCacheService::process_download(uint32_t beatmapset_id) {
 
   if (success) {
     total_downloaded_++;
-    record_download();
+    record_download(beatmapset_id);
     spdlog::info("[CACHE] Successfully cached beatmapset {} in {}ms",
       beatmapset_id, total_time.count());
   } else {
@@ -239,41 +239,62 @@ void BeatmapCacheService::send_error_report(uint32_t beatmapset_id,
   });
 }
 
-void BeatmapCacheService::record_download() {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
-  download_timestamps_.push_back(std::chrono::steady_clock::now());
+void BeatmapCacheService::record_download(uint32_t beatmapset_id) {
+  try {
+    db::Database::instance().log_download(beatmapset_id);
+  } catch (const std::exception& e) {
+    spdlog::warn("[CACHE] Failed to log download: {}", e.what());
+    // Fallback to in-memory
+    std::lock_guard<std::mutex> lock(stats_mutex_);
+    download_timestamps_.push_back(std::chrono::steady_clock::now());
+  }
 }
 
 void BeatmapCacheService::cleanup_old_timestamps() const {
+  // Cleanup in-memory fallback
   auto now = std::chrono::steady_clock::now();
   auto cutoff_24h = now - std::chrono::hours(24);
-
-  // Remove timestamps older than 24 hours
   while (!download_timestamps_.empty() && download_timestamps_.front() < cutoff_24h) {
     const_cast<std::deque<std::chrono::steady_clock::time_point>&>(download_timestamps_).pop_front();
+  }
+
+  // Also cleanup database periodically
+  static auto last_db_cleanup = std::chrono::steady_clock::now();
+  if (now - last_db_cleanup > std::chrono::hours(1)) {
+    try {
+      db::Database::instance().cleanup_old_downloads();
+      last_db_cleanup = now;
+    } catch (...) {}
   }
 }
 
 size_t BeatmapCacheService::get_downloads_last_hour() const {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
-  cleanup_old_timestamps();
-
-  auto now = std::chrono::steady_clock::now();
-  auto cutoff = now - std::chrono::hours(1);
-
-  size_t count = 0;
-  for (const auto& ts : download_timestamps_) {
-    if (ts >= cutoff) {
-      count++;
+  try {
+    return db::Database::instance().get_downloads_since(std::chrono::hours(1));
+  } catch (const std::exception& e) {
+    spdlog::warn("[CACHE] Failed to get hourly stats from DB: {}", e.what());
+    // Fallback to in-memory
+    std::lock_guard<std::mutex> lock(stats_mutex_);
+    cleanup_old_timestamps();
+    auto cutoff = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    size_t count = 0;
+    for (const auto& ts : download_timestamps_) {
+      if (ts >= cutoff) count++;
     }
+    return count;
   }
-  return count;
 }
 
 size_t BeatmapCacheService::get_downloads_last_24h() const {
-  std::lock_guard<std::mutex> lock(stats_mutex_);
-  cleanup_old_timestamps();
-  return download_timestamps_.size();
+  try {
+    return db::Database::instance().get_downloads_since(std::chrono::hours(24));
+  } catch (const std::exception& e) {
+    spdlog::warn("[CACHE] Failed to get daily stats from DB: {}", e.what());
+    // Fallback to in-memory
+    std::lock_guard<std::mutex> lock(stats_mutex_);
+    cleanup_old_timestamps();
+    return download_timestamps_.size();
+  }
 }
 
 std::string BeatmapCacheService::get_status_string() const {

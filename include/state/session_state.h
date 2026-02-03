@@ -110,3 +110,38 @@ struct CompareState : public IPaginable {
   void set_current_position(size_t pos) override { current_page = pos; }
   size_t get_total_items() const override { return total_pages; }
 };
+
+/**
+ * User mapping entry for !users command pagination
+ */
+struct UserMapping {
+  dpp::snowflake discord_id;
+  int64_t osu_user_id;
+  std::string osu_username;
+
+  UserMapping() : discord_id(0), osu_user_id(0) {}
+  UserMapping(dpp::snowflake d_id, int64_t o_id, std::string name = "")
+    : discord_id(d_id), osu_user_id(o_id), osu_username(std::move(name)) {}
+};
+
+struct UsersState : public IPaginable {
+  static constexpr size_t USERS_PER_PAGE = 10;
+
+  std::vector<UserMapping> users;
+  size_t current_page;
+  size_t total_pages;
+  std::chrono::steady_clock::time_point created_at;
+  dpp::snowflake caller_discord_id;
+
+  UsersState() : current_page(0), total_pages(0), created_at(std::chrono::steady_clock::now()), caller_discord_id(0) {}
+  UsersState(std::vector<UserMapping> u, dpp::snowflake caller_id = 0)
+    : users(std::move(u)), current_page(0), created_at(std::chrono::steady_clock::now()), caller_discord_id(caller_id) {
+    total_pages = (users.size() + USERS_PER_PAGE - 1) / USERS_PER_PAGE;
+    if (total_pages == 0) total_pages = 1;
+  }
+
+  // IPaginable implementation
+  size_t get_current_position() const override { return current_page; }
+  void set_current_position(size_t pos) override { current_page = pos; }
+  size_t get_total_items() const override { return total_pages; }
+};

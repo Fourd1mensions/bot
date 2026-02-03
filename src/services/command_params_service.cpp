@@ -97,26 +97,46 @@ RecentScoreParams CommandParamsService::parse_recent_params(
         } else if (t == "-b") {
             // Best scores flag (top 100)
             result.use_best_scores = true;
-        } else if (t == "-i" && i + 1 < tokens.size()) {
+        } else if (t == "-i") {
             // Index flag with value
-            try {
-                int idx = std::stoi(tokens[i + 1]);
-                if (idx > 0) result.score_index = idx - 1; // Convert to 0-based
-                ++i; // Skip next token (the index value)
-            } catch (...) {
-                spdlog::warn("[CommandParams] Invalid index value: {}", tokens[i + 1]);
+            if (i + 1 >= tokens.size()) {
+                result.errors.push_back("Flag `-i` requires a number (e.g., `-i 5`)");
+                continue;
             }
-        } else if (t == "-m" && i + 1 < tokens.size()) {
+            const auto& value = tokens[i + 1];
+            try {
+                int idx = std::stoi(value);
+                if (idx > 0) {
+                    result.score_index = idx - 1; // Convert to 0-based
+                } else {
+                    result.errors.push_back("Index must be positive (e.g., `-i 1`)");
+                }
+            } catch (...) {
+                result.errors.push_back("Invalid index `" + value + "`. Must be a number.");
+            }
+            ++i; // Skip next token (the index value)
+        } else if (t == "-m") {
             // Mode flag with value
-            auto normalized = normalize_mode(tokens[i + 1]);
+            if (i + 1 >= tokens.size()) {
+                result.errors.push_back("Flag `-m` requires a mode (osu, taiko, catch, mania)");
+                continue;
+            }
+            const auto& value = tokens[i + 1];
+            auto normalized = normalize_mode(value);
             if (normalized) {
                 result.mode = *normalized;
             } else {
-                spdlog::warn("[CommandParams] Invalid mode value: {}, using default", tokens[i + 1]);
+                result.errors.push_back("Unknown mode `" + value + "`. Use: osu, taiko, catch, mania");
             }
             ++i; // Skip next token (the mode value)
-        } else if (!t.empty() && t[0] != '-') {
-            // Username part (anything not starting with -)
+        } else if (!t.empty() && t[0] == '-') {
+            // Unknown flag
+            result.warnings.push_back("Unknown flag `" + t + "`");
+        } else if (!t.empty() && t[0] == '+') {
+            // Mods are not supported in !rs, suggest using !lb or !c
+            result.warnings.push_back("Mods filter is not supported in `!rs`. Use `!c` to filter by mods.");
+        } else if (!t.empty()) {
+            // Username part
             username_parts.push_back(t);
         }
     }
@@ -141,7 +161,10 @@ CompareParams CommandParamsService::parse_compare_params(const std::string& para
             result.mods_filter = t.substr(1);
             std::transform(result.mods_filter.begin(), result.mods_filter.end(),
                 result.mods_filter.begin(), [](unsigned char c) { return std::toupper(c); });
-        } else {
+        } else if (!t.empty() && t[0] == '-') {
+            // Unknown flag - !c doesn't support flags
+            result.warnings.push_back("Unknown flag `" + t + "`. `!c` only supports `+MODS` filter.");
+        } else if (!t.empty()) {
             // Username part
             username_parts.push_back(t);
         }

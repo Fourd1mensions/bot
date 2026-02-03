@@ -37,7 +37,7 @@ void ChatContextService::update_context(const std::string& raw_event, const std:
         } else if (std::regex_search(text, m, beatmap_regex)) {
             stored_value = m.str(1);
             beatmap_id_only = std::stoul(stored_value);
-            spdlog::info("[CONTEXT] Found beatmap {} in {} (will resolve via API)", stored_value, source);
+            spdlog::info("[CONTEXT] Found beatmap {} in {} (beatmap-only URL)", stored_value, source);
             return true;
         }
         return false;
@@ -68,7 +68,7 @@ void ChatContextService::update_context(const std::string& raw_event, const std:
         spdlog::info("[CONTEXT] Triggering beatmapset cache callback for {}", beatmapset_id);
         beatmapset_callback_(beatmapset_id);
     } else if (beatmap_id_only > 0 && beatmap_callback_) {
-        spdlog::info("[CONTEXT] Triggering beatmap cache callback for {} (will resolve via API)", beatmap_id_only);
+        spdlog::info("[CONTEXT] Triggering beatmap cache callback for {}", beatmap_id_only);
         beatmap_callback_(beatmap_id_only);
     }
 }

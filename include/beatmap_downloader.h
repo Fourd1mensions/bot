@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -9,6 +10,10 @@
 #include <mutex>
 
 namespace fs = std::filesystem;
+
+namespace services {
+class WebhookService;
+}
 
 /**
  * Result of a single download attempt to a mirror
@@ -83,6 +88,21 @@ public:
   // Build footer text with mirror info and cache time
   std::string build_download_footer(uint32_t beatmapset_id) const;
 
+  // Check if mirrors are in cooldown (all mirrors failed recently)
+  bool are_mirrors_in_cooldown() const;
+
+  // Reset mirror cooldown (call after a successful download or when cooldown expires)
+  void reset_mirror_cooldown();
+
+  // Set webhook service for notifications
+  void set_webhook_service(services::WebhookService* service);
+
+  // Request shutdown - abort ongoing downloads
+  void request_shutdown();
+
+  // Check if shutdown was requested
+  bool is_shutdown_requested() const;
+
 private:
   fs::path data_dir_;
   fs::path osz_dir_;
@@ -91,6 +111,21 @@ private:
   std::vector<std::string> mirrors_;
   std::string last_used_mirror_;
   std::mutex download_mutex_;  // Protects concurrent downloads
+
+  // Mirror cooldown tracking
+  mutable std::mutex cooldown_mutex_;
+  std::chrono::steady_clock::time_point mirror_cooldown_until_;
+  int consecutive_all_mirrors_failed_ = 0;
+  static constexpr int kMaxConsecutiveFailures = 3;  // Enter cooldown after 3 failures
+  static constexpr std::chrono::seconds kCooldownDuration{120};  // 2 minute cooldown
+  bool cooldown_webhook_sent_ = false;  // Ensure webhook sent only once per cooldown
+
+  // Webhook service for notifications
+  services::WebhookService* webhook_service_ = nullptr;
+  void send_cooldown_notification();
+
+  // Shutdown flag
+  std::atomic<bool> shutdown_requested_{false};
 
   // Helper functions
   bool download_osz_with_fallback(uint32_t beatmapset_id, const fs::path& dest_path);

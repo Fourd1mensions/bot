@@ -205,12 +205,20 @@ public:
 
     /**
      * Check if this command matches the message.
-     * Default implementation checks if content starts with any alias.
+     * Default implementation checks if content starts with alias followed by space or end.
      */
     virtual bool matches(const CommandContext& ctx) const {
         for (const auto& alias : get_aliases()) {
             if (ctx.content_lower.find(alias) == 0) {
-                return true;
+                // Check that after alias there's a space, colon, or end of string
+                size_t alias_len = alias.length();
+                if (ctx.content_lower.length() == alias_len) {
+                    return true;  // Exact match
+                }
+                char next_char = ctx.content_lower[alias_len];
+                if (next_char == ' ' || next_char == ':' || next_char == '\t') {
+                    return true;
+                }
             }
         }
         return false;

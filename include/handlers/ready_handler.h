@@ -34,6 +34,12 @@ public:
      */
     void handle(const dpp::ready_t& event, bool delete_commands);
 
+    /**
+     * Handle guild members chunk event.
+     * Called when receiving member data from gateway request.
+     */
+    void handle_member_chunk(const dpp::guild_members_chunk_t& event);
+
 private:
     /**
      * Process pending button removals from database.
@@ -41,12 +47,38 @@ private:
      */
     void process_pending_button_removals();
 
+    /**
+     * Sync all guild members to discord_users cache.
+     * Called on startup and periodically.
+     */
+    void sync_guild_members();
+
+    /**
+     * Fetch a page of guild members (pagination helper).
+     */
+    void fetch_members_page(dpp::snowflake guild_id, dpp::snowflake after);
+
+    /**
+     * Validate that all tracked users are still on the server.
+     * Removes mappings for users who have left.
+     * @param synced_count Number of members synced - validation skipped if too low
+     */
+    void validate_tracked_users(size_t synced_count);
+
     services::UserMappingService& user_mapping_service_;
     services::LeaderboardService& leaderboard_service_;
     services::BeatmapCacheService* beatmap_cache_service_;
     SlashCommandHandler& slash_command_handler_;
     MemberHandler& member_handler_;
     dpp::cluster& bot_;
+
+    // Sync state
+    dpp::snowflake target_guild_id_{0};
+    std::atomic<size_t> sync_member_count_{0};
+    std::atomic<bool> sync_in_progress_{false};
+
+    // Minimum members required to run validation (safety threshold)
+    static constexpr size_t MIN_MEMBERS_FOR_VALIDATION = 10;
 };
 
 } // namespace handlers

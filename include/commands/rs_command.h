@@ -19,6 +19,7 @@ private:
         std::string params;
         bool valid = true;
         std::string error_message;
+        bool use_best = false;  // true when called as !rb
     };
 
     ParsedParams parse(const std::string& content) const;

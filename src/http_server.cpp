@@ -2,6 +2,8 @@
 #include <beatmap_downloader.h>
 #include <database.h>
 #include <utils.h>
+#include <debug_settings.h>
+#include <services/message_crawler_service.h>
 
 #include <crow.h>
 #include <spdlog/spdlog.h>
@@ -227,6 +229,60 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     response["server"]["port"] = port_;
 
     return crow::response(200, response);
+  });
+
+  // Debug settings - GET current state
+  CROW_ROUTE(app, "/debug")
+  ([]() {
+    auto& settings = debug::Settings::instance();
+
+    crow::json::wvalue response;
+    response["verbose_osu_api"] = settings.verbose_osu_api.load();
+    response["verbose_rosu_pp"] = settings.verbose_rosu_pp.load();
+    response["max_response_log_length"] = static_cast<int64_t>(settings.max_response_log_length.load());
+
+    return crow::response(200, response);
+  });
+
+  // Debug settings - POST to toggle
+  CROW_ROUTE(app, "/debug").methods("POST"_method)
+  ([](const crow::request& req) {
+    auto& settings = debug::Settings::instance();
+
+    try {
+      auto body = crow::json::load(req.body);
+      if (!body) {
+        return crow::response(400, R"({"error": "Invalid JSON"})");
+      }
+
+      crow::json::wvalue response;
+      response["updated"] = crow::json::wvalue::list();
+
+      if (body.has("verbose_osu_api")) {
+        bool val = body["verbose_osu_api"].b();
+        settings.verbose_osu_api.store(val);
+        spdlog::info("[DEBUG] verbose_osu_api set to {}", val);
+        response["verbose_osu_api"] = val;
+      }
+
+      if (body.has("verbose_rosu_pp")) {
+        bool val = body["verbose_rosu_pp"].b();
+        settings.verbose_rosu_pp.store(val);
+        spdlog::info("[DEBUG] verbose_rosu_pp set to {}", val);
+        response["verbose_rosu_pp"] = val;
+      }
+
+      if (body.has("max_response_log_length")) {
+        size_t val = static_cast<size_t>(body["max_response_log_length"].i());
+        settings.max_response_log_length.store(val);
+        spdlog::info("[DEBUG] max_response_log_length set to {}", val);
+        response["max_response_log_length"] = static_cast<int64_t>(val);
+      }
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      return crow::response(400, std::string(R"({"error": ")") + e.what() + "\"}");
+    }
   });
 
   // Commands documentation endpoint
@@ -824,6 +880,506 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     return res;
   });
 
+  // ============================================================================
+  // Word statistics and crawl status endpoints (MUST be before generic routes)
+  // ============================================================================
+
+  // GET /osu/api/guild - Guild info
+  CROW_ROUTE(app, "/osu/api/guild")
+  ([]() {
+    try {
+      // Get guild ID from config
+      dpp::snowflake guild_id = utils::read_field("GUILD_ID", "config.json");
+      if (guild_id == 0) {
+        crow::json::wvalue error;
+        error["error"] = "No guild configured";
+        return crow::response(404, error);
+      }
+
+      auto guild_opt = db::Database::instance().get_guild_info(guild_id);
+      if (!guild_opt) {
+        crow::json::wvalue error;
+        error["error"] = "Guild info not cached yet";
+        return crow::response(404, error);
+      }
+
+      const auto& guild = *guild_opt;
+      crow::json::wvalue response;
+      response["guild_id"] = guild.guild_id.str();
+      response["name"] = guild.name;
+      response["icon_hash"] = guild.icon_hash;
+      response["member_count"] = static_cast<int64_t>(guild.member_count);
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to retrieve guild info";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // GET /osu/api/users - List of users with message counts
+  CROW_ROUTE(app, "/osu/api/users")
+  ([this]() {
+    try {
+      if (!crawler_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Crawler service not available";
+        return crow::response(503, error);
+      }
+
+      auto authors = crawler_service_->get_message_authors();
+
+      crow::json::wvalue response;
+      crow::json::wvalue::list users_list;
+
+      for (const auto& author : authors) {
+        crow::json::wvalue user_obj;
+        user_obj["user_id"] = author.author_id.str();
+        user_obj["message_count"] = static_cast<int64_t>(author.message_count);
+        user_obj["username"] = author.username;
+        user_obj["display_name"] = author.display_name;
+        user_obj["avatar_hash"] = author.avatar_hash;
+        users_list.push_back(std::move(user_obj));
+      }
+
+      response["users"] = std::move(users_list);
+      response["count"] = static_cast<int64_t>(authors.size());
+      response["timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to retrieve users";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // GET /osu/api/channels - List of channels with message counts
+  CROW_ROUTE(app, "/osu/api/channels")
+  ([this]() {
+    try {
+      if (!crawler_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Crawler service not available";
+        return crow::response(503, error);
+      }
+
+      auto channels = crawler_service_->get_message_channels();
+
+      crow::json::wvalue response;
+      crow::json::wvalue::list channels_list;
+
+      for (const auto& channel : channels) {
+        crow::json::wvalue channel_obj;
+        channel_obj["channel_id"] = channel.channel_id.str();
+        channel_obj["message_count"] = static_cast<int64_t>(channel.message_count);
+        channel_obj["channel_name"] = channel.channel_name;
+        channels_list.push_back(std::move(channel_obj));
+      }
+
+      response["channels"] = std::move(channels_list);
+      response["count"] = static_cast<int64_t>(channels.size());
+      response["timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to retrieve channels";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // GET /osu/api/wordstats - JSON with top words
+  CROW_ROUTE(app, "/osu/api/wordstats")
+  ([this](const crow::request& req) {
+    try {
+      auto limit_param = req.url_params.get("limit");
+      auto lang_param = req.url_params.get("lang");
+      auto user_param = req.url_params.get("user_id");
+      auto channel_param = req.url_params.get("channel_id");
+      auto stopwords_param = req.url_params.get("exclude_stopwords");
+
+      size_t limit = limit_param ? std::stoul(limit_param) : 100;
+      std::string language = lang_param ? lang_param : "";
+      bool exclude_stopwords = stopwords_param && std::string(stopwords_param) == "true";
+
+      if (limit > 1000) limit = 1000;
+      if (limit < 1) limit = 1;
+
+      if (!crawler_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Crawler service not available";
+        return crow::response(503, error);
+      }
+
+      std::vector<db::WordStatEntry> words;
+
+      // Handle filtering combinations
+      if (user_param && channel_param) {
+        // Both user and channel specified
+        dpp::snowflake user_id(std::stoull(user_param));
+        dpp::snowflake channel_id(std::stoull(channel_param));
+        words = crawler_service_->get_user_top_words(user_id, limit, language, exclude_stopwords, channel_id);
+      } else if (user_param) {
+        // Only user specified
+        dpp::snowflake user_id(std::stoull(user_param));
+        words = crawler_service_->get_user_top_words(user_id, limit, language, exclude_stopwords);
+      } else if (channel_param) {
+        // Only channel specified
+        dpp::snowflake channel_id(std::stoull(channel_param));
+        words = crawler_service_->get_channel_top_words(channel_id, limit, language, exclude_stopwords);
+      } else {
+        // No filter - global stats
+        words = crawler_service_->get_top_words(limit, language, exclude_stopwords);
+      }
+
+      crow::json::wvalue response;
+      crow::json::wvalue::list words_list;
+
+      size_t total_count = 0;
+      for (const auto& entry : words) {
+        total_count += entry.count;
+      }
+
+      for (const auto& entry : words) {
+        crow::json::wvalue word_obj;
+        word_obj["word"] = entry.word;
+        word_obj["count"] = static_cast<int64_t>(entry.count);
+        word_obj["language"] = entry.language;
+        word_obj["percentage"] = total_count > 0
+            ? (static_cast<double>(entry.count) / total_count * 100.0) : 0.0;
+        words_list.push_back(std::move(word_obj));
+      }
+
+      // Get unique word count with same filters
+      size_t unique_count = crawler_service_->get_unique_word_count(language, exclude_stopwords);
+
+      response["words"] = std::move(words_list);
+      response["total_words"] = static_cast<int64_t>(total_count);
+      response["unique_words"] = static_cast<int64_t>(unique_count);
+      response["count"] = static_cast<int64_t>(words.size());
+      response["language_filter"] = language.empty() ? "all" : language;
+      response["user_filter"] = user_param ? user_param : "all";
+      response["channel_filter"] = channel_param ? channel_param : "all";
+      response["exclude_stopwords"] = exclude_stopwords;
+      response["timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to retrieve word statistics";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // GET /osu/api/phrasestats - JSON with top phrases
+  // Parameters:
+  //   limit - number of results (default: 100, max: 1000)
+  //   lang - language filter ("ru", "en", or empty for all)
+  //   sort - sort mode ("count", "pmi", "npmi", "llr", "uniqueness", "trending")
+  //   type - phrase type ("all", "bigram", "trigram")
+  //   min_count - minimum phrase count (default: 5)
+  //   user_id - filter by user
+  //   channel_id - filter by channel
+  //   filter - special filters ("new" for phrases appeared in last 7 days)
+  CROW_ROUTE(app, "/osu/api/phrasestats")
+  ([this](const crow::request& req) {
+    try {
+      auto limit_param = req.url_params.get("limit");
+      auto lang_param = req.url_params.get("lang");
+      auto sort_param = req.url_params.get("sort");
+      auto type_param = req.url_params.get("type");
+      auto min_count_param = req.url_params.get("min_count");
+      auto user_param = req.url_params.get("user_id");
+      auto channel_param = req.url_params.get("channel_id");
+      auto filter_param = req.url_params.get("filter");
+
+      size_t limit = limit_param ? std::stoul(limit_param) : 100;
+      std::string language = lang_param ? lang_param : "";
+      std::string sort_mode = sort_param ? sort_param : "count";
+      size_t min_count = min_count_param ? std::stoul(min_count_param) : 5;
+      std::string filter = filter_param ? filter_param : "";
+
+      // Legacy support: sort=pmi means sort_mode="pmi"
+      bool sort_by_pmi = (sort_mode == "pmi");
+
+      int word_count_filter = 0;
+      if (type_param) {
+        std::string type_str = type_param;
+        if (type_str == "bigram") word_count_filter = 2;
+        else if (type_str == "trigram") word_count_filter = 3;
+      }
+
+      if (limit > 1000) limit = 1000;
+      if (limit < 1) limit = 1;
+
+      if (!crawler_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Crawler service not available";
+        return crow::response(503, error);
+      }
+
+      std::vector<db::PhraseStatEntry> phrases;
+
+      // Handle filtering combinations
+      if (user_param && channel_param) {
+        // Both user and channel specified
+        dpp::snowflake user_id(std::stoull(user_param));
+        dpp::snowflake channel_id(std::stoull(channel_param));
+        phrases = crawler_service_->get_user_top_phrases(user_id, limit, language, sort_by_pmi, word_count_filter, min_count, channel_id, sort_mode);
+      } else if (user_param) {
+        // Only user specified
+        dpp::snowflake user_id(std::stoull(user_param));
+        phrases = crawler_service_->get_user_top_phrases(user_id, limit, language, sort_by_pmi, word_count_filter, min_count, 0, sort_mode);
+      } else if (channel_param) {
+        // Only channel specified
+        dpp::snowflake channel_id(std::stoull(channel_param));
+        phrases = crawler_service_->get_channel_top_phrases(channel_id, limit, language, sort_by_pmi, word_count_filter, min_count);
+      } else {
+        // No filter - global stats
+        phrases = crawler_service_->get_top_phrases(limit, language, sort_by_pmi, word_count_filter, min_count);
+      }
+
+      // Apply special filters
+      if (filter == "new") {
+        std::erase_if(phrases, [](const db::PhraseStatEntry& e) {
+          return !e.is_new;
+        });
+      }
+
+      crow::json::wvalue response;
+      crow::json::wvalue::list phrases_list;
+
+      size_t total_count = 0;
+      for (const auto& entry : phrases) {
+        total_count += entry.count;
+      }
+
+      for (const auto& entry : phrases) {
+        crow::json::wvalue phrase_obj;
+        phrase_obj["phrase"] = entry.phrase;
+        phrase_obj["count"] = static_cast<int64_t>(entry.count);
+        phrase_obj["word_count"] = entry.word_count;
+        phrase_obj["language"] = entry.language;
+
+        // PMI score
+        if (entry.pmi_score) {
+          phrase_obj["pmi"] = *entry.pmi_score;
+        }
+
+        // NPMI score (normalized PMI, [-1, 1])
+        if (entry.npmi_score) {
+          phrase_obj["npmi"] = *entry.npmi_score;
+        }
+
+        // LLR score (log-likelihood ratio)
+        if (entry.llr_score) {
+          phrase_obj["llr"] = *entry.llr_score;
+        }
+
+        // Uniqueness score (for user-specific queries)
+        if (entry.uniqueness_score) {
+          phrase_obj["uniqueness"] = *entry.uniqueness_score;
+        }
+
+        // Trend score (growth rate over last week)
+        if (entry.trend_score) {
+          phrase_obj["trend_score"] = *entry.trend_score;
+        }
+
+        // First seen timestamp
+        if (entry.first_seen) {
+          auto time_t_val = std::chrono::system_clock::to_time_t(*entry.first_seen);
+          std::tm tm = *std::gmtime(&time_t_val);
+          char buffer[32];
+          std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &tm);
+          phrase_obj["first_seen"] = std::string(buffer);
+        }
+
+        // Is new (appeared in last 7 days)
+        phrase_obj["is_new"] = entry.is_new;
+
+        phrase_obj["percentage"] = total_count > 0
+            ? (static_cast<double>(entry.count) / total_count * 100.0) : 0.0;
+        phrases_list.push_back(std::move(phrase_obj));
+      }
+
+      size_t unique_count = (user_param || channel_param) ? phrases.size() : crawler_service_->get_unique_phrase_count(language, word_count_filter);
+
+      response["phrases"] = std::move(phrases_list);
+      response["total_phrases"] = static_cast<int64_t>(total_count);
+      response["unique_phrases"] = static_cast<int64_t>(unique_count);
+      response["count"] = static_cast<int64_t>(phrases.size());
+      response["language_filter"] = language.empty() ? "all" : language;
+      response["type_filter"] = type_param ? type_param : "all";
+      response["user_filter"] = user_param ? user_param : "all";
+      response["channel_filter"] = channel_param ? channel_param : "all";
+      response["sort_by"] = sort_mode;
+      response["filter"] = filter.empty() ? "none" : filter;
+      response["min_count"] = static_cast<int64_t>(min_count);
+      response["timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to retrieve phrase statistics";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // GET /osu/api/crawl-status - Current crawl progress
+  CROW_ROUTE(app, "/osu/api/crawl-status")
+  ([this]() {
+    try {
+      if (!crawler_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Crawler service not available";
+        return crow::response(503, error);
+      }
+
+      auto summary = crawler_service_->get_crawl_summary();
+      auto channels = crawler_service_->get_channel_progress();
+
+      crow::json::wvalue response;
+      response["is_active"] = crawler_service_->is_running();
+      response["total_channels"] = static_cast<int64_t>(summary.total_channels);
+      response["completed_channels"] = static_cast<int64_t>(summary.completed_channels);
+      response["total_messages"] = static_cast<int64_t>(summary.total_messages);
+      response["progress_percent"] = summary.total_channels > 0
+          ? (static_cast<double>(summary.completed_channels) / summary.total_channels * 100.0) : 0.0;
+
+      crow::json::wvalue::list channel_list;
+      for (const auto& ch : channels) {
+        crow::json::wvalue ch_obj;
+        ch_obj["channel_id"] = ch.channel_id.str();
+        ch_obj["messages_crawled"] = static_cast<int64_t>(ch.total_messages);
+        ch_obj["initial_complete"] = ch.initial_crawl_complete;
+        if (ch.last_crawl != std::chrono::system_clock::time_point{}) {
+          ch_obj["last_crawl"] = std::chrono::duration_cast<std::chrono::seconds>(
+              ch.last_crawl.time_since_epoch()).count();
+        }
+        channel_list.push_back(std::move(ch_obj));
+      }
+
+      response["channels"] = std::move(channel_list);
+      response["timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to retrieve crawl status";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // POST /osu/api/refresh-stats - Trigger immediate stats recalculation
+  CROW_ROUTE(app, "/osu/api/refresh-stats").methods("POST"_method)
+  ([this]() {
+    try {
+      if (!crawler_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Crawler service not available";
+        return crow::response(503, error);
+      }
+
+      crawler_service_->trigger_stats_refresh();
+
+      crow::json::wvalue response;
+      response["success"] = true;
+      response["message"] = "Stats refresh triggered";
+      return crow::response(200, response);
+    } catch (const std::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Failed to trigger stats refresh";
+      error["details"] = e.what();
+      return crow::response(500, error);
+    }
+  });
+
+  // GET /osu/wordstats - HTML page displaying stats
+  CROW_ROUTE(app, "/osu/wordstats")
+  ([]() {
+    // Try multiple paths for static file
+    std::vector<std::filesystem::path> paths = {
+      "static/wordstats.html",
+      "../static/wordstats.html",
+      "/home/nisemonic/patchouli/bot/static/wordstats.html"
+    };
+
+    std::filesystem::path static_file;
+    for (const auto& p : paths) {
+      spdlog::debug("[HTTP] Checking path: {} exists={}", p.string(), std::filesystem::exists(p));
+      if (std::filesystem::exists(p)) {
+        static_file = p;
+        break;
+      }
+    }
+
+    if (static_file.empty()) {
+      spdlog::warn("[HTTP] wordstats.html not found in any path");
+      return crow::response(404, "Page not found");
+    }
+
+    std::ifstream file(static_file);
+    if (!file) {
+      return crow::response(500, "Failed to read page");
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+
+    crow::response res(200, buffer.str());
+    res.set_header("Content-Type", "text/html; charset=utf-8");
+    return res;
+  });
+
+  // GET /osu/phrasestats - HTML page displaying phrase stats
+  CROW_ROUTE(app, "/osu/phrasestats")
+  ([]() {
+    std::vector<std::filesystem::path> paths = {
+      "static/phrasestats.html",
+      "../static/phrasestats.html",
+      "/home/nisemonic/patchouli/bot/static/phrasestats.html"
+    };
+
+    std::filesystem::path static_file;
+    for (const auto& p : paths) {
+      if (std::filesystem::exists(p)) {
+        static_file = p;
+        break;
+      }
+    }
+
+    if (static_file.empty()) {
+      spdlog::warn("[HTTP] phrasestats.html not found in any path");
+      return crow::response(404, "Page not found");
+    }
+
+    std::ifstream file(static_file);
+    if (!file) {
+      return crow::response(500, "Failed to read page");
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+
+    crow::response res(200, buffer.str());
+    res.set_header("Content-Type", "text/html; charset=utf-8");
+    return res;
+  });
+
   // Serve files from beatmap extracts
   CROW_ROUTE(app, "/osu/<string>/<path>")
   ([this](const std::string& extract_id, const std::string& file_path) {
@@ -913,6 +1469,10 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
   });
 
   app.loglevel(crow::LogLevel::Warning);
+}
+
+void HttpServer::set_crawler_service(services::MessageCrawlerService* service) {
+  crawler_service_ = service;
 }
 
 HttpServer::~HttpServer() {

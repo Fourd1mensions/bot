@@ -1,6 +1,7 @@
 #pragma once
 
 #include <utils.h>
+#include <debug_settings.h>
 
 #include <string>
 #include <cpr/cpr.h>
@@ -18,10 +19,34 @@ private:
   Config config;
   bool set_token();
 
+  // Verbose logging helpers
+  void log_request(const std::string& method, const std::string& url,
+                   const std::string& body = "") const {
+    if (!debug::Settings::instance().verbose_osu_api.load()) return;
+
+    spdlog::info("[API-DEBUG] >>> {} {}", method, url);
+    if (!body.empty()) {
+      spdlog::info("[API-DEBUG] >>> Body: {}", body);
+    }
+  }
+
+  void log_response(const cpr::Response& r) const {
+    if (!debug::Settings::instance().verbose_osu_api.load()) return;
+
+    auto max_len = debug::Settings::instance().max_response_log_length.load();
+    std::string body = debug::Settings::truncate(r.text, max_len);
+
+    spdlog::info("[API-DEBUG] <<< Status: {} | Size: {} bytes", r.status_code, r.text.size());
+    spdlog::info("[API-DEBUG] <<< Body: {}", body);
+  }
+
   // Helper to execute API requests with automatic 401 retry
   template<typename Func>
   cpr::Response execute_with_retry(Func&& request_func) {
     cpr::Response r = request_func();
+
+    // Log response
+    log_response(r);
 
     // Handle 401 Unauthorized - token might have expired
     if (r.status_code == 401) {
@@ -30,6 +55,7 @@ private:
       if (set_token()) {
         // Retry the request with new token
         r = request_func();
+        log_response(r);
       }
     }
 

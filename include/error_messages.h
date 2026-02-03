@@ -42,4 +42,31 @@ constexpr std::string_view NO_SCORES_WITH_MODS_FORMAT =
 constexpr std::string_view SCORE_INDEX_OUT_OF_RANGE_FORMAT =
     "Score index {} out of range (max: {})";
 
+// Parameter validation errors
+constexpr std::string_view UNKNOWN_FLAG_FORMAT =
+    "Unknown flag `{}`. ";
+constexpr std::string_view UNKNOWN_FLAGS_FORMAT =
+    "Unknown flags: {}. ";
+constexpr std::string_view INVALID_INDEX_FORMAT =
+    "Invalid index `{}`. Must be a positive number.";
+constexpr std::string_view INVALID_MODE_FORMAT =
+    "Invalid mode `{}`. Supported: osu, taiko, catch, mania.";
+constexpr std::string_view FLAG_MISSING_VALUE_FORMAT =
+    "Flag `{}` requires a value.";
+
+// Command usage hints
+constexpr std::string_view RS_USAGE =
+    "Usage: `!rs [username] [-i INDEX] [-p] [-b] [-m MODE]`\n"
+    "• `-i N` — show score #N (default: 1)\n"
+    "• `-p` — passed scores only\n"
+    "• `-b` — best scores instead of recent\n"
+    "• `-m MODE` — osu, taiko, catch, mania";
+constexpr std::string_view LB_USAGE =
+    "Usage: `!lb [+MODS] [-s SORT] [BEATMAP_URL]`\n"
+    "• `+MODS` — filter by mods (e.g., +HDDT)\n"
+    "• `-s SORT` — sort by: pp, score, acc, combo, date";
+constexpr std::string_view COMPARE_USAGE =
+    "Usage: `!c [username] [+MODS]`\n"
+    "• `+MODS` — filter by mods (e.g., +HD)";
+
 } // namespace error_messages

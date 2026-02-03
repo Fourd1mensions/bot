@@ -28,7 +28,7 @@ void MemberHandler::handle_add(const dpp::guild_member_add_t& event) {
 }
 
 void MemberHandler::handle_remove(const dpp::guild_member_remove_t& event) {
-    user_mapping_service_.remove_mapping(event.removed.id.str());
+    user_mapping_service_.remove_mapping(event.removed.id);
 }
 
 } // namespace handlers
