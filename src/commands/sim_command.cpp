@@ -6,7 +6,6 @@
 #include "services/beatmap_performance_service.h"
 #include <requests.h>
 #include <osu.h>
-#include <osu_tools.h>
 #include <database.h>
 #include <utils.h>
 #include <spdlog/spdlog.h>
@@ -285,19 +284,25 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
         return;
     }
 
-    // Calculate PP using osu-tools
+    // Calculate PP using performance service
     std::string mods = parsed.mods_filter.empty() ? "NM" : parsed.mods_filter;
 
-    auto result = osu_tools::simulate_performance(
-        *osu_file_path,
-        parsed.accuracy,
-        parsed.mode,
-        mods,
-        parsed.combo,
-        parsed.misses,
-        parsed.count_100,
-        parsed.count_50
-    );
+    // Get difficulty attributes first
+    auto diff_opt = s->performance_service.get_difficulty_direct(beatmap_id, mods);
+    if (!diff_opt) {
+        ctx.reply(s->message_presenter.build_error_message("Failed to get beatmap difficulty."));
+        return;
+    }
+
+    services::SimulateParams params;
+    params.accuracy = parsed.accuracy;
+    params.mods = mods;
+    params.combo = parsed.combo;
+    params.misses = parsed.misses;
+    params.count_100 = parsed.count_100;
+    params.count_50 = parsed.count_50;
+
+    auto result = s->performance_service.calculate_pp(beatmapset_id, beatmap_id, parsed.mode, params);
 
     if (!result.has_value()) {
         ctx.reply(s->message_presenter.build_error_message("Failed to simulate score. Please try again."));
@@ -305,6 +310,10 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
             beatmap_id, parsed.accuracy * 100, parsed.mods_filter);
         return;
     }
+
+    // Use difficulty from separate call
+    double star_rating = diff_opt->star_rating;
+    int max_combo = diff_opt->max_combo;
 
     // Build response message
     std::string mode_display = parsed.mode;
@@ -315,7 +324,7 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
         content += fmt::format(" [{}]", mode_display);
     }
     content += "\n";
-    content += fmt::format(":star: **{:.2f}★**\n\n", result->difficulty.star_rating);
+    content += fmt::format(":star: **{:.2f}★**\n\n", star_rating);
 
     content += "**Score Parameters:**\n";
     content += fmt::format("• Accuracy: **{:.2f}%**\n", parsed.accuracy * 100);
@@ -328,9 +337,9 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
     }
     content += fmt::format("• Mods: **{}**\n", mods);
     if (parsed.combo > 0) {
-        content += fmt::format("• Combo: **{}x** (max: **{}x**)\n", parsed.combo, result->difficulty.max_combo);
+        content += fmt::format("• Combo: **{}x** (max: **{}x**)\n", parsed.combo, max_combo);
     } else {
-        content += fmt::format("• Max Combo: **{}x**\n", result->difficulty.max_combo);
+        content += fmt::format("• Max Combo: **{}x**\n", max_combo);
     }
     if (parsed.mode == "mania" && parsed.ratio > 0.0) {
         content += fmt::format("• Ratio: **{:.2f}**\n", parsed.ratio);
@@ -344,8 +353,8 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
     content += fmt::format("• Accuracy: **{:.0f}pp**\n\n", result->accuracy_pp);
 
     content += "**Difficulty:**\n";
-    content += fmt::format("• Aim: **{:.2f}★**\n", result->difficulty.aim_difficulty);
-    content += fmt::format("• Speed: **{:.2f}★**\n", result->difficulty.speed_difficulty);
+    content += fmt::format("• Aim: **{:.2f}★**\n", diff_opt->aim_difficulty);
+    content += fmt::format("• Speed: **{:.2f}★**\n", diff_opt->speed_difficulty);
 
     ctx.reply(content);
 }

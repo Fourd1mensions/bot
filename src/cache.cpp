@@ -526,6 +526,79 @@ std::optional<CompareState> MemcachedCache::deserialize_compare(const std::strin
     }
 }
 
+// UsersState operations
+bool MemcachedCache::cache_users(const std::string& state_id, const UsersState& state) {
+    std::string data = serialize_users(state);
+    return set("users:" + state_id, data, std::chrono::seconds(300)); // 5 minutes
+}
+
+std::optional<UsersState> MemcachedCache::get_users(const std::string& state_id) {
+    auto data = get("users:" + state_id);
+    if (!data) {
+        return std::nullopt;
+    }
+    return deserialize_users(*data);
+}
+
+bool MemcachedCache::delete_users(const std::string& state_id) {
+    return del("users:" + state_id);
+}
+
+std::string MemcachedCache::serialize_users(const UsersState& state) {
+    json j;
+    j["current_page"] = state.current_page;
+    j["total_pages"] = state.total_pages;
+    j["caller_discord_id"] = static_cast<uint64_t>(state.caller_discord_id);
+    j["created_at"] = std::chrono::duration_cast<std::chrono::milliseconds>(
+        state.created_at.time_since_epoch()
+    ).count();
+
+    j["users"] = json::array();
+    for (const auto& user : state.users) {
+        json user_json;
+        user_json["discord_id"] = static_cast<uint64_t>(user.discord_id);
+        user_json["osu_user_id"] = user.osu_user_id;
+        user_json["osu_username"] = user.osu_username;
+        j["users"].push_back(user_json);
+    }
+
+    return j.dump();
+}
+
+std::optional<UsersState> MemcachedCache::deserialize_users(const std::string& data) {
+    try {
+        json j = json::parse(data);
+
+        UsersState state;
+        state.current_page = j["current_page"];
+        state.total_pages = j["total_pages"];
+        state.caller_discord_id = dpp::snowflake(j.value("caller_discord_id", 0ULL));
+
+        if (j.contains("created_at")) {
+            auto millis = j["created_at"].get<int64_t>();
+            state.created_at = std::chrono::steady_clock::time_point(
+                std::chrono::milliseconds(millis)
+            );
+        }
+
+        for (const auto& user_json : j["users"]) {
+            UserMapping user;
+            user.discord_id = dpp::snowflake(user_json["discord_id"].get<uint64_t>());
+            user.osu_user_id = user_json["osu_user_id"];
+            user.osu_username = user_json["osu_username"];
+            state.users.push_back(user);
+        }
+
+        // Ensure total_pages is valid (avoid underflow in pagination)
+        if (state.total_pages == 0) state.total_pages = 1;
+
+        return state;
+    } catch (const json::exception& e) {
+        spdlog::error("Failed to deserialize users: {}", e.what());
+        return std::nullopt;
+    }
+}
+
 // OAuth token operations
 bool MemcachedCache::cache_oauth_tokens(const std::string& access_token,
                                        const std::string& refresh_token,

@@ -23,6 +23,8 @@ struct ScorePresentation {
     std::string header;       // "username `123pp` +HDDT"
     std::string body;         // Score details (accuracy, combo, etc.)
     double display_pp;        // PP value to show (may be calculated for Loved maps)
+    std::string username;     // For author display
+    uint64_t user_id = 0;     // For avatar URL
 };
 
 /**
@@ -231,6 +233,8 @@ public:
         std::string beatmap_info;
         std::string footer;
         time_t timestamp;
+        std::string username;
+        uint64_t user_id;
     };
 
     /**

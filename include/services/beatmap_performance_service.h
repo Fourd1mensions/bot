@@ -4,11 +4,18 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <memory>
 
 // Forward declarations
 class BeatmapDownloader;
 
 namespace services {
+
+class BeatmapCacheService;
+
+#ifdef USE_ROSU_PP_SERVICE
+class RosuPpClient;
+#endif
 
 /**
  * Difficulty attributes for a beatmap with mods applied.
@@ -50,15 +57,38 @@ struct SimulateParams {
 /**
  * Service for beatmap performance calculations.
  * Encapsulates .osu file loading, parsing, and PP calculation.
+ *
+ * When USE_ROSU_PP_SERVICE is defined, uses rosu-pp-service via gRPC
+ * for high-performance calculations. Falls back to osu-tools otherwise.
  */
 class BeatmapPerformanceService {
 public:
-    explicit BeatmapPerformanceService(BeatmapDownloader& downloader);
-    ~BeatmapPerformanceService() = default;
+    /**
+     * Construct service with beatmap downloader.
+     * @param downloader Reference to beatmap downloader
+     * @param cache_service Optional cache service for background .osz downloads
+     * @param rosu_pp_address Optional rosu-pp-service address (default: localhost:50051)
+     */
+    explicit BeatmapPerformanceService(
+        BeatmapDownloader& downloader,
+        BeatmapCacheService* cache_service = nullptr,
+        const std::string& rosu_pp_address = "localhost:50051"
+    );
+    ~BeatmapPerformanceService();
 
     // Disable copy
     BeatmapPerformanceService(const BeatmapPerformanceService&) = delete;
     BeatmapPerformanceService& operator=(const BeatmapPerformanceService&) = delete;
+
+    /**
+     * Check if rosu-pp-service is available.
+     */
+    [[nodiscard]] bool is_rosu_pp_available() const;
+
+    /**
+     * Set the cache service for background .osz downloads.
+     */
+    void set_cache_service(BeatmapCacheService* cache_service);
 
     /**
      * Get path to .osu file for a beatmap via .osz extraction.
@@ -136,6 +166,26 @@ public:
 
 private:
     BeatmapDownloader& downloader_;
+    BeatmapCacheService* cache_service_;
+
+#ifdef USE_ROSU_PP_SERVICE
+    std::unique_ptr<RosuPpClient> rosu_pp_client_;
+
+    // Internal helpers for rosu-pp-service
+    std::optional<PerformanceAttrs> calculate_pp_rosu(
+        const std::string& osu_path,
+        const std::string& mode,
+        const SimulateParams& params
+    );
+
+    std::vector<double> calculate_pp_at_accuracies_rosu(
+        const std::string& osu_path,
+        const std::string& mode,
+        const std::string& mods,
+        const std::vector<double>& accuracy_levels,
+        BeatmapDifficultyAttrs* out_difficulty
+    );
+#endif
 };
 
 } // namespace services

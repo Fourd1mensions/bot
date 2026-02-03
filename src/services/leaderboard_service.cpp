@@ -9,7 +9,6 @@
 #include <requests.h>
 #include <beatmap_downloader.h>
 #include <osu.h>
-#include <osu_tools.h>
 #include <utils.h>
 #include <database.h>
 #include <cache.h>
@@ -138,22 +137,18 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
         // Calculate PP if API returns 0 (for Loved maps)
         double display_pp = score.get_pp();
         if (display_pp <= 0.01 && osu_file_path_opt.has_value() && score.get_mode() == "osu") {
-            // Use osu-tools for accurate PP calculation
-            auto perf_opt = osu_tools::simulate_performance(
-                *osu_file_path_opt,
-                score.get_accuracy(),
-                "osu",
-                score.get_mods(),
-                score.get_max_combo(),
-                score.get_count_miss(),
-                score.get_count_100(),
-                score.get_count_50()
-            );
+            SimulateParams params;
+            params.accuracy = score.get_accuracy();
+            params.mods = score.get_mods();
+            params.combo = score.get_max_combo();
+            params.misses = score.get_count_miss();
+            params.count_100 = score.get_count_100();
+            params.count_50 = score.get_count_50();
 
+            auto perf_opt = performance_service_.calculate_pp(beatmapset_id, beatmap_id, "osu", params);
             if (perf_opt.has_value()) {
                 display_pp = perf_opt->pp;
-                spdlog::debug("[LB] Calculated PP using osu-tools for score by {}: {:.2f}pp (aim: {:.2f}, speed: {:.2f}, acc: {:.2f})",
-                    score.get_user_id(), display_pp, perf_opt->aim_pp, perf_opt->speed_pp, perf_opt->accuracy_pp);
+                spdlog::info("[LB] PP calc for {}: {:.2f}pp", score.get_user_id(), display_pp);
             }
         }
 
@@ -169,7 +164,9 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
             .rank = i + 1,
             .header = header,
             .body = score.get_body(state.beatmap.get_max_combo()),
-            .display_pp = display_pp
+            .display_pp = display_pp,
+            .username = score.get_username(),
+            .user_id = score.get_user_id()
         });
     }
 
@@ -342,6 +339,39 @@ void LeaderboardService::create_leaderboard(
         return;
     }
 
+    // Calculate PP for Loved/unranked maps (where API returns pp=0)
+    bool needs_pp_calculation = std::any_of(scores.begin(), scores.end(),
+        [](const Score& s) { return s.get_pp() <= 0.01; });
+
+    if (needs_pp_calculation) {
+        uint32_t bm_id = beatmap.get_beatmap_id();
+        spdlog::info("[LB] Calculating PP for {} scores (Loved/unranked map)", scores.size());
+
+        for (auto& score : scores) {
+            if (score.get_pp() <= 0.01 && score.get_mode() == "osu") {
+                SimulateParams params;
+                params.accuracy = score.get_accuracy();
+                params.mods = score.get_mods();
+                params.combo = score.get_max_combo();
+                params.misses = score.get_count_miss();
+                params.count_100 = score.get_count_100();
+                params.count_50 = score.get_count_50();
+
+                auto perf_opt = performance_service_.calculate_pp(beatmapset_id, bm_id, "osu", params);
+                if (perf_opt.has_value()) {
+                    score.set_pp(static_cast<float_t>(perf_opt->pp));
+                    spdlog::info("[LB] PP for {}: {:.2f}pp", score.get_username(), perf_opt->pp);
+                }
+            }
+        }
+    }
+
+    // Debug: log pp values before sort
+    spdlog::info("[LB] Before sort ({} scores):", scores.size());
+    for (size_t i = 0; i < scores.size(); ++i) {
+        spdlog::info("[LB]   {}: {} pp={:.2f} score={}", i, scores[i].get_username(), scores[i].get_pp(), scores[i].get_total_score());
+    }
+
     // Sort scores based on selected method
     if (scores.size() > 1) {
         switch (sort_method) {
@@ -373,6 +403,12 @@ void LeaderboardService::create_leaderboard(
                 });
                 break;
         }
+    }
+
+    // Debug: log pp values after sort
+    spdlog::info("[LB] After sort:");
+    for (size_t i = 0; i < scores.size(); ++i) {
+        spdlog::info("[LB]   {}: {} pp={:.2f} score={}", i, scores[i].get_username(), scores[i].get_pp(), scores[i].get_total_score());
     }
 
     if (elapsed > 8) {
@@ -575,6 +611,39 @@ void LeaderboardService::create_leaderboard(
         return;
     }
 
+    // Calculate PP for Loved/unranked maps (where API returns pp=0)
+    bool needs_pp_calculation = std::any_of(scores.begin(), scores.end(),
+        [](const Score& s) { return s.get_pp() <= 0.01; });
+
+    if (needs_pp_calculation) {
+        uint32_t bm_id = beatmap.get_beatmap_id();
+        spdlog::info("[LB] Calculating PP for {} scores (Loved/unranked map)", scores.size());
+
+        for (auto& score : scores) {
+            if (score.get_pp() <= 0.01 && score.get_mode() == "osu") {
+                SimulateParams params;
+                params.accuracy = score.get_accuracy();
+                params.mods = score.get_mods();
+                params.combo = score.get_max_combo();
+                params.misses = score.get_count_miss();
+                params.count_100 = score.get_count_100();
+                params.count_50 = score.get_count_50();
+
+                auto perf_opt = performance_service_.calculate_pp(beatmapset_id, bm_id, "osu", params);
+                if (perf_opt.has_value()) {
+                    score.set_pp(static_cast<float_t>(perf_opt->pp));
+                    spdlog::info("[LB] PP for {}: {:.2f}pp", score.get_username(), perf_opt->pp);
+                }
+            }
+        }
+    }
+
+    // Debug: log pp values before sort
+    spdlog::info("[LB] Before sort ({} scores):", scores.size());
+    for (size_t i = 0; i < scores.size(); ++i) {
+        spdlog::info("[LB]   {}: {} pp={:.2f} score={}", i, scores[i].get_username(), scores[i].get_pp(), scores[i].get_total_score());
+    }
+
     // Sort scores based on selected method
     if (scores.size() > 1) {
         switch (sort_method) {
@@ -606,6 +675,12 @@ void LeaderboardService::create_leaderboard(
                 });
                 break;
         }
+    }
+
+    // Debug: log pp values after sort
+    spdlog::info("[LB] After sort:");
+    for (size_t i = 0; i < scores.size(); ++i) {
+        spdlog::info("[LB]   {}: {} pp={:.2f} score={}", i, scores[i].get_username(), scores[i].get_pp(), scores[i].get_total_score());
     }
 
     if (elapsed > 8) {

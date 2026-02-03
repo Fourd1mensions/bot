@@ -54,6 +54,17 @@ bool UserMappingService::has_mapping(dpp::snowflake discord_id) const {
 
 bool UserMappingService::remove_mapping(dpp::snowflake discord_id) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Remove from database first
+    try {
+        auto& db = db::Database::instance();
+        db.remove_user_mapping(discord_id);
+        spdlog::info("[UserMapping] Removed user {} from tracking (database)", discord_id.str());
+    } catch (const std::exception& e) {
+        spdlog::error("[UserMapping] Failed to remove user {} from database: {}", discord_id.str(), e.what());
+    }
+
+    // Remove from in-memory cache
     return mappings_.erase(discord_id) > 0;
 }
 

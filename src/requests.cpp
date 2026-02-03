@@ -84,8 +84,14 @@ bool Request::update_token() {
 }
 
 std::string Request::get_userid_v1(const std::string_view username) {
+  std::string url = fmt::format("http://osu.ppy.sh/api/get_user?u={}", username);
+  log_request("GET", url);
+
   cpr::Response r      = cpr::Get(cpr::Url{"http://osu.ppy.sh/api/get_user"},
                                   cpr::Parameters{{"k", config.api_v1_key}, {"u", username.data()}});
+
+  log_response(r);
+
   const size_t        pos    = r.text.find_first_of("0123456789");
   const size_t        endpos = r.text.find_first_not_of("0123456789", pos);
   return std::string(r.text.substr(pos, endpos - pos));
@@ -102,10 +108,13 @@ std::string Request::get_user(const std::string_view user, const bool by_id) {
 
   // URL-encode username if not using ID
   std::string encoded_user = by_id ? std::string(user) : cpr::util::urlEncode(std::string(user));
+  std::string url = fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", encoded_user);
+
+  log_request("GET", url);
 
   cpr::Response r = execute_with_retry([&]() {
     return cpr::Get(
-        cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", encoded_user)},
+        cpr::Url{url},
         cpr::Header{{"Authorization", "Bearer " + config.access_token},
                     {"Content-Type", "application/json"},
                     {"Accept", "application/json"}});
@@ -130,9 +139,13 @@ std::string Request::get_user_beatmap_score(const std::string_view beatmap,
   }
 
   auto start = std::chrono::steady_clock::now();
+  std::string url = fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}",
+                                beatmap, user, all ? "/all" : "");
+
+  log_request("GET", url);
+
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/scores/users/{}{}",
-                                         beatmap, user, all ? "/all" : "")},
+    return cpr::Get(cpr::Url{url},
                     cpr::Header{{"Authorization", "Bearer " + config.access_token},
                                 {"Content-Type", "application/json"},
                                 {"Accept", "application/json"}});
@@ -171,8 +184,12 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
   }
 
   auto start = std::chrono::steady_clock::now();
+  std::string url = fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap);
+
+  log_request("GET", url);
+
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}", beatmap)},
+    return cpr::Get(cpr::Url{url},
                     cpr::Header{{"Authorization", "Bearer " + config.access_token},
                                 {"Content-Type", "application/json"},
                                 {"Accept", "application/json"}});
@@ -204,13 +221,18 @@ std::string Request::get_beatmap_attributes(const std::string_view beatmap, uint
     body["mods"] = mods_bitset;
   }
 
+  std::string url = fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/attributes", beatmap);
+  std::string body_str = body.dump();
+
+  log_request("POST", url, body_str);
+
   cpr::Response r = execute_with_retry([&]() {
     return cpr::Post(
-        cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmaps/{}/attributes", beatmap)},
+        cpr::Url{url},
         cpr::Header{{"Authorization", "Bearer " + config.access_token},
                     {"Content-Type", "application/json"},
                     {"Accept", "application/json"}},
-        cpr::Body{body.dump()});
+        cpr::Body{body_str});
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -252,6 +274,10 @@ std::string Request::get_user_recent_scores(const std::string_view user_id,
   if (offset > 0) {
     params.Add({"offset", std::to_string(offset)});
   }
+
+  // Log request
+  log_request("GET", fmt::format("{}?include_fails={}&mode={}&limit={}&offset={}",
+    url, include_fails ? "1" : "0", mode, limit, offset));
 
   cpr::Response r = execute_with_retry([&]() {
     return cpr::Get(
@@ -300,6 +326,9 @@ std::string Request::get_user_best_scores(const std::string_view user_id,
     params.Add({"offset", std::to_string(offset)});
   }
 
+  // Log request
+  log_request("GET", fmt::format("{}?mode={}&limit={}&offset={}", url, mode, limit, offset));
+
   cpr::Response r = execute_with_retry([&]() {
     return cpr::Get(
         cpr::Url{url},
@@ -329,11 +358,17 @@ std::string Request::get_beatmap_id_from_set(const std::string_view beatmapset_i
   }
 
   auto start = std::chrono::steady_clock::now();
+  std::string url = fmt::format("https://osu.ppy.sh/api/v2/beatmapsets/{}", beatmapset_id);
+
+  log_request("GET", url);
+
   cpr::Response r =
-      cpr::Get(cpr::Url{fmt::format("https://osu.ppy.sh/api/v2/beatmapsets/{}", beatmapset_id)},
+      cpr::Get(cpr::Url{url},
                cpr::Header{{"Authorization", "Bearer " + config.access_token},
                            {"Content-Type", "application/json"},
                            {"Accept", "application/json"}});
+
+  log_response(r);
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now() - start).count();

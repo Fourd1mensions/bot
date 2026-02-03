@@ -46,6 +46,9 @@ private:
     // Compare button handlers
     void handle_cmp_pagination(const dpp::button_click_t& event, const std::string& button_id);
 
+    // Users button handlers
+    void handle_users_pagination(const dpp::button_click_t& event, const std::string& button_id);
+
     // Form handlers
     void handle_lb_jump_modal(const dpp::form_submit_t& event);
 

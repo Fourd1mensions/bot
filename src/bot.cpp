@@ -14,6 +14,9 @@
 #include <commands/map_command.h>
 #include <commands/compare_command.h>
 #include <commands/sim_command.h>
+#include <commands/users_command.h>
+#include <commands/admin_set_command.h>
+#include <commands/admin_unset_command.h>
 
 // Handlers
 #include <handlers/button_handler.h>
@@ -39,7 +42,7 @@ Bot::Bot(const std::string& token, bool delete_commands)
       beatmap_resolver_service(request),
       performance_service(beatmap_downloader),
       user_resolver_service(request) {
-  bot.intents = dpp::i_default_intents | dpp::i_message_content;
+  bot.intents = dpp::i_default_intents | dpp::i_message_content | dpp::i_guild_members;
 
   // Configure spdlog with structured logging pattern
   spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
@@ -51,12 +54,24 @@ Bot::Bot(const std::string& token, bool delete_commands)
     spdlog::error("Failed to load config.json");
   }
 
+  // Configure webhook service
+  webhook_service.set_webhook(services::WebhookChannel::MirrorErrors, config.webhooks.mirror_errors);
+  webhook_service.set_webhook(services::WebhookChannel::General, config.webhooks.general);
+  webhook_service.set_webhook(services::WebhookChannel::Debug, config.webhooks.debug);
+
+  // Configure beatmap downloader from config
+  beatmap_downloader.set_mirrors(config.beatmap_mirrors);
+  beatmap_downloader.set_webhook_service(&webhook_service);
+
   // Initialize HTTP server with config values
   http_server = std::make_unique<HttpServer>(config.http_host, config.http_port, config.beatmap_mirrors);
 
   // Initialize beatmap cache service for proactive caching
   beatmap_cache_service = std::make_unique<services::BeatmapCacheService>(beatmap_downloader, request, bot);
   beatmap_cache_service->set_error_channel(dpp::snowflake(1284189678035009670ULL));
+
+  // Link performance service to cache service for background .osz downloads
+  performance_service.set_cache_service(beatmap_cache_service.get());
 
   // Initialize recent score service
   recent_score_service = std::make_unique<services::RecentScoreService>(
@@ -70,6 +85,9 @@ Bot::Bot(const std::string& token, bool delete_commands)
   // Initialize beatmap extract service
   beatmap_extract_service = std::make_unique<services::BeatmapExtractService>(
       beatmap_downloader, request, chat_context_service, beatmap_resolver_service, message_presenter);
+
+  // Initialize message crawler service
+  message_crawler_service = std::make_unique<services::MessageCrawlerService>(bot);
 
   // Initialize handlers
   button_handler = std::make_unique<handlers::ButtonHandler>(
@@ -101,8 +119,32 @@ Bot::Bot(const std::string& token, bool delete_commands)
   // Cleanup database entries for missing beatmap files
   beatmap_downloader.cleanup_missing_files();
 
-  // Register event handlers
-  bot.on_log(dpp::utility::cout_logger());
+  // Register event handlers - route DPP logs through spdlog
+  bot.on_log([](const dpp::log_t& event) {
+    switch (event.severity) {
+      case dpp::ll_trace:
+        spdlog::trace("[DPP] {}", event.message);
+        break;
+      case dpp::ll_debug:
+        spdlog::debug("[DPP] {}", event.message);
+        break;
+      case dpp::ll_info:
+        spdlog::info("[DPP] {}", event.message);
+        break;
+      case dpp::ll_warning:
+        spdlog::warn("[DPP] {}", event.message);
+        break;
+      case dpp::ll_error:
+        spdlog::error("[DPP] {}", event.message);
+        break;
+      case dpp::ll_critical:
+        spdlog::critical("[DPP] {}", event.message);
+        break;
+      default:
+        spdlog::info("[DPP] {}", event.message);
+        break;
+    }
+  });
 
   bot.on_button_click([this](const dpp::button_click_t& event) {
     button_handler->handle_button_click(event);
@@ -114,10 +156,18 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   bot.on_message_create([this](const dpp::message_create_t& event) {
     message_handler->handle_create(event);
+    // Store new message in crawler database
+    if (message_crawler_service) {
+      message_crawler_service->on_new_message(event.msg);
+    }
   });
 
   bot.on_message_update([this](const dpp::message_update_t& event) {
     message_handler->handle_update(event);
+    // Update message in crawler database if it was edited
+    if (message_crawler_service) {
+      message_crawler_service->on_message_update(event.msg);
+    }
   });
 
   bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
@@ -145,6 +195,10 @@ Bot::Bot(const std::string& token, bool delete_commands)
     ready_handler->handle(event, delete_commands);
   });
 
+  bot.on_guild_members_chunk([this](const dpp::guild_members_chunk_t& event) {
+    ready_handler->handle_member_chunk(event);
+  });
+
   // Create service container for command dependency injection
   service_container = std::make_unique<ServiceContainer>(ServiceContainer{
     .bot = bot,
@@ -154,6 +208,7 @@ Bot::Bot(const std::string& token, bool delete_commands)
     .chat_context_service = chat_context_service,
     .beatmap_resolver_service = beatmap_resolver_service,
     .user_resolver_service = user_resolver_service,
+    .user_mapping_service = user_mapping_service,
     .message_presenter = message_presenter,
     .command_params_service = command_params_service,
     .performance_service = performance_service,
@@ -167,6 +222,9 @@ Bot::Bot(const std::string& token, bool delete_commands)
   command_router.set_services(service_container.get());
   register_commands();
 
+  // Connect crawler service to HTTP server for status endpoint
+  http_server->set_crawler_service(message_crawler_service.get());
+
   // Start HTTP health check server
   http_server->start();
 }
@@ -179,12 +237,20 @@ void Bot::register_commands() {
   command_router.register_command(std::make_unique<commands::MapCommand>());
   command_router.register_command(std::make_unique<commands::CompareCommand>());
   command_router.register_command(std::make_unique<commands::SimCommand>());
+  command_router.register_command(std::make_unique<commands::UsersCommand>());
+  command_router.register_command(std::make_unique<commands::AdminSetCommand>());
+  command_router.register_command(std::make_unique<commands::AdminUnsetCommand>());
 }
 
 void Bot::start() {
   // Start beatmap cache service
   if (beatmap_cache_service) {
     beatmap_cache_service->start();
+  }
+
+  // Start message crawler service
+  if (message_crawler_service) {
+    message_crawler_service->start();
   }
 
   // Non-blocking start so main thread can manage shutdown
@@ -194,7 +260,15 @@ void Bot::start() {
 void Bot::shutdown() {
   spdlog::info("Shutting down bot...");
 
-  // Stop beatmap cache service first
+  // Request download abort first so ongoing downloads stop quickly
+  beatmap_downloader.request_shutdown();
+
+  // Stop message crawler service
+  if (message_crawler_service) {
+    message_crawler_service->stop();
+  }
+
+  // Stop beatmap cache service
   if (beatmap_cache_service) {
     beatmap_cache_service->stop();
   }

@@ -93,10 +93,10 @@ private:
   std::atomic<size_t> total_downloaded_{0};
   std::atomic<size_t> total_failed_{0};
 
-  // Track download timestamps for time-based stats
+  // Track download timestamps for time-based stats (fallback if DB unavailable)
   mutable std::mutex stats_mutex_;
   std::deque<std::chrono::steady_clock::time_point> download_timestamps_;
-  void record_download();
+  void record_download(uint32_t beatmapset_id);
   void cleanup_old_timestamps() const;
 };
 

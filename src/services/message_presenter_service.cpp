@@ -33,11 +33,16 @@ dpp::message MessagePresenterService::build_leaderboard_page(
 
     auto embed = dpp::embed()
         .set_color(dpp::colors::viola_purple)
-        .set_title(title)
-        .set_url(beatmap.get_beatmap_url())
-        .set_thumbnail(beatmap.get_image_url())
+        .set_thumbnail(beatmap.get_thumbnail_url())
         .set_footer(dpp::embed_footer().set_text(footer_text))
         .set_timestamp(time(0));
+
+    if (!scores_on_page.empty() && scores_on_page[0].user_id > 0) {
+        std::string avatar_url = fmt::format("https://a.ppy.sh/{}", scores_on_page[0].user_id);
+        embed.set_author(title, beatmap.get_beatmap_url(), avatar_url);
+    } else {
+        embed.set_author(title, beatmap.get_beatmap_url(), "");
+    }
 
     for (const auto& score : scores_on_page) {
         dpp::embed_field field;
@@ -78,7 +83,7 @@ MessagePresenterService::RecentScoreCacheData MessagePresenterService::build_rec
     }
 
     data.url = beatmap.get_beatmap_url();
-    data.thumbnail = beatmap.get_image_url();
+    data.thumbnail = beatmap.get_thumbnail_url();
 
     // Get rank emoji
     std::string emoji_id = get_rank_emoji(score.get_rank());
@@ -133,15 +138,22 @@ MessagePresenterService::RecentScoreCacheData MessagePresenterService::build_rec
         difficulty.hp_drain_rate
     );
 
-    // Build footer
+    // Build footer (capitalize first letter)
+    std::string capitalized_type = score_type;
+    if (!capitalized_type.empty()) {
+        capitalized_type[0] = std::toupper(capitalized_type[0]);
+    }
     data.footer = fmt::format("{} score #{}/{}{}",
-        score_type,
+        capitalized_type,
         pagination.current + 1,
         pagination.total,
         pagination.refresh_count > 0 ? fmt::format(" • refreshed {}x", pagination.refresh_count) : ""
     );
 
     data.timestamp = utils::ISO8601_to_UNIX(score.get_created_at());
+
+    data.username = score.get_username();
+    data.user_id = score.get_user_id();
 
     return data;
 }
@@ -163,10 +175,11 @@ dpp::message MessagePresenterService::build_recent_score_page(
         score_type, completion_percent, modded_bpm, modded_length
     );
 
+    std::string avatar_url = fmt::format("https://a.ppy.sh/{}", score.get_user_id());
+
     auto embed = dpp::embed()
         .set_color(dpp::colors::viola_purple)
-        .set_title(data.title)
-        .set_url(data.url)
+        .set_author(data.title, data.url, avatar_url)
         .set_description(data.description)
         .set_thumbnail(data.thumbnail);
 
@@ -377,7 +390,7 @@ dpp::message MessagePresenterService::build_compare_page(const CompareState& sta
         .set_color(dpp::colors::viola_purple)
         .set_title(title)
         .set_url(state.beatmap.get_beatmap_url())
-        .set_thumbnail(state.beatmap.get_image_url())
+        .set_thumbnail(state.beatmap.get_thumbnail_url())
         .set_description(description)
         .set_footer(dpp::embed_footer().set_text(footer_text))
         .set_timestamp(time(0));
@@ -397,10 +410,11 @@ dpp::message MessagePresenterService::build_from_cache_data(
     const RecentScoreCacheData& cache_data,
     const PaginationInfo& pagination
 ) const {
+    std::string avatar_url = fmt::format("https://a.ppy.sh/{}", cache_data.user_id);
+
     auto embed = dpp::embed()
         .set_color(dpp::colors::viola_purple)
-        .set_title(cache_data.title)
-        .set_url(cache_data.url)
+        .set_author(cache_data.title, cache_data.url, avatar_url)
         .set_description(cache_data.description)
         .set_thumbnail(cache_data.thumbnail);
 

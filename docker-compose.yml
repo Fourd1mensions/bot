@@ -32,6 +32,28 @@ services:
       timeout: 5s
       retries: 5
 
+  rosu-pp:
+    build:
+      context: ${ROSU_PP_SERVICE_PATH:-../rosu-pp-service}
+    container_name: patchouli_rosu_pp
+    restart: unless-stopped
+    ports:
+      - "50051:50051"
+    volumes:
+      # Mount beatmap data directory (read-only for security)
+      - ./.data:/data:ro
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      PP_SERVICE_ADDR: "[::]:50051"
+      PP_SERVICE_CACHE_SIZE: ${PP_SERVICE_CACHE_SIZE:-5000}
+      PP_SERVICE_LOG_FORMAT: json
+    # Note: distroless image has no curl/wget, rely on gRPC channel state for health
+    # External monitoring should use /health endpoint
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
 volumes:
   postgres_data:
     driver: local

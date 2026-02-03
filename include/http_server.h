@@ -15,6 +15,10 @@
 
 class BeatmapDownloader;
 
+namespace services {
+class MessageCrawlerService;
+}
+
 /**
  * Simple IP-based rate limiter using sliding window
  */
@@ -52,6 +56,9 @@ public:
   void start();
   void stop();
 
+  // Set crawler service for stats endpoints
+  void set_crawler_service(services::MessageCrawlerService* service);
+
   HttpServer(const HttpServer&)            = delete;
   HttpServer& operator=(const HttpServer&) = delete;
   HttpServer(HttpServer&&)                 = delete;
@@ -69,4 +76,7 @@ private:
   std::unique_ptr<RateLimiter>     download_limiter_;  // Rate limit for downloads
   std::atomic<bool>                running_{false};
   std::atomic<int64_t>             start_time_;
+
+  // Optional crawler service for word stats endpoints
+  services::MessageCrawlerService* crawler_service_{nullptr};
 };

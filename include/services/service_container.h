@@ -11,6 +11,7 @@ namespace services {
 class ChatContextService;
 class BeatmapResolverService;
 class UserResolverService;
+class UserMappingService;
 class MessagePresenterService;
 class CommandParamsService;
 class BeatmapCacheService;
@@ -33,6 +34,7 @@ struct ServiceContainer {
   services::ChatContextService& chat_context_service;
   services::BeatmapResolverService& beatmap_resolver_service;
   services::UserResolverService& user_resolver_service;
+  services::UserMappingService& user_mapping_service;
   services::MessagePresenterService& message_presenter;
   services::CommandParamsService& command_params_service;
   services::BeatmapPerformanceService& performance_service;

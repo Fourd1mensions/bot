@@ -60,6 +60,12 @@ void ButtonHandler::handle_button_click(const dpp::button_click_t& event) {
         handle_cmp_pagination(event, button_id);
         return;
     }
+
+    // Handle users pagination
+    if (button_id == "users_prev" || button_id == "users_next") {
+        handle_users_pagination(event, button_id);
+        return;
+    }
 }
 
 void ButtonHandler::handle_form_submit(const dpp::form_submit_t& event) {
@@ -365,6 +371,105 @@ void ButtonHandler::handle_cmp_pagination(const dpp::button_click_t& event, cons
 
     // Update the message
     spdlog::info("[BTN] Updating compare message with new page {}", state.current_page + 1);
+    event.reply(dpp::ir_update_message, updated_msg);
+}
+
+namespace {
+// Helper to build users page embed (must match users_command.cpp)
+dpp::message build_users_page(const UsersState& state) {
+    dpp::embed embed;
+    embed.set_color(0xff66ab);  // osu! pink
+    embed.set_title(fmt::format("Tracked Users ({})", state.users.size()));
+
+    std::string description;
+    size_t start_idx = state.current_page * UsersState::USERS_PER_PAGE;
+    size_t end_idx = std::min(start_idx + UsersState::USERS_PER_PAGE, state.users.size());
+
+    for (size_t i = start_idx; i < end_idx; ++i) {
+        const auto& user = state.users[i];
+        description += fmt::format("[{}](https://osu.ppy.sh/users/{}) • <@{}>\n",
+            user.osu_username, user.osu_user_id, user.discord_id.str());
+    }
+
+    embed.set_description(description);
+
+    // Footer with page info
+    if (state.total_pages > 1) {
+        embed.set_footer(dpp::embed_footer()
+            .set_text(fmt::format("Page {}/{}", state.current_page + 1, state.total_pages)));
+    }
+
+    dpp::message msg;
+    msg.add_embed(embed);
+
+    // Add pagination buttons if needed
+    if (state.total_pages > 1) {
+        dpp::component row;
+        row.set_type(dpp::cot_action_row);
+
+        dpp::component prev_btn;
+        prev_btn.set_type(dpp::cot_button)
+            .set_style(dpp::cos_secondary)
+            .set_label("◀")
+            .set_id("users_prev")
+            .set_disabled(state.current_page == 0);
+
+        dpp::component next_btn;
+        next_btn.set_type(dpp::cot_button)
+            .set_style(dpp::cos_secondary)
+            .set_label("▶")
+            .set_id("users_next")
+            .set_disabled(state.current_page >= state.total_pages - 1);
+
+        row.add_component(prev_btn);
+        row.add_component(next_btn);
+        msg.add_component(row);
+    }
+
+    return msg;
+}
+} // anonymous namespace
+
+void ButtonHandler::handle_users_pagination(const dpp::button_click_t& event, const std::string& button_id) {
+    auto msg_id = event.command.message_id;
+    spdlog::info("[BTN] users pagination: msg_id={}, button={}", msg_id.str(), button_id);
+
+    // Fetch from Memcached
+    std::optional<UsersState> state_opt;
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        state_opt = cache.get_users(msg_id.str());
+        spdlog::info("[BTN] users cache lookup: found={}", state_opt.has_value());
+    } catch (const std::exception& e) {
+        spdlog::warn("[BTN] Failed to fetch users from cache: {}", e.what());
+    }
+
+    if (!state_opt) {
+        spdlog::warn("[BTN] No users state found for message {}", msg_id.str());
+        return;
+    }
+
+    auto state = *state_opt;
+
+    // Navigate
+    if (button_id == "users_prev" && state.current_page > 0) {
+        state.current_page--;
+    } else if (button_id == "users_next" && state.current_page < state.total_pages - 1) {
+        state.current_page++;
+    } else {
+        return;
+    }
+
+    // Save updated state back to Memcached
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        cache.cache_users(msg_id.str(), state);
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to save users to cache: {}", e.what());
+    }
+
+    // Build and update message
+    dpp::message updated_msg = build_users_page(state);
     event.reply(dpp::ir_update_message, updated_msg);
 }
 

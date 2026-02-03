@@ -13,6 +13,12 @@
 
 using json = nlohmann::json;
 
+struct WebhookConfig {
+  std::string mirror_errors;  // Beatmap mirror failure alerts
+  std::string general;        // General notifications
+  std::string debug;          // Debug/dev notifications
+};
+
 struct Config {
   std::string api_v1_key, client_id, client_secret, auth_code, access_token,
       refresh_token, redirect_uri, weather_api_key;
@@ -21,6 +27,7 @@ struct Config {
   std::string public_url;
   std::vector<std::string> admin_users;
   std::vector<std::string> beatmap_mirrors;
+  WebhookConfig webhooks;
   size_t expires_in, expires_at;
 };
 
@@ -161,4 +168,32 @@ namespace utils {
   // Sanitize filename by replacing problematic characters with safe Unicode alternatives
   // Replaces: " / \ : * ? < > |
   std::string sanitize_filename(const std::string& filename);
+
+  // Check if content starts with a command prefix (handles Cyrillic case-insensitivity)
+  // For ASCII: uses standard tolower comparison
+  // For Cyrillic: checks both lowercase and uppercase variants
+  // Example: starts_with_command("!ДИ +HD", "!ди") returns true
+  bool starts_with_command(const std::string& content, const std::string& prefix);
+
+  // Convert Cyrillic string to lowercase (basic Russian alphabet support)
+  // Note: Only handles А-Я -> а-я, not full Unicode case folding
+  std::string cyrillic_tolower(const std::string& str);
+
+  // Find the end of command prefix (first space or end of string)
+  // Works correctly with UTF-8 strings
+  inline size_t find_command_end(const std::string& content) {
+    size_t pos = content.find(' ');
+    return pos == std::string::npos ? content.length() : pos;
+  }
+
+  // Extract arguments after command prefix
+  // Example: extract_args("!cmd arg1 arg2") returns "arg1 arg2"
+  inline std::string extract_args(const std::string& content) {
+    size_t cmd_end = find_command_end(content);
+    if (cmd_end >= content.length()) return "";
+    // Skip the space after command
+    size_t args_start = content.find_first_not_of(" \t", cmd_end);
+    if (args_start == std::string::npos) return "";
+    return content.substr(args_start);
+  }
 } // namespace utils

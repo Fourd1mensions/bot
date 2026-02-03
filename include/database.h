@@ -8,6 +8,8 @@
 #include <mutex>
 #include <queue>
 #include <condition_variable>
+#include <functional>
+#include <unordered_set>
 #include <dpp/dpp.h>
 
 namespace db {
@@ -35,6 +37,109 @@ struct CachedUser {
     int64_t user_id;
     std::string username;
     std::chrono::system_clock::time_point expires_at;
+};
+
+// Structure to represent a crawled Discord message
+struct CrawledMessage {
+    dpp::snowflake message_id;
+    dpp::snowflake channel_id;
+    dpp::snowflake author_id;
+    std::string content;
+    std::chrono::system_clock::time_point created_at;
+    bool is_bot{false};
+
+    // Reply tracking (0 means not a reply)
+    dpp::snowflake reply_to_message_id{0};
+
+    // Attachments
+    bool has_attachments{false};
+    std::vector<std::string> attachment_urls;
+
+    // Edit tracking (nullopt if never edited)
+    std::optional<std::chrono::system_clock::time_point> edited_at;
+};
+
+// Structure to represent channel crawl progress
+struct ChannelCrawlProgress {
+    dpp::snowflake channel_id;
+    dpp::snowflake guild_id;
+    dpp::snowflake oldest_message_id{0};
+    dpp::snowflake newest_message_id{0};
+    size_t total_messages{0};
+    std::chrono::system_clock::time_point last_crawl;
+    bool initial_crawl_complete{false};
+};
+
+// Structure for word statistics entry
+struct WordStatEntry {
+    std::string word;
+    size_t count{0};
+    std::string language;
+};
+
+// Structure for phrase statistics entry (bigrams/trigrams with PMI, NPMI, LLR)
+struct PhraseStatEntry {
+    std::string phrase;
+    std::vector<std::string> words;
+    int word_count{0};
+    size_t count{0};
+    std::optional<double> pmi_score;
+    std::optional<double> npmi_score;      // Normalized PMI [-1, 1]
+    std::optional<double> llr_score;       // Log-Likelihood Ratio
+    std::optional<double> uniqueness_score; // User-specific: how unique is this phrase for user
+    std::optional<double> trend_score;     // Growth rate over last week
+    std::optional<std::chrono::system_clock::time_point> first_seen;
+    bool is_new{false};                    // Appeared in last 7 days
+    std::string language;
+    std::string lemmatized_phrase;         // Lemmatized version for grouping
+};
+
+// Structure for crawl status summary
+struct CrawlStatusSummary {
+    size_t total_channels{0};
+    size_t completed_channels{0};
+    size_t total_messages{0};
+};
+
+// Structure for message author info
+struct MessageAuthor {
+    dpp::snowflake author_id;
+    size_t message_count{0};
+    std::string username;      // Discord username
+    std::string display_name;  // Global name (may be empty)
+    std::string avatar_hash;   // For CDN URL construction
+};
+
+// Structure for Discord user cache
+struct DiscordUser {
+    dpp::snowflake user_id;
+    std::string username;
+    std::string global_name;
+    std::string avatar_hash;
+    bool is_bot{false};
+};
+
+// Structure for channel info with message counts
+struct MessageChannel {
+    dpp::snowflake channel_id;
+    size_t message_count{0};
+    std::string channel_name;  // Cached from Discord
+};
+
+// Structure for Discord channel cache
+struct DiscordChannel {
+    dpp::snowflake channel_id;
+    dpp::snowflake guild_id;
+    std::string channel_name;
+    int channel_type{0};  // Discord channel type (0 = text, 2 = voice, etc.)
+};
+
+// Structure for guild info cache
+struct GuildInfo {
+    dpp::snowflake guild_id;
+    std::string name;
+    std::string icon_hash;
+    size_t member_count{0};
 };
 
 // Connection pool for PostgreSQL
@@ -129,6 +234,266 @@ public:
 
     // Health check
     bool is_connected();
+
+    // ============================================================================
+    // Discord users cache operations
+    // ============================================================================
+
+    // Cache a Discord user's info
+    void cache_discord_user(const DiscordUser& user);
+
+    // Cache multiple users in a batch
+    void cache_discord_users_batch(const std::vector<DiscordUser>& users);
+
+    // Get cached user info
+    std::optional<DiscordUser> get_discord_user(dpp::snowflake user_id);
+
+    // Get total count of cached users
+    size_t get_discord_user_count();
+
+    // Clear all cached Discord users (for re-sync)
+    void clear_discord_users();
+
+    // ============================================================================
+    // Guild info cache operations
+    // ============================================================================
+
+    // Cache guild info
+    void cache_guild_info(const GuildInfo& guild);
+
+    // Get cached guild info
+    std::optional<GuildInfo> get_guild_info(dpp::snowflake guild_id);
+
+    // ============================================================================
+    // Channel info cache operations
+    // ============================================================================
+
+    // Cache channel info
+    void cache_channel_info(const DiscordChannel& channel);
+
+    // Cache multiple channels in a batch
+    void cache_channels_batch(const std::vector<DiscordChannel>& channels);
+
+    // Get cached channel info
+    std::optional<DiscordChannel> get_channel_info(dpp::snowflake channel_id);
+
+    // ============================================================================
+    // Download log operations (for persistent download statistics)
+    // ============================================================================
+
+    // Record a successful download
+    void log_download(int64_t beatmapset_id);
+
+    // Get download count for last N hours
+    size_t get_downloads_since(std::chrono::hours period) const;
+
+    // Cleanup entries older than 24 hours
+    void cleanup_old_downloads();
+
+    // ============================================================================
+    // Message crawler operations
+    // ============================================================================
+
+    // Store a single message
+    void store_message(const CrawledMessage& msg);
+
+    // Store multiple messages in a batch (more efficient)
+    void store_messages_batch(const std::vector<CrawledMessage>& messages);
+
+    // Update an existing message (for edited messages)
+    void update_message(dpp::snowflake message_id, const std::string& new_content,
+                        std::chrono::system_clock::time_point edited_at);
+
+    // Check if a message already exists
+    bool message_exists(dpp::snowflake message_id);
+
+    // Get total message count
+    size_t get_message_count();
+
+    // Get all message contents for word stats calculation (streaming)
+    // Callback returns true to continue, false to stop
+    void process_all_messages(std::function<bool(const std::string&)> callback);
+
+    // Get all message contents for a specific user (streaming)
+    void process_user_messages(dpp::snowflake author_id, std::function<bool(const std::string&)> callback);
+
+    // Get all message contents for a specific channel (streaming)
+    void process_channel_messages(dpp::snowflake channel_id, std::function<bool(const std::string&)> callback);
+
+    // Get all message contents for a specific user in a specific channel (streaming)
+    void process_user_channel_messages(dpp::snowflake author_id, dpp::snowflake channel_id, std::function<bool(const std::string&)> callback);
+
+    // Get list of all authors who have messages (sorted by message count)
+    std::vector<MessageAuthor> get_message_authors();
+
+    // Get list of all channels with message counts (sorted by message count)
+    std::vector<MessageChannel> get_message_channels();
+
+    // ============================================================================
+    // Crawl progress operations
+    // ============================================================================
+
+    // Save or update crawl progress for a channel
+    void save_crawl_progress(const ChannelCrawlProgress& progress);
+
+    // Get crawl progress for a specific channel
+    std::optional<ChannelCrawlProgress> get_crawl_progress(dpp::snowflake channel_id);
+
+    // Get all crawl progress for a guild
+    std::vector<ChannelCrawlProgress> get_all_crawl_progress(dpp::snowflake guild_id);
+
+    // Get summary of crawl status for a guild
+    CrawlStatusSummary get_crawl_status_summary(dpp::snowflake guild_id);
+
+    // ============================================================================
+    // Word statistics operations
+    // ============================================================================
+
+    // Get top words, optionally filtered by language ("ru", "en", or "" for all)
+    // If exclude_stopwords is true, filters out words from the stopwords table
+    std::vector<WordStatEntry> get_top_words(size_t limit, const std::string& language = "", bool exclude_stopwords = false);
+
+    // Get count of unique words (optionally filtered by language)
+    size_t get_unique_word_count(const std::string& language = "", bool exclude_stopwords = false);
+
+    // Update word stats (upsert word counts)
+    void update_word_stats(const std::vector<std::tuple<std::string, size_t, std::string>>& words);
+
+    // Clear and rebuild word stats from messages
+    void clear_word_stats();
+
+    // Get stopwords set
+    std::unordered_set<std::string> get_stopwords();
+
+    // ============================================================================
+    // Phrase statistics operations (bigrams/trigrams with PMI)
+    // ============================================================================
+
+    // Update phrase stats (batch upsert)
+    void update_phrase_stats(const std::vector<std::tuple<
+        std::string,              // phrase
+        std::vector<std::string>, // words
+        int,                      // word_count
+        size_t,                   // count
+        std::string               // language
+    >>& phrases);
+
+    // Update PMI scores for phrases
+    void update_phrase_pmi_scores(const std::vector<std::tuple<std::string, std::string, double>>& phrase_pmi);
+
+    // Update NPMI and LLR scores for phrases (batch update)
+    void update_phrase_npmi_llr_scores(
+        const std::vector<std::tuple<std::string, std::string, double, double>>& scores  // phrase, language, npmi, llr
+    );
+
+    // Get top phrases (sorted by count or PMI)
+    std::vector<PhraseStatEntry> get_top_phrases(
+        size_t limit,
+        const std::string& language = "",
+        bool sort_by_pmi = false,
+        int word_count_filter = 0,
+        size_t min_count = 5
+    );
+
+    // Get count of unique phrases
+    size_t get_unique_phrase_count(const std::string& language = "", int word_count_filter = 0);
+
+    // Clear phrase stats table
+    void clear_phrase_stats();
+
+    // Get global phrase frequencies (for uniqueness calculation)
+    std::unordered_map<std::string, size_t> get_global_phrase_frequencies(
+        const std::string& language = "",
+        int word_count_filter = 0,
+        size_t min_count = 5
+    );
+
+    // ============================================================================
+    // Phrase history operations (for temporal analysis)
+    // ============================================================================
+
+    // Save daily snapshot of phrase counts
+    void save_phrase_history_snapshot(
+        const std::vector<std::tuple<std::string, std::string, size_t>>& phrases  // phrase, language, count
+    );
+
+    // Get last snapshot timestamp
+    std::optional<std::chrono::system_clock::time_point> get_last_phrase_snapshot_time();
+
+    // Get phrase counts from N days ago (for trend calculation)
+    std::unordered_map<std::string, size_t> get_phrase_counts_from_days_ago(int days);
+
+    // Update trend scores for all phrases
+    void update_phrase_trend_scores(
+        const std::vector<std::tuple<std::string, std::string, double>>& trends  // phrase, language, trend_score
+    );
+
+    // Update first_seen timestamps for new phrases
+    void update_phrase_first_seen(
+        const std::vector<std::tuple<std::string, std::string>>& phrases  // phrase, language
+    );
+
+    // ============================================================================
+    // Incremental stats processing
+    // ============================================================================
+
+    // Get last processed message ID for a stats type ("word_stats" or "phrase_stats")
+    int64_t get_stats_last_message_id(const std::string& stats_key);
+
+    // Set last processed message ID for a stats type
+    void set_stats_last_message_id(const std::string& stats_key, int64_t message_id);
+
+    // Process messages incrementally (with id > last_id), returns max message_id processed
+    // Callback receives (message_id, content), returns true to continue, false to stop
+    int64_t process_messages_incremental(
+        int64_t last_message_id,
+        std::function<bool(int64_t, const std::string&)> callback
+    );
+
+    // Upsert word stats (add to existing counts)
+    void upsert_word_stats(const std::vector<std::tuple<std::string, size_t, std::string>>& words);
+
+    // Upsert phrase stats (add to existing counts)
+    void upsert_phrase_stats(const std::vector<std::tuple<
+        std::string,              // phrase
+        std::vector<std::string>, // words
+        int,                      // word_count
+        size_t,                   // count
+        std::string               // language
+    >>& phrases);
+
+    // Get all word stats as map for PMI calculation (word_lang -> count)
+    std::unordered_map<std::string, size_t> get_word_stats_map();
+
+    // Get total word count
+    size_t get_total_word_count();
+
+    // Get total bigram count
+    size_t get_total_bigram_count();
+
+    // Structure for phrase data needed for PMI calculation
+    struct PhraseForPMI {
+        std::string phrase;
+        std::vector<std::string> words;
+        size_t count;
+        std::string language;
+    };
+
+    // Get all phrases for PMI calculation (with min_count filter)
+    std::vector<PhraseForPMI> get_phrases_for_pmi(size_t min_count = 5);
+
+    // ============================================================================
+    // Word blacklist operations
+    // ============================================================================
+
+    // Get all blacklisted words
+    std::unordered_set<std::string> get_word_blacklist();
+
+    // Add word to blacklist
+    void add_word_to_blacklist(const std::string& word, const std::string& language = "all");
+
+    // Remove word from blacklist
+    void remove_word_from_blacklist(const std::string& word);
 
     // Raw SQL execution (for migrations)
     template<typename Func>

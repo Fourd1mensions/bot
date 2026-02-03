@@ -81,6 +81,7 @@ public:
   inline const std::string& get_mode() const { return mode; }
 
   inline void set_username(const std::string& name) { username = name; }
+  inline void set_pp(float_t value) { pp = value; }
   
   Score() {}
   Score(const json& json) { from_json(json); }
@@ -99,6 +100,7 @@ private:
   std::string   title;
   std::string   version; // diff name
   std::string   beatmap_url;
+  std::string   thumbnail_url;
   std::string   image_url;
   uint32_t      max_combo;
   float_t       bpm;
@@ -112,6 +114,7 @@ private:
 public:
   std::string to_string() const;
   std::string get_beatmap_url() const;
+  std::string get_thumbnail_url() const;
   std::string get_image_url() const;
   std::string get_mode() const;
   uint32_t    get_max_combo() const;

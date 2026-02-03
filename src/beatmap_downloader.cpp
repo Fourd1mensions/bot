@@ -1,9 +1,11 @@
 #include <beatmap_downloader.h>
 #include <database.h>
 #include <utils.h>
+#include <services/webhook_service.h>
 
 #include <cpr/cpr.h>
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <zip.h>
 #include <zlib.h>
@@ -11,6 +13,7 @@
 #include <chrono>
 #include <fstream>
 #include <regex>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -29,11 +32,10 @@ BeatmapDownloader::BeatmapDownloader()
       osz_dir_(data_dir_ / "osz"),
       osu_files_dir_(data_dir_ / "osu"),
       extracts_dir_(data_dir_ / "extracts") {
-  // Default mirrors
+  // Default mirrors (chimu.moe is dead - NXDOMAIN)
   mirrors_ = {
-    "https://catboy.best/d",
     "https://api.nerinyan.moe/d",
-    "https://api.chimu.moe/v1/download"
+    "https://catboy.best/d"
   };
   ensure_directories();
 }
@@ -99,7 +101,7 @@ bool BeatmapDownloader::try_download_from_mirror(const std::string& mirror_url,
   }
 
   // 2 second timeout - fail fast and try next mirror
-  auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{2000});
+  auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{30000});
   output.close();
 
   spdlog::info("[DOWNLOAD] HTTP response: status={}, bytes={}",
@@ -146,15 +148,37 @@ bool BeatmapDownloader::try_download_from_mirror(const std::string& mirror_url,
     return true;
   }
 
-  // Failed - clean up temp file
+  // Failed - try to read error response body before cleanup
+  std::string error_msg;
+  if (response.downloaded_bytes > 0 && response.downloaded_bytes < 1024) {
+    std::ifstream error_file(temp_path);
+    if (error_file) {
+      std::stringstream buffer;
+      buffer << error_file.rdbuf();
+      std::string body = buffer.str();
+      // Try to parse as JSON and extract "error" field
+      try {
+        auto json = nlohmann::json::parse(body);
+        if (json.contains("error")) {
+          error_msg = json["error"].get<std::string>();
+        }
+      } catch (...) {
+        // Not JSON or no error field, use raw body
+        error_msg = body;
+      }
+    }
+  }
   fs::remove(temp_path);
 
   if (response.status_code == 404) {
     spdlog::warn("[DOWNLOAD] Beatmapset {} not found on {}", beatmapset_id, mirror_url);
   } else if (response.status_code == 429) {
     spdlog::warn("[DOWNLOAD] Rate limited by {}", mirror_url);
+  } else if (response.status_code == 0) {
+    spdlog::warn("[DOWNLOAD] Failed: {}", response.error.message);
   } else {
-    spdlog::warn("[DOWNLOAD] Failed: HTTP {} - {}", response.status_code, response.error.message);
+    spdlog::warn("[DOWNLOAD] Failed: HTTP {} - {}", response.status_code,
+      error_msg.empty() ? response.error.message : error_msg);
   }
 
   return false;
@@ -167,12 +191,23 @@ void BeatmapDownloader::demote_mirror(size_t index) {
   mirrors_.erase(mirrors_.begin() + index);
   mirrors_.push_back(failed_mirror);
 
-  spdlog::info("[DOWNLOAD] Demoted {} to end of mirror list", failed_mirror);
+  spdlog::debug("[DOWNLOAD] Demoted {} to end of mirror list", failed_mirror);
 }
 
 bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
                                                     std::vector<MirrorAttemptResult>& attempts) {
-  spdlog::info("[DOWNLOAD] Starting download with attempts tracking for beatmapset {}", beatmapset_id);
+  spdlog::info("[DOWNLOAD] Downloading beatmapset {} (https://osu.ppy.sh/s/{})",
+               beatmapset_id, beatmapset_id);
+
+  // Check if mirrors are in cooldown
+  if (are_mirrors_in_cooldown()) {
+    MirrorAttemptResult cooldown_attempt;
+    cooldown_attempt.mirror_url = "all";
+    cooldown_attempt.error_message = "Mirrors in cooldown due to repeated failures";
+    attempts.push_back(cooldown_attempt);
+    spdlog::info("[DOWNLOAD] Mirrors in cooldown, skipping download for beatmapset {}", beatmapset_id);
+    return false;
+  }
 
   std::lock_guard<std::mutex> lock(download_mutex_);
 
@@ -187,7 +222,18 @@ bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
   fs::path temp_path = osz_path;
   temp_path += ".tmp";
 
-  for (size_t i = 0; i < mirrors_.size(); i++) {
+  const size_t max_attempts = mirrors_.size();
+  size_t attempts_made = 0;
+
+  for (size_t i = 0; i < mirrors_.size() && attempts_made < max_attempts; i++) {
+    // Check for shutdown request
+    if (is_shutdown_requested()) {
+      spdlog::info("[DOWNLOAD] Aborting download due to shutdown request");
+      fs::remove(temp_path);
+      return false;
+    }
+
+    attempts_made++;
     const auto& mirror = mirrors_[i];
     std::string url = mirror + "/" + std::to_string(beatmapset_id);
 
@@ -205,7 +251,7 @@ bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
       continue;
     }
 
-    auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{2000});
+    auto response = cpr::Download(output, cpr::Url{url}, cpr::Timeout{30000});
     output.close();
 
     attempt.status_code = response.status_code;
@@ -239,6 +285,7 @@ bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
 
       attempts.push_back(attempt);
       last_used_mirror_ = extract_host(mirror);
+      reset_mirror_cooldown();  // Success - reset failure counter
 
       // Register in database
       try {
@@ -254,8 +301,29 @@ bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
       return true;
     }
 
-    // Failed
+    // Failed - try to read error response body before cleanup
+    std::string error_msg;
+    if (response.downloaded_bytes > 0 && response.downloaded_bytes < 1024) {
+      std::ifstream error_file(temp_path);
+      if (error_file) {
+        std::stringstream buffer;
+        buffer << error_file.rdbuf();
+        std::string body = buffer.str();
+        try {
+          auto json = nlohmann::json::parse(body);
+          if (json.contains("error")) {
+            error_msg = json["error"].get<std::string>();
+          }
+        } catch (...) {
+          error_msg = body;
+        }
+      }
+    }
     fs::remove(temp_path);
+
+    // Determine if this is a "not found" response (not a mirror failure)
+    bool is_not_found = (response.status_code == 404) ||
+                        (response.status_code == 500 && error_msg.find("not found") != std::string::npos);
 
     if (response.status_code == 404) {
       attempt.error_message = "Not found (404)";
@@ -264,36 +332,171 @@ bool BeatmapDownloader::download_osz_with_attempts(uint32_t beatmapset_id,
     } else if (response.status_code == 0) {
       attempt.error_message = fmt::format("Connection error: {}", response.error.message);
     } else {
-      attempt.error_message = fmt::format("HTTP {}: {}", response.status_code, response.error.message);
+      attempt.error_message = fmt::format("HTTP {}: {}", response.status_code,
+        error_msg.empty() ? response.error.message : error_msg);
     }
 
+    spdlog::warn("[DOWNLOAD] Failed: {}", attempt.error_message);
     attempts.push_back(attempt);
-    demote_mirror(i);
-    i--;
+
+    // Only demote mirror for actual failures, not "not found"
+    if (!is_not_found) {
+      demote_mirror(i);
+      i--;
+    }
+  }
+
+  // All mirrors failed for this beatmapset
+  spdlog::warn("[DOWNLOAD] All {} mirrors failed for beatmapset {}", attempts.size(), beatmapset_id);
+
+  // Check if any attempt was an actual failure (not just "not found")
+  bool has_actual_failure = false;
+  for (const auto& a : attempts) {
+    bool is_not_found = a.error_message.find("Not found") != std::string::npos ||
+                        a.error_message.find("not found") != std::string::npos;
+    if (!is_not_found) {
+      has_actual_failure = true;
+      break;
+    }
+  }
+
+  // Increment failure counter only for actual failures, not "not found"
+  bool should_send_webhook = false;
+  if (has_actual_failure) {
+    std::lock_guard<std::mutex> lock(cooldown_mutex_);
+    consecutive_all_mirrors_failed_++;
+    if (consecutive_all_mirrors_failed_ >= kMaxConsecutiveFailures) {
+      mirror_cooldown_until_ = std::chrono::steady_clock::now() + kCooldownDuration;
+      spdlog::warn("[DOWNLOAD] {} consecutive failures, entering {}s cooldown",
+        consecutive_all_mirrors_failed_, kCooldownDuration.count());
+
+      // Send webhook only once per cooldown period
+      if (!cooldown_webhook_sent_) {
+        cooldown_webhook_sent_ = true;
+        should_send_webhook = true;
+      }
+    }
+  }
+
+  // Send webhook outside of lock
+  if (should_send_webhook) {
+    send_cooldown_notification();
   }
 
   last_used_mirror_.clear();
   return false;
 }
 
+bool BeatmapDownloader::are_mirrors_in_cooldown() const {
+  std::lock_guard<std::mutex> lock(cooldown_mutex_);
+  if (consecutive_all_mirrors_failed_ >= kMaxConsecutiveFailures) {
+    auto now = std::chrono::steady_clock::now();
+    if (now < mirror_cooldown_until_) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void BeatmapDownloader::reset_mirror_cooldown() {
+  std::lock_guard<std::mutex> lock(cooldown_mutex_);
+  consecutive_all_mirrors_failed_ = 0;
+  cooldown_webhook_sent_ = false;
+}
+
+void BeatmapDownloader::set_webhook_service(services::WebhookService* service) {
+  webhook_service_ = service;
+}
+
+void BeatmapDownloader::request_shutdown() {
+  shutdown_requested_.store(true, std::memory_order_release);
+  spdlog::info("[DOWNLOAD] Shutdown requested");
+}
+
+bool BeatmapDownloader::is_shutdown_requested() const {
+  return shutdown_requested_.load(std::memory_order_acquire);
+}
+
+void BeatmapDownloader::send_cooldown_notification() {
+  if (!webhook_service_) {
+    return;
+  }
+
+  std::string mirrors_list;
+  for (const auto& m : mirrors_) {
+    mirrors_list += "• " + m + "\n";
+  }
+
+  webhook_service_->notify(
+    services::WebhookChannel::MirrorErrors,
+    services::NotificationLevel::Error,
+    "Mirror Download Failure",
+    fmt::format(
+      "All beatmap mirrors failed **{}** times in a row.\n"
+      "Entering **{}s cooldown** - downloads will use osu.ppy.sh fallback.\n\n"
+      "**Mirrors:**\n{}",
+      kMaxConsecutiveFailures, kCooldownDuration.count(), mirrors_list)
+  );
+}
+
 bool BeatmapDownloader::download_osz_with_fallback(uint32_t beatmapset_id,
                                                      const fs::path& dest_path) {
+  // Check if mirrors are in cooldown
+  if (are_mirrors_in_cooldown()) {
+    spdlog::info("[DOWNLOAD] Mirrors in cooldown, skipping download for beatmapset {}", beatmapset_id);
+    return false;
+  }
+
   spdlog::info("[DOWNLOAD] Trying {} mirrors for beatmapset {}",
     mirrors_.size(), beatmapset_id);
 
-  for (size_t i = 0; i < mirrors_.size(); i++) {
+  const size_t max_attempts = mirrors_.size();
+  size_t attempts_made = 0;
+
+  for (size_t i = 0; i < mirrors_.size() && attempts_made < max_attempts; i++) {
+    // Check for shutdown request
+    if (is_shutdown_requested()) {
+      spdlog::info("[DOWNLOAD] Aborting download due to shutdown request");
+      return false;
+    }
+
+    attempts_made++;
     const auto& mirror = mirrors_[i];
     spdlog::info("[DOWNLOAD] Trying mirror {}/{}: {}",
-      i + 1, mirrors_.size(), mirror);
+      attempts_made, max_attempts, mirror);
 
     if (try_download_from_mirror(mirror, beatmapset_id, dest_path)) {
       last_used_mirror_ = extract_host(mirror);
+      reset_mirror_cooldown();  // Success - reset failure counter
       return true;
     }
 
     // Demote failed mirror to end of list for future requests
     demote_mirror(i);
     i--;  // Adjust index since we removed current element
+  }
+
+  // All mirrors failed - increment failure counter and possibly enter cooldown
+  bool should_send_webhook = false;
+  {
+    std::lock_guard<std::mutex> lock(cooldown_mutex_);
+    consecutive_all_mirrors_failed_++;
+    if (consecutive_all_mirrors_failed_ >= kMaxConsecutiveFailures) {
+      mirror_cooldown_until_ = std::chrono::steady_clock::now() + kCooldownDuration;
+      spdlog::warn("[DOWNLOAD] All mirrors failed {} times in a row, entering {}s cooldown",
+        consecutive_all_mirrors_failed_, kCooldownDuration.count());
+
+      // Send webhook only once per cooldown period
+      if (!cooldown_webhook_sent_) {
+        cooldown_webhook_sent_ = true;
+        should_send_webhook = true;
+      }
+    }
+  }
+
+  // Send webhook outside of lock
+  if (should_send_webhook) {
+    send_cooldown_notification();
   }
 
   spdlog::error("[DOWNLOAD] All {} mirrors failed for beatmapset {}",
@@ -648,6 +851,11 @@ std::optional<fs::path> BeatmapDownloader::get_osu_file_path(uint32_t beatmap_id
 }
 
 std::optional<fs::path> BeatmapDownloader::download_osu_file(uint32_t beatmap_id) {
+  // Check for shutdown request
+  if (is_shutdown_requested()) {
+    return std::nullopt;
+  }
+
   // Lock to prevent concurrent downloads of the same beatmap
   std::lock_guard<std::mutex> lock(download_mutex_);
 

@@ -96,9 +96,16 @@ bool utils::load_config(Config& config) {
       // Default mirrors in priority order
       config.beatmap_mirrors = {
         "https://api.nerinyan.moe/d",
-        "https://catboy.best/d",
-        "https://api.chimu.moe/v1/download"
+        "https://catboy.best/d"
       };
+    }
+
+    // Load webhooks (optional)
+    if (j.contains("WEBHOOKS") && j["WEBHOOKS"].is_object()) {
+      auto& wh = j["WEBHOOKS"];
+      config.webhooks.mirror_errors = wh.value("MIRROR_ERRORS", "");
+      config.webhooks.general = wh.value("GENERAL", "");
+      config.webhooks.debug = wh.value("DEBUG", "");
     }
 
     return true;
@@ -348,4 +355,84 @@ std::string utils::get_rank_emoji(const std::string& rank) {
 
   auto it = rank_emojis.find(rank);
   return it != rank_emojis.end() ? it->second : rank;
+}
+
+std::string utils::cyrillic_tolower(const std::string& str) {
+  std::string result;
+  result.reserve(str.size());
+
+  for (size_t i = 0; i < str.size(); ) {
+    unsigned char c = str[i];
+
+    // Check for 2-byte UTF-8 sequence (Cyrillic is in this range)
+    if ((c & 0xE0) == 0xC0 && i + 1 < str.size()) {
+      unsigned char c2 = str[i + 1];
+
+      // Russian uppercase А-Я (U+0410-U+042F) -> lowercase а-я (U+0430-U+044F)
+      // UTF-8: D0 90 - D0 AF (А-Я except Ё)
+      // UTF-8: D0 81 (Ё) -> D1 91 (ё)
+      if (c == 0xD0) {
+        if (c2 >= 0x90 && c2 <= 0x9F) {
+          // А-П (U+0410-U+041F) -> а-п (U+0430-U+043F)
+          result += static_cast<char>(0xD0);
+          result += static_cast<char>(c2 + 0x20);
+          i += 2;
+          continue;
+        } else if (c2 >= 0xA0 && c2 <= 0xAF) {
+          // Р-Я (U+0420-U+042F) -> р-я (U+0440-U+044F)
+          result += static_cast<char>(0xD1);
+          result += static_cast<char>(c2 - 0x20);
+          i += 2;
+          continue;
+        } else if (c2 == 0x81) {
+          // Ё (U+0401) -> ё (U+0451)
+          result += static_cast<char>(0xD1);
+          result += static_cast<char>(0x91);
+          i += 2;
+          continue;
+        }
+      }
+
+      // Not a Russian uppercase letter, copy as-is
+      result += str[i];
+      result += str[i + 1];
+      i += 2;
+    } else if ((c & 0x80) == 0) {
+      // ASCII character - use standard tolower
+      result += static_cast<char>(std::tolower(c));
+      ++i;
+    } else {
+      // Other multi-byte sequence, copy as-is
+      result += str[i];
+      ++i;
+    }
+  }
+
+  return result;
+}
+
+bool utils::starts_with_command(const std::string& content, const std::string& prefix) {
+  if (content.length() < prefix.length()) return false;
+
+  // Convert both to lowercase for comparison
+  std::string content_lower = cyrillic_tolower(content.substr(0, prefix.length() + 10)); // Extra chars for safety
+  std::string prefix_lower = cyrillic_tolower(prefix);
+
+  // Check if content starts with prefix
+  if (content_lower.find(prefix_lower) != 0) return false;
+
+  // Make sure command is followed by space or end of string
+  if (content.length() > prefix.length()) {
+    size_t prefix_byte_len = prefix.length();
+    // Find actual byte position after prefix in original content
+    // by matching the lowercased prefix length
+    if (content[prefix_byte_len] != ' ' && content[prefix_byte_len] != '\t') {
+      // Check if this is just end of string or part of another word
+      // For prefixes like "!rs", "!rs123" should not match
+      // But we need to be careful with UTF-8
+      return false;
+    }
+  }
+
+  return true;
 }

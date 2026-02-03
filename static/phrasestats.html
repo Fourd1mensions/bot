@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phrase Statistics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg-base: #09090b; --bg-elevated: #121214; --bg-surface: #1a1a1d; --bg-hover: #222225;
+            --border: rgba(255, 255, 255, 0.06); --border-hover: rgba(255, 255, 255, 0.12);
+            --text-primary: #fafafa; --text-secondary: rgba(255, 255, 255, 0.55); --text-tertiary: rgba(255, 255, 255, 0.3);
+            --accent: rgba(255, 255, 255, 0.9); --accent-dim: rgba(255, 255, 255, 0.06);
+            --pmi-positive: rgba(34, 197, 94, 0.8); --pmi-negative: rgba(239, 68, 68, 0.8);
+            --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-xl: 20px;
+            --font-display: 'Instrument Sans', sans-serif; --font-body: 'DM Sans', sans-serif;
+        }
+        html { font-size: 15px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        body { font-family: var(--font-body); background: var(--bg-base); color: var(--text-primary); min-height: 100vh; line-height: 1.5; }
+        body::before { content: ''; position: fixed; inset: 0; background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E"); opacity: 0.03; pointer-events: none; z-index: 1000; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 40px 24px 80px; }
+        header { margin-bottom: 32px; opacity: 0; animation: fadeUp 0.6s ease forwards; }
+        .header-top { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+        .guild-icon { width: 40px; height: 40px; border-radius: var(--radius-md); overflow: hidden; flex-shrink: 0; }
+        .guild-icon img { width: 100%; height: 100%; object-fit: cover; }
+        .guild-icon-placeholder { width: 100%; height: 100%; background: linear-gradient(135deg, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.7) 100%); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; color: var(--bg-base); }
+        .header-text { display: flex; flex-direction: column; gap: 2px; }
+        h1 { font-family: var(--font-display); font-size: 1.4rem; font-weight: 600; letter-spacing: -0.02em; }
+        .subtitle { color: var(--text-secondary); font-size: 0.8rem; }
+        .nav-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 8px 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-secondary); text-decoration: none; font-size: 0.8rem; transition: all 0.2s ease; }
+        .nav-link:hover { color: var(--text-primary); border-color: var(--border-hover); background: var(--bg-surface); }
+        .nav-link svg { width: 14px; height: 14px; }
+        .main-grid { display: grid; grid-template-columns: 280px 1fr; gap: 24px; }
+        @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+        .sidebar { opacity: 0; animation: fadeUp 0.6s ease 0.1s forwards; }
+        .sidebar-section { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 16px; }
+        .sidebar-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); margin-bottom: 12px; font-weight: 500; }
+        .user-card { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--bg-surface); border-radius: var(--radius-md); margin-bottom: 12px; border: 1px solid var(--border); }
+        .user-avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--bg-hover); overflow: hidden; flex-shrink: 0; }
+        .user-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .user-avatar-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 18px; color: var(--text-tertiary); background: linear-gradient(135deg, var(--bg-hover) 0%, var(--bg-surface) 100%); }
+        .user-info { flex: 1; min-width: 0; }
+        .user-name { font-weight: 600; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .user-stats { font-size: 0.8rem; color: var(--text-secondary); }
+        .user-select-wrapper { position: relative; }
+        .user-select-btn { width: 100%; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-primary); font-family: var(--font-body); font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: all 0.2s ease; }
+        .user-select-btn:hover { border-color: var(--border-hover); background: var(--bg-hover); }
+        .user-select-btn svg { width: 16px; height: 16px; opacity: 0.5; transition: transform 0.2s ease; }
+        .user-select-btn.open svg { transform: rotate(180deg); }
+        .user-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); max-height: 300px; overflow-y: auto; z-index: 100; display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+        .user-dropdown.open { display: block; }
+        .user-dropdown-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; transition: background 0.15s ease; }
+        .user-dropdown-item:hover { background: var(--bg-hover); }
+        .user-dropdown-item.selected { background: var(--accent-dim); }
+        .user-dropdown-item .mini-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-surface); overflow: hidden; flex-shrink: 0; }
+        .user-dropdown-item .mini-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .user-dropdown-item-info { flex: 1; min-width: 0; }
+        .user-dropdown-item-name { font-size: 0.85rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .user-dropdown-item-count { font-size: 0.75rem; color: var(--text-tertiary); }
+        .channel-select-wrapper { position: relative; }
+        .channel-select-btn { width: 100%; padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-secondary); font-family: var(--font-body); font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: all 0.2s ease; }
+        .channel-select-btn:hover { border-color: var(--border-hover); background: var(--bg-hover); }
+        .channel-select-btn svg { width: 16px; height: 16px; opacity: 0.5; transition: transform 0.2s ease; }
+        .channel-select-btn.open svg { transform: rotate(180deg); }
+        .channel-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); max-height: 280px; overflow-y: auto; z-index: 100; display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.4); }
+        .channel-dropdown.open { display: block; }
+        .channel-dropdown-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; transition: background 0.15s ease; }
+        .channel-dropdown-item:hover { background: var(--bg-hover); }
+        .channel-dropdown-item.selected { background: var(--accent-dim); }
+        .channel-dropdown-item .channel-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary); flex-shrink: 0; }
+        .channel-dropdown-item-info { flex: 1; min-width: 0; }
+        .channel-dropdown-item-name { font-size: 0.85rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .channel-dropdown-item-count { font-size: 0.75rem; color: var(--text-tertiary); }
+        .filter-row { display: flex; gap: 8px; margin-bottom: 8px; }
+        .filter-row:last-child { margin-bottom: 0; }
+        select { flex: 1; font-family: var(--font-body); font-size: 0.85rem; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-primary); padding: 10px 32px 10px 12px; cursor: pointer; transition: all 0.2s ease; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; }
+        select:hover { border-color: var(--border-hover); background-color: var(--bg-hover); }
+        select:focus { outline: none; border-color: rgba(255, 255, 255, 0.25); }
+        .stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .stat-mini { background: var(--bg-surface); border-radius: var(--radius-md); padding: 12px; text-align: center; }
+        .stat-mini-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); margin-bottom: 4px; }
+        .stat-mini-value { font-family: var(--font-display); font-size: 1.3rem; font-weight: 700; color: var(--text-primary); }
+        .stat-mini-value.loading { color: var(--text-tertiary); }
+        .main-content { opacity: 0; animation: fadeUp 0.6s ease 0.2s forwards; }
+        .content-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .content-title { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; }
+        .content-subtitle { font-size: 0.8rem; color: var(--text-tertiary); }
+        .phrase-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+        .phrase-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 16px; position: relative; overflow: hidden; transition: all 0.2s ease; opacity: 0; animation: fadeUp 0.4s ease forwards; }
+        .phrase-card:hover { border-color: var(--border-hover); background: var(--bg-surface); transform: translateY(-2px); }
+        .phrase-card::before { content: ''; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--bar-width, 0%); background: linear-gradient(90deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.05) 100%); transition: width 0.4s ease; }
+        .phrase-rank { position: absolute; top: 10px; right: 12px; font-family: var(--font-display); font-size: 0.7rem; font-weight: 600; color: var(--text-tertiary); }
+        .phrase-text { font-weight: 600; font-size: 1.05rem; margin-bottom: 10px; padding-right: 30px; word-break: break-word; line-height: 1.4; }
+        .phrase-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .phrase-count { font-family: var(--font-display); font-size: 0.85rem; color: var(--text-secondary); }
+        .phrase-pmi { font-family: var(--font-display); font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+        .phrase-pmi.positive { background: rgba(34, 197, 94, 0.15); color: var(--pmi-positive); }
+        .phrase-pmi.negative { background: rgba(239, 68, 68, 0.15); color: var(--pmi-negative); }
+        .phrase-npmi { font-family: var(--font-display); font-size: 0.7rem; padding: 2px 5px; border-radius: 4px; font-weight: 600; background: rgba(99, 102, 241, 0.15); color: rgba(129, 140, 248, 0.9); }
+        .phrase-llr { font-family: var(--font-display); font-size: 0.7rem; padding: 2px 5px; border-radius: 4px; font-weight: 600; background: rgba(168, 85, 247, 0.15); color: rgba(192, 132, 252, 0.9); }
+        .phrase-uniqueness { font-family: var(--font-display); font-size: 0.7rem; padding: 2px 5px; border-radius: 4px; font-weight: 600; background: rgba(245, 158, 11, 0.15); color: rgba(251, 191, 36, 0.9); }
+        .phrase-trend { font-family: var(--font-display); font-size: 0.7rem; padding: 2px 5px; border-radius: 4px; font-weight: 600; }
+        .phrase-trend.up { background: rgba(34, 197, 94, 0.15); color: var(--pmi-positive); }
+        .phrase-trend.down { background: rgba(239, 68, 68, 0.15); color: var(--pmi-negative); }
+        .phrase-badge-new { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; padding: 2px 5px; border-radius: 4px; background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.25)); color: rgba(196, 181, 253, 0.95); letter-spacing: 0.02em; }
+        .phrase-lang { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.06); color: var(--text-tertiary); }
+        .phrase-type { font-size: 0.65rem; font-weight: 500; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.04); color: var(--text-tertiary); }
+        .loading-state, .empty-state { grid-column: 1 / -1; padding: 80px 24px; text-align: center; color: var(--text-secondary); }
+        .loading-spinner { width: 32px; height: 32px; border: 2px solid var(--border); border-top-color: var(--text-secondary); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (max-width: 900px) { .container { padding: 24px 16px 60px; } .phrase-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
+        @media (max-width: 500px) { .phrase-grid { grid-template-columns: 1fr; gap: 8px; } .phrase-card { padding: 12px; } .phrase-text { font-size: 0.95rem; } }
+        .user-dropdown::-webkit-scrollbar { width: 6px; }
+        .user-dropdown::-webkit-scrollbar-track { background: transparent; }
+        .user-dropdown::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div class="guild-icon" id="guild-icon">
+                    <div class="guild-icon-placeholder">P</div>
+                    <img id="guild-icon-img" style="display: none;">
+                </div>
+                <div class="header-text">
+                    <h1 id="guild-name">Phrase Statistics</h1>
+                    <p class="subtitle" id="guild-subtitle">N-gram analysis with PMI</p>
+                </div>
+            </div>
+            <a href="/osu/wordstats" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                Back to Word Statistics
+            </a>
+        </header>
+        <div class="main-grid">
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Filter by User</div>
+                    <div class="user-card" id="selected-user-card" style="display: none;">
+                        <div class="user-avatar"><img id="user-avatar-img"></div>
+                        <div class="user-info">
+                            <div class="user-name" id="selected-user-name"></div>
+                            <div class="user-stats" id="selected-user-stats"></div>
+                        </div>
+                    </div>
+                    <div class="user-select-wrapper">
+                        <button class="user-select-btn" id="user-select-btn" type="button">
+                            <span>Select user...</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                        </button>
+                        <div class="user-dropdown" id="user-dropdown"></div>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Filter by Channel</div>
+                    <div class="channel-select-wrapper">
+                        <button class="channel-select-btn" id="channel-select-btn" type="button">
+                            <span>All channels</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                        </button>
+                        <div class="channel-dropdown" id="channel-dropdown"></div>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Phrase Type</div>
+                    <div class="filter-row">
+                        <select id="filter-type">
+                            <option value="">All Phrases</option>
+                            <option value="bigram">Bigrams (2 words)</option>
+                            <option value="trigram">Trigrams (3 words)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Sort By</div>
+                    <div class="filter-row">
+                        <select id="filter-sort">
+                            <option value="count">Frequency</option>
+                            <option value="pmi">PMI Score</option>
+                            <option value="npmi">NPMI (Normalized)</option>
+                            <option value="llr">Significance (G²)</option>
+                            <option value="uniqueness">Uniqueness</option>
+                            <option value="trending">Trending</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Filters</div>
+                    <div class="filter-row">
+                        <select id="filter-lang">
+                            <option value="">All Languages</option>
+                            <option value="ru">Russian</option>
+                            <option value="en">English</option>
+                        </select>
+                    </div>
+                    <div class="filter-row">
+                        <select id="filter-limit">
+                            <option value="50">50 phrases</option>
+                            <option value="100" selected>100 phrases</option>
+                            <option value="200">200 phrases</option>
+                            <option value="500">500 phrases</option>
+                        </select>
+                    </div>
+                    <div class="filter-row">
+                        <select id="filter-min-count">
+                            <option value="5">Min 5 occurrences</option>
+                            <option value="10">Min 10 occurrences</option>
+                            <option value="20">Min 20 occurrences</option>
+                            <option value="50">Min 50 occurrences</option>
+                        </select>
+                    </div>
+                    <div class="filter-row">
+                        <select id="filter-special">
+                            <option value="">All Phrases</option>
+                            <option value="new">New (last 7 days)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-title">Statistics</div>
+                    <div class="stats-row">
+                        <div class="stat-mini">
+                            <div class="stat-mini-label">Unique Phrases</div>
+                            <div class="stat-mini-value loading" id="stat-phrases">-</div>
+                        </div>
+                        <div class="stat-mini">
+                            <div class="stat-mini-label">Showing</div>
+                            <div class="stat-mini-value loading" id="stat-showing">-</div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+            <main class="main-content">
+                <div class="content-header">
+                    <div>
+                        <div class="content-title">Top Phrases</div>
+                        <div class="content-subtitle" id="results-count">Loading...</div>
+                    </div>
+                </div>
+                <div class="phrase-grid" id="phrase-grid">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <div>Loading phrase statistics...</div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script>
+        const API = { phrasestats: '/osu/api/phrasestats', users: '/osu/api/users', channels: '/osu/api/channels', guild: '/osu/api/guild' };
+        const state = { phrases: [], maxCount: 0, guild: null, users: [], channels: [], selectedUser: null, selectedChannel: null };
+        const elements = {
+            filterType: document.getElementById('filter-type'),
+            filterSort: document.getElementById('filter-sort'),
+            filterLang: document.getElementById('filter-lang'),
+            filterLimit: document.getElementById('filter-limit'),
+            filterMinCount: document.getElementById('filter-min-count'),
+            filterSpecial: document.getElementById('filter-special'),
+            phraseGrid: document.getElementById('phrase-grid'),
+            statPhrases: document.getElementById('stat-phrases'),
+            statShowing: document.getElementById('stat-showing'),
+            resultsCount: document.getElementById('results-count'),
+            guildIcon: document.getElementById('guild-icon'),
+            guildIconImg: document.getElementById('guild-icon-img'),
+            guildIconPlaceholder: document.querySelector('.guild-icon-placeholder'),
+            guildName: document.getElementById('guild-name'),
+            guildSubtitle: document.getElementById('guild-subtitle'),
+            userSelectBtn: document.getElementById('user-select-btn'),
+            userDropdown: document.getElementById('user-dropdown'),
+            selectedUserCard: document.getElementById('selected-user-card'),
+            selectedUserName: document.getElementById('selected-user-name'),
+            selectedUserStats: document.getElementById('selected-user-stats'),
+            userAvatarImg: document.getElementById('user-avatar-img'),
+            channelSelectBtn: document.getElementById('channel-select-btn'),
+            channelDropdown: document.getElementById('channel-dropdown')
+        };
+        function formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num.toLocaleString();
+        }
+        function getGuildIconUrl(guildId, iconHash) {
+            if (!iconHash) return null;
+            const ext = iconHash.startsWith('a_') ? 'gif' : 'png';
+            return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.${ext}?size=128`;
+        }
+        function getAvatarUrl(userId, avatarHash) {
+            if (!avatarHash) return null;
+            const ext = avatarHash.startsWith('a_') ? 'gif' : 'png';
+            return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${ext}?size=128`;
+        }
+        function getDefaultAvatarUrl(userId) {
+            const index = (BigInt(userId) >> BigInt(22)) % BigInt(6);
+            return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
+        }
+        function animateValue(element, end, duration = 600) {
+            const start = 0;
+            const startTime = performance.now();
+            element.title = end.toLocaleString();
+            function update(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const easeProgress = 1 - Math.pow(1 - progress, 3);
+                const current = Math.round(start + (end - start) * easeProgress);
+                element.textContent = formatNumber(current);
+                element.classList.remove('loading');
+                if (progress < 1) requestAnimationFrame(update);
+            }
+            requestAnimationFrame(update);
+        }
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        function updateGuildHeader() {
+            if (state.guild) {
+                elements.guildName.textContent = state.guild.name;
+                elements.guildSubtitle.textContent = 'N-gram analysis with PMI';
+                const iconUrl = getGuildIconUrl(state.guild.guild_id, state.guild.icon_hash);
+                if (iconUrl) {
+                    elements.guildIconImg.src = iconUrl;
+                    elements.guildIconImg.style.display = 'block';
+                    elements.guildIconPlaceholder.style.display = 'none';
+                } else {
+                    elements.guildIconPlaceholder.textContent = state.guild.name.charAt(0).toUpperCase();
+                    elements.guildIconPlaceholder.style.display = 'flex';
+                    elements.guildIconImg.style.display = 'none';
+                }
+            }
+        }
+        function updateSelectedUserDisplay() {
+            if (!state.selectedUser) {
+                elements.selectedUserCard.style.display = 'none';
+                elements.userSelectBtn.querySelector('span').textContent = 'Select user...';
+            } else {
+                elements.selectedUserCard.style.display = 'flex';
+                const user = state.selectedUser;
+                const name = user.display_name || user.username || user.user_id;
+                elements.selectedUserName.textContent = name;
+                elements.selectedUserStats.textContent = `${formatNumber(user.message_count)} messages`;
+                elements.userSelectBtn.querySelector('span').textContent = 'Change user...';
+                const avatarUrl = getAvatarUrl(user.user_id, user.avatar_hash) || getDefaultAvatarUrl(user.user_id);
+                elements.userAvatarImg.src = avatarUrl;
+            }
+        }
+        function populateUserDropdown() {
+            let html = `
+                <div class="user-dropdown-item ${!state.selectedUser ? 'selected' : ''}" data-user-id="">
+                    <div class="mini-avatar"><div class="user-avatar-placeholder" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--text-tertiary);">ALL</div></div>
+                    <div class="user-dropdown-item-info">
+                        <div class="user-dropdown-item-name">All Users</div>
+                        <div class="user-dropdown-item-count">No filter applied</div>
+                    </div>
+                </div>
+            `;
+            state.users.forEach(user => {
+                const name = user.display_name || user.username || user.user_id;
+                const avatarUrl = getAvatarUrl(user.user_id, user.avatar_hash) || getDefaultAvatarUrl(user.user_id);
+                const isSelected = state.selectedUser?.user_id === user.user_id;
+                html += `
+                    <div class="user-dropdown-item ${isSelected ? 'selected' : ''}" data-user-id="${user.user_id}">
+                        <div class="mini-avatar"><img src="${avatarUrl}" alt=""></div>
+                        <div class="user-dropdown-item-info">
+                            <div class="user-dropdown-item-name">${escapeHtml(name)}</div>
+                            <div class="user-dropdown-item-count">${formatNumber(user.message_count)} msgs</div>
+                        </div>
+                    </div>
+                `;
+            });
+            elements.userDropdown.innerHTML = html;
+            elements.userDropdown.querySelectorAll('.user-dropdown-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const userId = item.dataset.userId;
+                    if (userId) {
+                        state.selectedUser = state.users.find(u => u.user_id === userId);
+                    } else {
+                        state.selectedUser = null;
+                    }
+                    updateSelectedUserDisplay();
+                    closeUserDropdown();
+                    fetchPhraseStats();
+                });
+            });
+        }
+        function toggleUserDropdown() {
+            const isOpen = elements.userDropdown.classList.contains('open');
+            if (isOpen) { closeUserDropdown(); }
+            else { elements.userDropdown.classList.add('open'); elements.userSelectBtn.classList.add('open'); }
+        }
+        function closeUserDropdown() {
+            elements.userDropdown.classList.remove('open');
+            elements.userSelectBtn.classList.remove('open');
+        }
+        function toggleChannelDropdown() {
+            const isOpen = elements.channelDropdown.classList.contains('open');
+            if (isOpen) { closeChannelDropdown(); }
+            else { elements.channelDropdown.classList.add('open'); elements.channelSelectBtn.classList.add('open'); }
+        }
+        function closeChannelDropdown() {
+            elements.channelDropdown.classList.remove('open');
+            elements.channelSelectBtn.classList.remove('open');
+        }
+        function populateChannelDropdown() {
+            let html = `<div class="channel-dropdown-item ${!state.selectedChannel ? 'selected' : ''}" data-channel-id="">
+                <div class="channel-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/></svg></div>
+                <div class="channel-dropdown-item-info"><div class="channel-dropdown-item-name">All Channels</div><div class="channel-dropdown-item-count">No filter applied</div></div>
+            </div>`;
+            state.channels.forEach(channel => {
+                const name = channel.channel_name || channel.channel_id;
+                const isSelected = state.selectedChannel?.channel_id === channel.channel_id;
+                html += `<div class="channel-dropdown-item ${isSelected ? 'selected' : ''}" data-channel-id="${channel.channel_id}">
+                    <div class="channel-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l3 3m0 0l3-3m-3 3V3m7 4h6m-6 4h6m-6 4h6M4 11l3 3m0 0l3-3m-3 3V8"/></svg></div>
+                    <div class="channel-dropdown-item-info"><div class="channel-dropdown-item-name"># ${escapeHtml(name)}</div><div class="channel-dropdown-item-count">${formatNumber(channel.message_count)} msgs</div></div>
+                </div>`;
+            });
+            elements.channelDropdown.innerHTML = html;
+            elements.channelDropdown.querySelectorAll('.channel-dropdown-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const channelId = item.dataset.channelId;
+                    if (channelId) {
+                        state.selectedChannel = state.channels.find(c => c.channel_id === channelId);
+                        elements.channelSelectBtn.querySelector('span').textContent = '# ' + (state.selectedChannel.channel_name || state.selectedChannel.channel_id);
+                    } else {
+                        state.selectedChannel = null;
+                        elements.channelSelectBtn.querySelector('span').textContent = 'All channels';
+                    }
+                    closeChannelDropdown();
+                    fetchPhraseStats();
+                });
+            });
+        }
+        async function fetchChannels() {
+            try {
+                const res = await fetch(API.channels);
+                const data = await res.json();
+                state.channels = data.channels || [];
+                populateChannelDropdown();
+            } catch (e) { console.error('Failed to load channels:', e); }
+        }
+        async function fetchGuild() {
+            try {
+                const res = await fetch(API.guild);
+                if (res.ok) { state.guild = await res.json(); updateGuildHeader(); }
+            } catch (e) { console.error('Failed to load guild:', e); }
+        }
+        async function fetchUsers() {
+            try {
+                const res = await fetch(API.users);
+                const data = await res.json();
+                state.users = data.users || [];
+                populateUserDropdown();
+            } catch (e) { console.error('Failed to load users:', e); }
+        }
+        async function fetchPhraseStats() {
+            const params = new URLSearchParams();
+            params.set('limit', elements.filterLimit.value);
+            params.set('min_count', elements.filterMinCount.value);
+            if (elements.filterLang.value) params.set('lang', elements.filterLang.value);
+            if (elements.filterType.value) params.set('type', elements.filterType.value);
+            if (elements.filterSort.value) params.set('sort', elements.filterSort.value);
+            if (elements.filterSpecial.value) params.set('filter', elements.filterSpecial.value);
+            if (state.selectedUser) params.set('user_id', state.selectedUser.user_id);
+            if (state.selectedChannel) params.set('channel_id', state.selectedChannel.channel_id);
+            elements.phraseGrid.innerHTML = `<div class="loading-state"><div class="loading-spinner"></div><div>Loading phrase statistics...</div></div>`;
+            try {
+                const res = await fetch(`${API.phrasestats}?${params}`);
+                const data = await res.json();
+                state.phrases = data.phrases || [];
+                state.maxCount = state.phrases.length > 0 ? state.phrases[0].count : 0;
+                animateValue(elements.statPhrases, data.unique_phrases || 0);
+                animateValue(elements.statShowing, state.phrases.length);
+                const sortLabels = { count: 'frequency', pmi: 'PMI', npmi: 'NPMI', llr: 'significance', uniqueness: 'uniqueness', trending: 'trend' };
+                const sortLabel = sortLabels[elements.filterSort.value] || 'frequency';
+                elements.resultsCount.textContent = `Top ${state.phrases.length} by ${sortLabel}`;
+                renderPhraseGrid();
+            } catch (e) {
+                console.error('Failed to load phrase stats:', e);
+                elements.phraseGrid.innerHTML = `<div class="empty-state">Failed to load data</div>`;
+            }
+        }
+        function renderPhraseGrid() {
+            if (state.phrases.length === 0) {
+                elements.phraseGrid.innerHTML = `<div class="empty-state">No phrases found. Try lowering the minimum occurrence filter.</div>`;
+                return;
+            }
+            const sortMode = elements.filterSort.value;
+            const html = state.phrases.map((phrase, index) => {
+                const barWidth = state.maxCount > 0 ? (phrase.count / state.maxCount * 100) : 0;
+                const langLabel = phrase.language === 'ru' ? 'RU' : phrase.language === 'en' ? 'EN' : '?';
+                const typeLabel = phrase.word_count === 2 ? '2W' : phrase.word_count === 3 ? '3W' : '';
+                const delay = Math.min(index * 15, 300);
+
+                let badges = [];
+                if (phrase.is_new) {
+                    badges.push(`<span class="phrase-badge-new">NEW</span>`);
+                }
+                if (sortMode === 'pmi' && phrase.pmi !== undefined && phrase.pmi !== null) {
+                    const pmiClass = phrase.pmi >= 0 ? 'positive' : 'negative';
+                    const pmiSign = phrase.pmi >= 0 ? '+' : '';
+                    badges.push(`<span class="phrase-pmi ${pmiClass}">PMI ${pmiSign}${phrase.pmi.toFixed(1)}</span>`);
+                } else if (sortMode === 'npmi' && phrase.npmi !== undefined && phrase.npmi !== null) {
+                    badges.push(`<span class="phrase-npmi">NPMI ${phrase.npmi.toFixed(2)}</span>`);
+                } else if (sortMode === 'llr' && phrase.llr !== undefined && phrase.llr !== null) {
+                    badges.push(`<span class="phrase-llr">G\u00b2 ${phrase.llr.toFixed(0)}</span>`);
+                } else if (sortMode === 'uniqueness' && phrase.uniqueness !== undefined && phrase.uniqueness !== null) {
+                    badges.push(`<span class="phrase-uniqueness">\u00d7${phrase.uniqueness.toFixed(1)}</span>`);
+                } else if (sortMode === 'trending' && phrase.trend_score !== undefined && phrase.trend_score !== null) {
+                    const trendClass = phrase.trend_score >= 0 ? 'up' : 'down';
+                    const trendSign = phrase.trend_score >= 0 ? '+' : '';
+                    badges.push(`<span class="phrase-trend ${trendClass}">${trendSign}${(phrase.trend_score * 100).toFixed(0)}%</span>`);
+                } else if (phrase.pmi !== undefined && phrase.pmi !== null) {
+                    const pmiClass = phrase.pmi >= 0 ? 'positive' : 'negative';
+                    const pmiSign = phrase.pmi >= 0 ? '+' : '';
+                    badges.push(`<span class="phrase-pmi ${pmiClass}">${pmiSign}${phrase.pmi.toFixed(1)}</span>`);
+                }
+                let tooltipLines = [
+                    `Count: ${phrase.count.toLocaleString()}`,
+                    `Share: ${phrase.percentage?.toFixed(4) || 0}%`
+                ];
+                if (phrase.pmi !== undefined && phrase.pmi !== null) {
+                    tooltipLines.push(`PMI: ${phrase.pmi.toFixed(4)}`);
+                }
+                if (phrase.npmi !== undefined && phrase.npmi !== null) {
+                    tooltipLines.push(`NPMI: ${phrase.npmi.toFixed(4)} (normalized to [-1, 1])`);
+                }
+                if (phrase.llr !== undefined && phrase.llr !== null) {
+                    tooltipLines.push(`LLR (G²): ${phrase.llr.toFixed(2)}`);
+                }
+                if (phrase.uniqueness !== undefined && phrase.uniqueness !== null) {
+                    tooltipLines.push(`Uniqueness: ×${phrase.uniqueness.toFixed(3)} vs average`);
+                }
+                if (phrase.trend_score !== undefined && phrase.trend_score !== null) {
+                    const trendPct = (phrase.trend_score * 100).toFixed(1);
+                    tooltipLines.push(`Trend: ${phrase.trend_score >= 0 ? '+' : ''}${trendPct}% this week`);
+                }
+                if (phrase.first_seen) {
+                    tooltipLines.push(`First seen: ${new Date(phrase.first_seen).toLocaleDateString()}`);
+                }
+                const tooltip = tooltipLines.join('\n');
+
+                return `
+                    <div class="phrase-card" style="--bar-width: ${barWidth}%; animation-delay: ${delay}ms" title="${tooltip}">
+                        <span class="phrase-rank">#${index + 1}</span>
+                        <div class="phrase-text">${escapeHtml(phrase.phrase)}</div>
+                        <div class="phrase-meta">
+                            <span class="phrase-count">${formatNumber(phrase.count)}</span>
+                            ${badges.join('')}
+                            <span class="phrase-lang">${langLabel}</span>
+                            ${typeLabel ? `<span class="phrase-type">${typeLabel}</span>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            elements.phraseGrid.innerHTML = html;
+        }
+        function setupEventListeners() {
+            elements.filterType.addEventListener('change', fetchPhraseStats);
+            elements.filterSort.addEventListener('change', fetchPhraseStats);
+            elements.filterLang.addEventListener('change', fetchPhraseStats);
+            elements.filterLimit.addEventListener('change', fetchPhraseStats);
+            elements.filterMinCount.addEventListener('change', fetchPhraseStats);
+            elements.filterSpecial.addEventListener('change', fetchPhraseStats);
+            elements.userSelectBtn.addEventListener('click', toggleUserDropdown);
+            elements.channelSelectBtn.addEventListener('click', toggleChannelDropdown);
+            document.addEventListener('click', (e) => {
+                if (!elements.userSelectBtn.contains(e.target) && !elements.userDropdown.contains(e.target)) closeUserDropdown();
+                if (!elements.channelSelectBtn.contains(e.target) && !elements.channelDropdown.contains(e.target)) closeChannelDropdown();
+            });
+        }
+        async function init() {
+            setupEventListeners();
+            await fetchGuild();
+            await Promise.all([fetchUsers(), fetchChannels(), fetchPhraseStats()]);
+        }
+        init();
+    </script>
+</body>
+</html>

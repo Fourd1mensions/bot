@@ -3,7 +3,6 @@
 #include "services/message_presenter_service.h"
 #include <requests.h>
 #include <osu.h>
-#include <osu_tools.h>
 #include <utils.h>
 #include <database.h>
 #include <cache.h>
@@ -51,8 +50,15 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
                 .thumbnail = cached_data["thumbnail"].get<std::string>(),
                 .beatmap_info = cached_data["beatmap_info"].get<std::string>(),
                 .footer = cached_data["footer"].get<std::string>(),
-                .timestamp = cached_data["timestamp"].get<time_t>()
+                .timestamp = cached_data["timestamp"].get<time_t>(),
+                .username = cached_data.value("username", ""),
+                .user_id = cached_data.value("user_id", static_cast<uint64_t>(0))
             };
+
+            // Skip cache if missing user info (old cache format)
+            if (cache_data.user_id == 0) {
+                throw std::runtime_error("old cache format");
+            }
 
             PaginationInfo pagination{
                 .current = state.current_index,
@@ -160,44 +166,44 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
 
     if (osu_file_path_opt.has_value() && score.get_mode() == "osu") {
         if (current_pp <= 0.01) {
-            // Use osu-tools for accurate PP calculation
-            auto calculated_perf_opt = osu_tools::simulate_performance(
-                *osu_file_path_opt,
-                score.get_accuracy(),
-                "osu",
-                score.get_mods(),
-                score.get_max_combo(),
-                score.get_count_miss(),
-                score.get_count_100(),
-                score.get_count_50()
-            );
+            spdlog::info("[RS] API pp=0, calculating via rosu-pp for beatmap {}", beatmap_id);
+            // Use performance service for accurate PP calculation
+            SimulateParams params;
+            params.accuracy = score.get_accuracy();
+            params.mods = score.get_mods();
+            params.combo = score.get_max_combo();
+            params.misses = score.get_count_miss();
+            params.count_100 = score.get_count_100();
+            params.count_50 = score.get_count_50();
+
+            auto calculated_perf_opt = performance_service_.calculate_pp(
+                beatmapset_id, beatmap_id, "osu", params);
 
             if (calculated_perf_opt.has_value()) {
                 current_pp = calculated_perf_opt->pp;
-                spdlog::debug("[PP] Calculated PP using osu-tools: {:.2f}pp (aim: {:.2f}, speed: {:.2f}, acc: {:.2f})",
+                spdlog::info("[PP] Calculated: {:.2f}pp (aim: {:.2f}, speed: {:.2f}, acc: {:.2f})",
                     current_pp, calculated_perf_opt->aim_pp, calculated_perf_opt->speed_pp, calculated_perf_opt->accuracy_pp);
             }
         }
 
-        // Calculate FC PP using osu-tools (converting misses to 300s for accuracy)
+        // Calculate FC PP (converting misses to 300s for accuracy)
         if (score.get_count_miss() > 0) {
             int fc_total_objects = score.get_count_300() + score.get_count_100() + score.get_count_50() + score.get_count_miss();
             double fc_accuracy = ((score.get_count_300() + score.get_count_miss()) * 300.0 + score.get_count_100() * 100.0 + score.get_count_50() * 50.0) / (fc_total_objects * 300.0);
 
-            spdlog::info("[PP] FC calculation inputs: count_300={}, count_100={}, count_50={}, count_miss=0 (was {}), acc={:.4f}",
+            spdlog::info("[PP] FC calc: 300={} 100={} 50={} miss=0 (was {}) acc={:.4f}",
                 score.get_count_300() + score.get_count_miss(), score.get_count_100(), score.get_count_50(), score.get_count_miss(), fc_accuracy);
 
-            // Use osu-tools to calculate FC PP
-            auto fc_perf_opt = osu_tools::simulate_performance(
-                *osu_file_path_opt,
-                fc_accuracy,
-                "osu",
-                score.get_mods(),
-                0,  // combo = 0 means use beatmap max
-                0,  // misses = 0 for FC
-                score.get_count_100(),
-                score.get_count_50()
-            );
+            SimulateParams fc_params;
+            fc_params.accuracy = fc_accuracy;
+            fc_params.mods = score.get_mods();
+            fc_params.combo = 0;  // 0 = use beatmap max
+            fc_params.misses = 0;  // FC
+            fc_params.count_100 = score.get_count_100();
+            fc_params.count_50 = score.get_count_50();
+
+            auto fc_perf_opt = performance_service_.calculate_pp(
+                beatmapset_id, beatmap_id, "osu", fc_params);
 
             if (fc_perf_opt.has_value()) {
                 fc_perf.total_pp = fc_perf_opt->pp;
@@ -205,10 +211,10 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
                 fc_perf.speed_pp = fc_perf_opt->speed_pp;
                 fc_perf.accuracy_pp = fc_perf_opt->accuracy_pp;
 
-                spdlog::info("[PP] FC PP calculation successful: {:.2f}pp (current: {:.2f}pp, {} misses -> 0)",
+                spdlog::info("[PP] FC OK: {:.2f}pp (was: {:.2f}pp, {} misses -> 0)",
                     fc_perf.total_pp, current_pp, score.get_count_miss());
             } else {
-                spdlog::warn("[PP] FC PP calculation failed - osu-tools returned no result");
+                spdlog::warn("[PP] FC calculation failed");
             }
         }
     }
@@ -277,6 +283,8 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
         page_data["beatmap_info"] = cache_data.beatmap_info;
         page_data["footer"] = cache_data.footer;
         page_data["timestamp"] = cache_data.timestamp;
+        page_data["username"] = cache_data.username;
+        page_data["user_id"] = cache_data.user_id;
 
         state.page_content_cache[state.current_index] = page_data.dump();
         spdlog::debug("[RS] Cached page data for index {}", state.current_index);
