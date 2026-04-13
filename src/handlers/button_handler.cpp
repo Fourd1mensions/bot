@@ -9,6 +9,7 @@
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <algorithm>
 
 using json = nlohmann::json;
 
@@ -17,10 +18,12 @@ namespace handlers {
 ButtonHandler::ButtonHandler(
     services::LeaderboardService& leaderboard_service,
     services::RecentScoreService& recent_score_service,
+    services::MessagePresenterService& message_presenter,
     Request& request
 )
     : leaderboard_service_(leaderboard_service)
     , recent_score_service_(recent_score_service)
+    , message_presenter_(message_presenter)
     , request_(request)
 {}
 
@@ -66,6 +69,18 @@ void ButtonHandler::handle_button_click(const dpp::button_click_t& event) {
         handle_users_pagination(event, button_id);
         return;
     }
+
+    // Handle top pagination
+    if (button_id == "top_prev" || button_id == "top_next" || button_id == "top_first" || button_id == "top_last") {
+        handle_top_pagination(event, button_id);
+        return;
+    }
+
+    // Handle osu! link DM button
+    if (button_id.starts_with("osu_link_dm:")) {
+        handle_osu_link_dm(event, button_id.substr(12));
+        return;
+    }
 }
 
 void ButtonHandler::handle_form_submit(const dpp::form_submit_t& event) {
@@ -92,6 +107,7 @@ void ButtonHandler::handle_lb_select(const dpp::button_click_t& event) {
 
     if (!state_opt) {
         spdlog::debug("Ignoring button click for expired leaderboard {}", msg_id.str());
+        event.reply();
         return;
     }
 
@@ -129,6 +145,7 @@ void ButtonHandler::handle_lb_pagination(const dpp::button_click_t& event, const
 
     if (!state_opt) {
         spdlog::info("[BTN] Ignoring button click for expired/missing leaderboard {}", msg_id.str());
+        event.reply();
         return;
     }
 
@@ -136,6 +153,7 @@ void ButtonHandler::handle_lb_pagination(const dpp::button_click_t& event, const
 
     // Navigate using PaginationService
     if (!services::PaginationService::navigate_by_button(state, button_id)) {
+        event.reply();
         return;
     }
 
@@ -171,6 +189,7 @@ void ButtonHandler::handle_rs_pagination(const dpp::button_click_t& event, const
 
     if (!state_opt) {
         spdlog::info("[BTN] Ignoring button click for expired/missing recent scores {}", msg_id.str());
+        event.reply();
         return;
     }
 
@@ -178,6 +197,7 @@ void ButtonHandler::handle_rs_pagination(const dpp::button_click_t& event, const
 
     // Navigate using PaginationService
     if (!services::PaginationService::navigate_by_button(state, button_id)) {
+        event.reply();
         return;
     }
 
@@ -213,6 +233,7 @@ void ButtonHandler::handle_rs_refresh(const dpp::button_click_t& event) {
 
     if (!state_opt) {
         spdlog::info("[BTN] Ignoring button click for expired/missing recent scores {}", msg_id.str());
+        event.reply();
         return;
     }
 
@@ -220,11 +241,12 @@ void ButtonHandler::handle_rs_refresh(const dpp::button_click_t& event) {
     state.refresh_count++;
 
     std::string scores_response;
+    std::string mode = state.mode.empty() ? "osu" : state.mode;
     if (state.use_best_scores) {
-        scores_response = request_.get_user_best_scores(std::to_string(state.osu_user_id), "osu", 100, 0);
+        scores_response = request_.get_user_best_scores(std::to_string(state.osu_user_id), mode, 100, 0);
     } else {
         scores_response = request_.get_user_recent_scores(
-            std::to_string(state.osu_user_id), state.include_fails, "osu", 50, 0);
+            std::to_string(state.osu_user_id), state.include_fails, mode, 50, 0);
     }
 
     if (!scores_response.empty()) {
@@ -249,6 +271,12 @@ void ButtonHandler::handle_rs_refresh(const dpp::button_click_t& event) {
                 }
 
                 if (has_new_scores) {
+                    // Sort best scores by date (newest first), matching initial fetch order
+                    if (state.use_best_scores) {
+                        std::sort(new_scores.begin(), new_scores.end(), [](const Score& a, const Score& b) {
+                            return a.get_created_at() > b.get_created_at();
+                        });
+                    }
                     state.scores = std::move(new_scores);
                     state.current_index = 0;
                     spdlog::info("[BTN] Refreshed scores, got {} new scores", state.scores.size());
@@ -346,6 +374,7 @@ void ButtonHandler::handle_cmp_pagination(const dpp::button_click_t& event, cons
 
     if (!state_opt) {
         spdlog::info("[BTN] Ignoring button click for expired/missing compare {}", msg_id.str());
+        event.reply();
         return;
     }
 
@@ -353,6 +382,7 @@ void ButtonHandler::handle_cmp_pagination(const dpp::button_click_t& event, cons
 
     // Navigate using PaginationService
     if (!services::PaginationService::navigate_by_button(state, button_id)) {
+        event.reply();
         return;
     }
 
@@ -366,8 +396,7 @@ void ButtonHandler::handle_cmp_pagination(const dpp::button_click_t& event, cons
     }
 
     // Build updated message with new page
-    services::MessagePresenterService presenter;
-    dpp::message updated_msg = presenter.build_compare_page(state);
+    dpp::message updated_msg = message_presenter_.build_compare_page(state);
 
     // Update the message
     spdlog::info("[BTN] Updating compare message with new page {}", state.current_page + 1);
@@ -446,6 +475,7 @@ void ButtonHandler::handle_users_pagination(const dpp::button_click_t& event, co
 
     if (!state_opt) {
         spdlog::warn("[BTN] No users state found for message {}", msg_id.str());
+        event.reply();
         return;
     }
 
@@ -470,6 +500,94 @@ void ButtonHandler::handle_users_pagination(const dpp::button_click_t& event, co
 
     // Build and update message
     dpp::message updated_msg = build_users_page(state);
+    event.reply(dpp::ir_update_message, updated_msg);
+}
+
+void ButtonHandler::handle_osu_link_dm(const dpp::button_click_t& event, const std::string& token) {
+    // Get link URL from cached token
+    std::string link_url;
+    try {
+        auto& mc = cache::MemcachedCache::instance();
+        auto token_data = mc.get("osu_link_token:" + token);
+        if (!token_data) {
+            event.reply(dpp::message("Link expired. Please use `/set` again.").set_flags(dpp::m_ephemeral));
+            return;
+        }
+
+        auto j = json::parse(*token_data);
+        link_url = j.value("link_url", "");
+        if (link_url.empty()) {
+            event.reply(dpp::message("Invalid link token.").set_flags(dpp::m_ephemeral));
+            return;
+        }
+    } catch (const std::exception& e) {
+        spdlog::error("[BTN] Failed to get link token: {}", e.what());
+        event.reply(dpp::message("Failed to get link. Please try again.").set_flags(dpp::m_ephemeral));
+        return;
+    }
+
+    // Send DM to user
+    dpp::snowflake user_id = event.command.usr.id;
+
+    auto embed = dpp::embed()
+        .set_color(0xff66aa)
+        .set_title("Link your osu! Account")
+        .set_description(fmt::format("Click the link below to connect your osu! account:\n\n**[Click here to link]({})**\n\nThis link expires in 5 minutes.", link_url))
+        .set_footer(dpp::embed_footer().set_text("Patchouli Bot"));
+
+    dpp::message dm_msg;
+    dm_msg.add_embed(embed);
+
+    event.from->creator->direct_message_create(user_id, dm_msg, [&event](const dpp::confirmation_callback_t& callback) {
+        if (callback.is_error()) {
+            spdlog::warn("[BTN] Failed to send DM: {}", callback.get_error().message);
+        }
+    });
+
+    event.reply(dpp::message("Check your DMs for the link!").set_flags(dpp::m_ephemeral));
+}
+
+void ButtonHandler::handle_top_pagination(const dpp::button_click_t& event, const std::string& button_id) {
+    auto msg_id = event.command.message_id;
+
+    // Fetch from Memcached
+    std::optional<TopState> state_opt;
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        state_opt = cache.get_top(msg_id.str());
+        spdlog::info("[BTN] Retrieved top state from cache: {}", state_opt.has_value() ? "success" : "not found");
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to fetch top from cache: {}", e.what());
+    }
+
+    if (!state_opt) {
+        spdlog::info("[BTN] Ignoring button click for expired/missing top {}", msg_id.str());
+        event.reply();
+        return;
+    }
+
+    auto state = *state_opt;
+
+    // Navigate using PaginationService
+    if (!services::PaginationService::navigate_by_button(state, button_id)) {
+        event.reply();
+        return;
+    }
+
+    // Save updated state back to Memcached
+    try {
+        auto& cache = cache::MemcachedCache::instance();
+        cache.cache_top(msg_id.str(), state);
+        spdlog::info("[BTN] Saved updated top state to cache, page={}/{}", state.current_page + 1, state.total_pages);
+    } catch (const std::exception& e) {
+        spdlog::warn("Failed to save updated top to cache: {}", e.what());
+    }
+
+    // Build updated message with new page
+    dpp::message updated_msg = message_presenter_.build_top_page(state);
+
+    // Update the message
+    spdlog::info("[BTN] Updating message with new page {}", state.current_page + 1);
     event.reply(dpp::ir_update_message, updated_msg);
 }
 

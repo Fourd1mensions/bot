@@ -22,7 +22,10 @@
 #include <services/leaderboard_service.h>
 #include <services/beatmap_extract_service.h>
 #include <services/webhook_service.h>
+#include <services/user_settings_service.h>
+#include <services/embed_template_service.h>
 #include <services/message_crawler_service.h>
+#include <services/music_player_service.h>
 
 #include <dpp/dpp.h>
 #include <state/session_state.h>
@@ -93,7 +96,10 @@ private:
   std::unique_ptr<services::RecentScoreService> recent_score_service;
   std::unique_ptr<services::LeaderboardService> leaderboard_service;
   std::unique_ptr<services::BeatmapExtractService> beatmap_extract_service;
+  services::UserSettingsService        user_settings_service;
+  services::EmbedTemplateService       embed_template_service;
   std::unique_ptr<services::MessageCrawlerService> message_crawler_service;
+  std::unique_ptr<services::MusicPlayerService> music_player_service;
 
   // Event handlers
   std::unique_ptr<handlers::ButtonHandler> button_handler;

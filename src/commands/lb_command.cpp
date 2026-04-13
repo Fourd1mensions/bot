@@ -75,7 +75,7 @@ LbParams LbCommand::parse_params(const std::string& content) const {
             std::string mods_input = t.substr(1);
             auto validation = utils::validate_mods(mods_input);
 
-            params.mods_filter = validation.normalized;
+            params.mods_filter = validation.is_nomod ? "NM" : validation.normalized;
 
             // Add warnings for invalid mods
             if (!validation.invalid.empty()) {
@@ -167,7 +167,7 @@ void LbCommand::execute_unified(const UnifiedContext& ctx) {
         // Get parameters directly from slash command with validation
         if (auto mods = ctx.get_string_param("mods")) {
             auto validation = utils::validate_mods(*mods);
-            params.mods_filter = validation.normalized;
+            params.mods_filter = validation.is_nomod ? "NM" : validation.normalized;
 
             if (!validation.invalid.empty()) {
                 std::string invalid_list;

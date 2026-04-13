@@ -5,6 +5,8 @@
 #include <iomanip>
 #include <algorithm>
 #include <set>
+#include <openssl/rand.h>
+#include <fmt/format.h>
 
 using namespace std::chrono;
 
@@ -77,7 +79,13 @@ bool utils::load_config(Config& config) {
     config.access_token   = j.value("ACCESS_TOKEN", "");
     config.redirect_uri   = j.value("REDIRECT_URI", "");
     config.weather_api_key = j.value("WEATHER_API_KEY", "");
+    config.discord_client_id     = j.value("DISCORD_CLIENT_ID", "");
+    config.discord_client_secret = j.value("DISCORD_CLIENT_SECRET", "");
+    config.osu_oauth_client_id     = j.value("OSU_OAUTH_CLIENT_ID", "");
+    config.osu_oauth_client_secret = j.value("OSU_OAUTH_CLIENT_SECRET", "");
+    config.guild_id              = j.value("GUILD_ID", "");
     config.expires_at     = j.value("EXPIRES_AT", 0);
+    config.bot_token     = j.value("DISCORD_TOKEN", "");
 
     // Load admin users array
     if (j.contains("ADMIN_USERS") && j["ADMIN_USERS"].is_array()) {
@@ -100,6 +108,11 @@ bool utils::load_config(Config& config) {
       };
     }
 
+    // Load music allowed users
+    if (j.contains("MUSIC_ALLOWED_USERS") && j["MUSIC_ALLOWED_USERS"].is_array()) {
+      config.music_allowed_users = j["MUSIC_ALLOWED_USERS"].get<std::vector<std::string>>();
+    }
+
     // Load webhooks (optional)
     if (j.contains("WEBHOOKS") && j["WEBHOOKS"].is_object()) {
       auto& wh = j["WEBHOOKS"];
@@ -119,7 +132,16 @@ time_t utils::ISO8601_to_UNIX(const std::string& datetime) {
   std::tm tm = {};
   std::istringstream ss(datetime);
   ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-  return std::mktime(&tm) - timezone;
+  if (ss.fail()) {
+    spdlog::warn("[utils] Failed to parse ISO8601 datetime: '{}'", datetime);
+    return 0;
+  }
+  time_t result = std::mktime(&tm);
+  if (result == -1) {
+    spdlog::warn("[utils] mktime failed for datetime: '{}'", datetime);
+    return 0;
+  }
+  return result - timezone;
 }
 
 size_t utils::get_time() {
@@ -234,6 +256,41 @@ std::string utils::url_decode(const std::string& value) {
   return decoded.str();
 }
 
+std::string utils::generate_secure_token() {
+  unsigned char buffer[32];  // 256 bits of entropy
+  if (RAND_bytes(buffer, sizeof(buffer)) != 1) {
+    // Fallback to /dev/urandom if OpenSSL fails
+    std::ifstream urandom("/dev/urandom", std::ios::binary);
+    if (urandom.is_open()) {
+      urandom.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
+    } else {
+      throw std::runtime_error("Failed to generate secure random token");
+    }
+  }
+  std::string result;
+  result.reserve(64);
+  for (size_t i = 0; i < sizeof(buffer); ++i) {
+    result += fmt::format("{:02x}", buffer[i]);
+  }
+  return result;
+}
+
+std::string utils::html_escape(const std::string& text) {
+  std::string escaped;
+  escaped.reserve(text.size() * 1.1);  // Slight buffer for escapes
+  for (char c : text) {
+    switch (c) {
+      case '&':  escaped += "&amp;";  break;
+      case '<':  escaped += "&lt;";   break;
+      case '>':  escaped += "&gt;";   break;
+      case '"':  escaped += "&quot;"; break;
+      case '\'': escaped += "&#39;";  break;
+      default:   escaped += c;        break;
+    }
+  }
+  return escaped;
+}
+
 utils::ModFlags utils::parse_mod_flags(const std::string& mods) {
   ModFlags flags;
   flags.has_ez = mods.find("EZ") != std::string::npos;
@@ -246,44 +303,60 @@ utils::ModFlags utils::parse_mod_flags(const std::string& mods) {
 utils::ModsValidationResult utils::validate_mods(const std::string& mods) {
   ModsValidationResult result;
 
-  if (mods.empty() || mods == "NM") {
+  if (mods.empty()) {
     result.normalized = "";
     return result;
   }
 
-  // Normalize to uppercase
   std::string upper = mods;
   std::transform(upper.begin(), upper.end(), upper.begin(),
     [](unsigned char c) { return std::toupper(c); });
 
-  // Remove spaces and plus signs
+  // NM = NoMod, not a real mod
+  if (upper == "NM") {
+    result.normalized = "";
+    result.is_nomod = true;
+    return result;
+  }
+
   upper.erase(std::remove_if(upper.begin(), upper.end(),
     [](char c) { return c == ' ' || c == '+'; }), upper.end());
 
-  // Parse 2-character mod codes
   std::vector<std::string> found_mods;
   std::set<std::string> seen_mods;
 
-  for (size_t i = 0; i + 1 < upper.length(); i += 2) {
-    std::string mod = upper.substr(i, 2);
+  for (size_t i = 0; i < upper.length(); ) {
+    // 3-char mods first (SV2)
+    if (i + 2 < upper.length()) {
+      std::string mod3 = upper.substr(i, 3);
+      if (std::find(VALID_MODS.begin(), VALID_MODS.end(), mod3) != VALID_MODS.end()) {
+        if (seen_mods.find(mod3) == seen_mods.end()) {
+          found_mods.push_back(mod3);
+          seen_mods.insert(mod3);
+        }
+        i += 3;
+        continue;
+      }
+    }
 
-    // Check if valid mod
-    bool is_valid = std::find(VALID_MODS.begin(), VALID_MODS.end(), mod) != VALID_MODS.end();
+    if (i + 1 < upper.length()) {
+      std::string mod2 = upper.substr(i, 2);
+      bool is_valid = std::find(VALID_MODS.begin(), VALID_MODS.end(), mod2) != VALID_MODS.end();
 
-    if (!is_valid) {
-      result.invalid.push_back(mod);
-    } else if (seen_mods.find(mod) == seen_mods.end()) {
-      found_mods.push_back(mod);
-      seen_mods.insert(mod);
+      if (!is_valid) {
+        result.invalid.push_back(mod2);
+      } else if (seen_mods.find(mod2) == seen_mods.end()) {
+        found_mods.push_back(mod2);
+        seen_mods.insert(mod2);
+      }
+      i += 2;
+    } else {
+      // Leftover single character
+      result.invalid.push_back(std::string(1, upper[i]));
+      i += 1;
     }
   }
 
-  // Handle odd-length string (leftover character)
-  if (upper.length() % 2 == 1) {
-    result.invalid.push_back(std::string(1, upper.back()));
-  }
-
-  // Check for incompatible mods
   bool has_hr = seen_mods.count("HR") > 0;
   bool has_ez = seen_mods.count("EZ") > 0;
   bool has_dt = seen_mods.count("DT") > 0 || seen_mods.count("NC") > 0;
@@ -343,7 +416,7 @@ std::string utils::sanitize_filename(const std::string& filename) {
 std::string utils::get_rank_emoji(const std::string& rank) {
   static const std::unordered_map<std::string, std::string> rank_emojis = {
     {"XH", "<:rankingSSH:1320169012810514532>"},
-    {"X",  "<:rankingSSH:1320169012810514532>"},
+    {"X",  "<:rankingSS:1320169011552313404>"},
     {"SH", "<:rankingSH:1320169010814210048>"},
     {"S",  "<:rankingS:1320169009434132501>"},
     {"A",  "<:rankingA:1320169005894787162>"},

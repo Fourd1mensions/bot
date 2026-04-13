@@ -262,11 +262,13 @@ std::optional<LeaderboardState> MemcachedCache::deserialize_leaderboard(const st
 std::string MemcachedCache::serialize_recent_scores(const RecentScoreState& state) {
     json j;
     j["current_index"] = state.current_index;
+    j["mode"] = state.mode;
     j["include_fails"] = state.include_fails;
     j["use_best_scores"] = state.use_best_scores;
     j["osu_user_id"] = state.osu_user_id;
     j["refresh_count"] = state.refresh_count;
     j["caller_discord_id"] = static_cast<uint64_t>(state.caller_discord_id);
+    j["preset"] = services::embed_preset_to_string(state.preset);
     j["created_at"] = std::chrono::duration_cast<std::chrono::milliseconds>(
         state.created_at.time_since_epoch()
     ).count();
@@ -309,11 +311,13 @@ std::optional<RecentScoreState> MemcachedCache::deserialize_recent_scores(const 
 
         RecentScoreState state;
         state.current_index = j["current_index"];
+        state.mode = j.value("mode", "osu");
         state.include_fails = j.value("include_fails", false);
         state.use_best_scores = j.value("use_best_scores", false);
         state.osu_user_id = j.value("osu_user_id", 0);
         state.refresh_count = j.value("refresh_count", 0);
         state.caller_discord_id = dpp::snowflake(j.value("caller_discord_id", 0ULL));
+        state.preset = services::embed_preset_from_string(j.value("preset", "classic"));
 
         // Deserialize timestamp
         if (j.contains("created_at")) {
@@ -349,7 +353,13 @@ std::optional<RecentScoreState> MemcachedCache::deserialize_recent_scores(const 
         // Deserialize beatmap difficulty cache
         if (j.contains("difficulty_cache")) {
             for (const auto& [key, value] : j["difficulty_cache"].items()) {
-                uint32_t beatmap_id = std::stoul(key);
+                uint32_t beatmap_id;
+                try {
+                    beatmap_id = std::stoul(key);
+                } catch (const std::exception& e) {
+                    spdlog::warn("Invalid beatmap_id key in difficulty_cache: '{}'", key);
+                    continue;
+                }
                 float ar = value[0].get<float>();
                 float od = value[1].get<float>();
 
@@ -595,6 +605,140 @@ std::optional<UsersState> MemcachedCache::deserialize_users(const std::string& d
         return state;
     } catch (const json::exception& e) {
         spdlog::error("Failed to deserialize users: {}", e.what());
+        return std::nullopt;
+    }
+}
+
+// TopState operations
+bool MemcachedCache::cache_top(const std::string& state_id, const TopState& state) {
+    std::string data = serialize_top(state);
+    return set("top:" + state_id, data, std::chrono::seconds(300)); // 5 minutes
+}
+
+std::optional<TopState> MemcachedCache::get_top(const std::string& state_id) {
+    auto data = get("top:" + state_id);
+    if (!data) {
+        return std::nullopt;
+    }
+    return deserialize_top(*data);
+}
+
+bool MemcachedCache::delete_top(const std::string& state_id) {
+    return del("top:" + state_id);
+}
+
+std::string MemcachedCache::serialize_top(const TopState& state) {
+    json j;
+    j["username"] = state.username;
+    j["osu_user_id"] = state.osu_user_id;
+    j["mode"] = state.mode;
+    j["mods_filter"] = state.mods_filter;
+    j["grade_filter"] = state.grade_filter;
+    j["sort_method"] = static_cast<int>(state.sort_method);
+    j["reverse"] = state.reverse;
+    j["current_page"] = state.current_page;
+    j["total_pages"] = state.total_pages;
+    j["caller_discord_id"] = static_cast<uint64_t>(state.caller_discord_id);
+    j["preset"] = static_cast<int>(state.preset);
+    j["created_at"] = std::chrono::duration_cast<std::chrono::milliseconds>(
+        state.created_at.time_since_epoch()
+    ).count();
+
+    // Serialize scores
+    j["scores"] = json::array();
+    for (const auto& score : state.scores) {
+        json score_json;
+        score_json["accuracy"] = score.accuracy;
+        score_json["max_combo"] = score.max_combo;
+        score_json["total_score"] = score.total_score;
+        score_json["mods"] = score.mods;
+        score_json["rank"] = score.rank;
+        score_json["created_at"] = score.created_at;
+        score_json["username"] = score.username;
+        score_json["count_miss"] = score.count_miss;
+        score_json["count_50"] = score.count_50;
+        score_json["count_100"] = score.count_100;
+        score_json["count_300"] = score.count_300;
+        score_json["pp"] = score.pp;
+        score_json["user_id"] = score.user_id;
+        score_json["beatmap_id"] = score.beatmap_id;
+        score_json["passed"] = score.passed;
+        score_json["mode"] = score.mode;
+        score_json["weight_percentage"] = score.weight_percentage;
+        score_json["weight_pp"] = score.weight_pp;
+        // Beatmap metadata
+        score_json["beatmapset_id"] = score.beatmapset_id;
+        score_json["beatmap_title"] = score.beatmap_title;
+        score_json["beatmap_artist"] = score.beatmap_artist;
+        score_json["beatmap_version"] = score.beatmap_version;
+        score_json["beatmap_max_combo"] = score.beatmap_max_combo;
+        j["scores"].push_back(score_json);
+    }
+
+    return j.dump();
+}
+
+std::optional<TopState> MemcachedCache::deserialize_top(const std::string& data) {
+    try {
+        json j = json::parse(data);
+
+        TopState state;
+        state.username = j["username"];
+        state.osu_user_id = j["osu_user_id"];
+        state.mode = j["mode"];
+        state.mods_filter = j.value("mods_filter", "");
+        state.grade_filter = j.value("grade_filter", "");
+        state.sort_method = static_cast<TopSortMethod>(j.value("sort_method", 0));
+        state.reverse = j.value("reverse", false);
+        state.current_page = j["current_page"];
+        state.total_pages = j["total_pages"];
+        state.caller_discord_id = dpp::snowflake(j.value("caller_discord_id", 0ULL));
+        state.preset = static_cast<services::EmbedPreset>(j.value("preset", 1));
+
+        if (j.contains("created_at")) {
+            auto millis = j["created_at"].get<int64_t>();
+            state.created_at = std::chrono::steady_clock::time_point(
+                std::chrono::milliseconds(millis)
+            );
+        }
+
+        // Deserialize scores
+        for (const auto& score_json : j["scores"]) {
+            Score score;
+            score.accuracy = score_json["accuracy"];
+            score.max_combo = score_json["max_combo"];
+            score.total_score = score_json["total_score"];
+            score.mods = score_json["mods"];
+            score.rank = score_json["rank"];
+            score.created_at = score_json["created_at"];
+            score.username = score_json["username"];
+            score.count_miss = score_json["count_miss"];
+            score.count_50 = score_json["count_50"];
+            score.count_100 = score_json["count_100"];
+            score.count_300 = score_json["count_300"];
+            score.pp = score_json["pp"];
+            score.user_id = score_json["user_id"];
+            score.beatmap_id = score_json["beatmap_id"];
+            score.passed = score_json["passed"];
+            score.mode = score_json["mode"];
+            score.weight_percentage = score_json.value("weight_percentage", 0.0f);
+            score.weight_pp = score_json.value("weight_pp", 0.0f);
+            // Beatmap metadata
+            score.beatmapset_id = score_json.value("beatmapset_id", 0u);
+            score.beatmap_title = score_json.value("beatmap_title", "");
+            score.beatmap_artist = score_json.value("beatmap_artist", "");
+            score.beatmap_version = score_json.value("beatmap_version", "");
+            score.beatmap_max_combo = score_json.value("beatmap_max_combo", 0u);
+            score.is_empty = false;
+            state.scores.push_back(score);
+        }
+
+        // Ensure total_pages is valid
+        if (state.total_pages == 0) state.total_pages = 1;
+
+        return state;
+    } catch (const json::exception& e) {
+        spdlog::error("Failed to deserialize top: {}", e.what());
         return std::nullopt;
     }
 }

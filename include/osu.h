@@ -52,6 +52,16 @@ private:
   uint32_t    beatmap_id;
   bool        passed;
   std::string mode;  // "osu", "taiko", "fruits", "mania"
+  float_t     weight_percentage = 0.0f;  // Weight % in best scores (100, 95, 90.25...)
+  float_t     weight_pp = 0.0f;          // Weighted PP value
+  bool        set_on_lazer = false;      // Was score set on lazer client
+
+  // Beatmap metadata (parsed from nested beatmap/beatmapset in best scores)
+  uint32_t    beatmapset_id = 0;
+  std::string beatmap_title;
+  std::string beatmap_artist;
+  std::string beatmap_version;
+  uint32_t    beatmap_max_combo = 0;
 
   friend class cache::MemcachedCache;
 
@@ -79,6 +89,14 @@ public:
   inline auto get_passed() const { return passed; }
   inline const std::string& get_username() const { return username; }
   inline const std::string& get_mode() const { return mode; }
+  inline auto get_weight_percentage() const { return weight_percentage; }
+  inline auto get_set_on_lazer() const { return set_on_lazer; }
+  inline auto get_weight_pp() const { return weight_pp; }
+  inline auto get_beatmapset_id() const { return beatmapset_id; }
+  inline const std::string& get_beatmap_title() const { return beatmap_title; }
+  inline const std::string& get_beatmap_artist() const { return beatmap_artist; }
+  inline const std::string& get_beatmap_version() const { return beatmap_version; }
+  inline auto get_beatmap_max_combo() const { return beatmap_max_combo; }
 
   inline void set_username(const std::string& name) { username = name; }
   inline void set_pp(float_t value) { pp = value; }
@@ -99,12 +117,17 @@ private:
   std::string   artist;
   std::string   title;
   std::string   version; // diff name
+  std::string   creator;
   std::string   beatmap_url;
   std::string   thumbnail_url;
   std::string   image_url;
   uint32_t      max_combo;
   float_t       bpm;
   uint32_t      total_length;  // in seconds
+  float_t       ar = 0.0f;     // Approach Rate
+  float_t       od = 0.0f;     // Overall Difficulty
+  float_t       cs = 0.0f;     // Circle Size
+  float_t       hp = 0.0f;     // HP Drain
   BeatmapStatus status;        // Ranked status (loved, ranked, etc.)
 
   void        from_json(const json& j);
@@ -124,9 +147,15 @@ public:
   float_t     get_difficulty_rating(bool use_modded = false) const;
   inline auto get_bpm() const { return bpm; }
   inline auto get_total_length() const { return total_length; }
+  inline auto get_ar() const { return ar; }
+  inline auto get_od() const { return od; }
+  inline auto get_cs() const { return cs; }
+  inline auto get_hp() const { return hp; }
   inline BeatmapStatus get_status() const { return status; }
   inline const std::string& get_artist() const { return artist; }
   inline const std::string& get_title() const { return title; }
+  inline const std::string& get_version() const { return version; }
+  inline const std::string& get_creator() const { return creator; }
   inline bool has_pp() const { return beatmap_has_pp(status); }
   inline bool is_loved() const { return status == BeatmapStatus::Loved; }
   inline bool is_ranked() const { return status == BeatmapStatus::Ranked || status == BeatmapStatus::Approved; }

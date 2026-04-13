@@ -13,10 +13,10 @@ void ChatContextService::set_beatmap_callback(BeatmapCallback callback) {
     beatmap_callback_ = std::move(callback);
 }
 
-void ChatContextService::update_context(const std::string& raw_event, const std::string& content, dpp::snowflake channel_id, dpp::snowflake msg_id) {
+void ChatContextService::update_context(const std::string& raw_event, const std::string& content, dpp::snowflake channel_id, dpp::snowflake msg_id, bool skip_callbacks) {
     // Prefer explicit beatmap ID if present, otherwise fall back to beatmapset ID
-    std::regex set_regex(R"(https:\/\/osu\.ppy\.sh\/beatmapsets\/(\d+)(?:[^ ]*?#(?:osu|taiko|fruits|mania)\/(\d+))?)");
-    std::regex beatmap_regex(R"(https:\/\/osu\.ppy\.sh\/(?:beatmaps\/|b\/)(\d+))");
+    static const std::regex set_regex(R"(https?:\/\/osu\.ppy\.sh\/beatmapsets\/(\d+)(?:[^ ]*?#(?:osu|taiko|fruits|mania)\/(\d+))?)");
+    static const std::regex beatmap_regex(R"(https?:\/\/osu\.ppy\.sh\/(?:beatmaps\/|b\/)(\d+))");
     std::smatch m;
 
     std::string stored_value;
@@ -49,27 +49,45 @@ void ChatContextService::update_context(const std::string& raw_event, const std:
     }
 
     if (!stored_value.empty()) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto& p = chat_map_[channel_id];
-        p.first = msg_id;
-        p.second = stored_value;
+        bool should_store = true;
 
-        // Save to database
-        try {
-            auto& db = db::Database::instance();
-            db.set_chat_context(channel_id, msg_id, stored_value);
-        } catch (const std::exception& e) {
-            spdlog::error("Failed to save chat context to database: {}", e.what());
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto& p = chat_map_[channel_id];
+
+            // Don't overwrite a specific beatmap_id with a less precise "set:" value
+            // (e.g. when a bot embed repeats the link without #mode/id)
+            if (stored_value.starts_with("set:") && !p.second.empty() && !p.second.starts_with("set:")) {
+                spdlog::info("[CONTEXT] Keeping specific beatmap {} instead of overwriting with set:{}", p.second, stored_value.substr(4));
+                should_store = false;
+            }
+
+            if (should_store) {
+                p.first = msg_id;
+                p.second = stored_value;
+            }
+        }
+
+        if (should_store) {
+            try {
+                auto& db = db::Database::instance();
+                db.set_chat_context(channel_id, msg_id, stored_value);
+            } catch (const std::exception& e) {
+                spdlog::error("Failed to save chat context to database: {}", e.what());
+            }
         }
     }
 
     // Trigger callbacks for proactive caching (outside of lock)
-    if (beatmapset_id > 0 && beatmapset_callback_) {
-        spdlog::info("[CONTEXT] Triggering beatmapset cache callback for {}", beatmapset_id);
-        beatmapset_callback_(beatmapset_id);
-    } else if (beatmap_id_only > 0 && beatmap_callback_) {
-        spdlog::info("[CONTEXT] Triggering beatmap cache callback for {}", beatmap_id_only);
-        beatmap_callback_(beatmap_id_only);
+    // Skip callbacks for bot's own messages to avoid re-downloading
+    if (!skip_callbacks) {
+        if (beatmapset_id > 0 && beatmapset_callback_) {
+            spdlog::info("[CONTEXT] Triggering beatmapset cache callback for {}", beatmapset_id);
+            beatmapset_callback_(beatmapset_id);
+        } else if (beatmap_id_only > 0 && beatmap_callback_) {
+            spdlog::info("[CONTEXT] Triggering beatmap cache callback for {}", beatmap_id_only);
+            beatmap_callback_(beatmap_id_only);
+        }
     }
 }
 
@@ -88,7 +106,7 @@ std::string ChatContextService::get_beatmap_id(dpp::snowflake channel_id) const 
         auto context = db.get_chat_context(channel_id);
         if (context.has_value()) {
             // Cache it in memory for next time
-            const_cast<ChatContextService*>(this)->chat_map_[channel_id] = context.value();
+            chat_map_[channel_id] = context.value();
             return context.value().second;
         }
     } catch (const std::exception& e) {
@@ -111,7 +129,7 @@ dpp::snowflake ChatContextService::get_message_id(dpp::snowflake channel_id) con
         auto& db = db::Database::instance();
         auto context = db.get_chat_context(channel_id);
         if (context.has_value()) {
-            const_cast<ChatContextService*>(this)->chat_map_[channel_id] = context.value();
+            chat_map_[channel_id] = context.value();
             return context.value().first;
         }
     } catch (const std::exception& e) {

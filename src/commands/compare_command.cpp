@@ -5,7 +5,9 @@
 #include "services/user_resolver_service.h"
 #include "services/message_presenter_service.h"
 #include "services/command_params_service.h"
+#include "services/beatmap_performance_service.h"
 #include <requests.h>
+#include <beatmap_downloader.h>
 #include <osu.h>
 #include <utils.h>
 #include <cache.h>
@@ -16,6 +18,8 @@
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <random>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -137,10 +141,57 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
     // Resolve osu user_id using service
     auto resolve_result = s->user_resolver_service.resolve(parsed.username, ctx.author_id());
     if (!resolve_result) {
-        ctx.reply(s->message_presenter.build_error_message(resolve_result.error_message));
+        if (parsed.username.empty()) {
+            std::string token;
+            try {
+                auto& mc = cache::MemcachedCache::instance();
+                token = utils::generate_secure_token();
+
+                nlohmann::json token_data;
+                token_data["discord_id"] = ctx.author_id().str();
+                token_data["link_url"] = s->config.public_url + "/osu/link/" + token;
+                mc.set("osu_link_token:" + token, token_data.dump(), std::chrono::seconds(300));
+            } catch (const std::exception& e) {
+                spdlog::error("[compare] Failed to generate link token: {}", e.what());
+            }
+
+            auto embed = dpp::embed()
+                .set_color(0xff66aa)
+                .set_title("Link your osu! Account")
+                .set_description("Link your osu! account to use commands without specifying your username.")
+                .add_field("Option 1: Website", fmt::format("[Open Settings]({})", s->config.public_url + "/osu/settings"), true)
+                .add_field("Option 2: Direct Link", "Click the button below to get a link in DMs", true)
+                .set_footer(dpp::embed_footer().set_text("Link expires in 5 minutes"));
+
+            dpp::message msg;
+            msg.add_embed(embed);
+            if (!token.empty()) {
+                msg.add_component(
+                    dpp::component().add_component(
+                        dpp::component()
+                            .set_type(dpp::cot_button)
+                            .set_label("Send Link to DMs")
+                            .set_style(dpp::cos_primary)
+                            .set_id("osu_link_dm:" + token)
+                    )
+                );
+            }
+            ctx.reply(std::move(msg));
+        } else {
+            ctx.reply(s->message_presenter.build_error_message(resolve_result.error_message));
+        }
         return;
     }
     int64_t osu_user_id = resolve_result.osu_user_id;
+
+    // Check if user should be prompted to OAuth link
+    bool suggest_oauth_link = false;
+    if (parsed.username.empty()) {
+        auto& db = db::Database::instance();
+        if (!db.is_user_oauth_linked(ctx.author_id())) {
+            suggest_oauth_link = true;
+        }
+    }
 
     // Show typing indicator
     if (!ctx.is_slash()) {
@@ -156,6 +207,12 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
 
     json beatmap_data = json::parse(beatmap_json);
     Beatmap beatmap(beatmap_data);
+
+    // Download .osz file asynchronously for PP calculation on loved maps
+    uint32_t beatmapset_id = beatmap.get_beatmapset_id();
+    std::jthread([&s, beatmapset_id]() {
+        s->beatmap_downloader.download_osz(beatmapset_id);
+    }).detach();
 
     // Fetch all scores for this user on this beatmap
     std::string scores_json = s->request.get_user_beatmap_score(std::to_string(beatmap_id), std::to_string(osu_user_id), true);
@@ -179,7 +236,11 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
             std::string score_mods_str;
             if (score_json.contains("mods") && score_json["mods"].is_array()) {
                 for (const auto& mod : score_json["mods"]) {
-                    score_mods_str += mod.get<std::string>();
+                    if (mod.is_string()) {
+                        score_mods_str += mod.get<std::string>();
+                    } else if (mod.is_object() && mod.contains("acronym")) {
+                        score_mods_str += mod.at("acronym").get<std::string>();
+                    }
                 }
             }
             if (score_mods_str.empty()) score_mods_str = "NM";
@@ -210,11 +271,18 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
     }
 
     // Sort by PP (descending), then by score
-    std::sort(scores_array.begin(), scores_array.end(), [](const json& a, const json& b) {
-        double pp_a = a.value("pp", 0.0);
-        double pp_b = b.value("pp", 0.0);
+    // Note: pp can be null for loved/unranked maps, so we need explicit null checks
+    auto safe_get_pp = [](const json& j) -> double {
+        return (j.contains("pp") && !j["pp"].is_null()) ? j["pp"].get<double>() : 0.0;
+    };
+    auto safe_get_score = [](const json& j) -> int64_t {
+        return (j.contains("score") && !j["score"].is_null()) ? j["score"].get<int64_t>() : 0;
+    };
+    std::sort(scores_array.begin(), scores_array.end(), [&](const json& a, const json& b) {
+        double pp_a = safe_get_pp(a);
+        double pp_b = safe_get_pp(b);
         if (pp_a != pp_b) return pp_a > pp_b;
-        return a.value("score", 0) > b.value("score", 0);
+        return safe_get_score(a) > safe_get_score(b);
     });
 
     // Get username
@@ -226,8 +294,46 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
         scores.emplace_back(score_json);
     }
 
+    // Calculate PP for Loved/unranked maps (where API returns pp=0)
+    bool needs_pp_calculation = std::any_of(scores.begin(), scores.end(),
+        [](const Score& sc) { return sc.get_pp() <= 0.01; });
+
+    if (needs_pp_calculation) {
+        spdlog::info("[COMPARE] Calculating PP for {} scores (Loved/unranked map)", scores.size());
+
+        for (auto& score : scores) {
+            if (score.get_pp() <= 0.01 && score.get_mode() == "osu") {
+                services::SimulateParams params;
+                params.accuracy = score.get_accuracy();
+                // Use mods directly from API (includes CL for stable scores)
+                params.mods = score.get_mods();
+                params.lazer = score.get_set_on_lazer();
+                params.combo = score.get_max_combo();
+                params.misses = score.get_count_miss();
+                params.count_300 = score.get_count_300();
+                params.count_100 = score.get_count_100();
+                params.count_50 = score.get_count_50();
+
+                auto perf_opt = s->performance_service.calculate_pp(
+                    beatmapset_id, beatmap_id, "osu", params);
+                if (perf_opt.has_value()) {
+                    score.set_pp(static_cast<float_t>(perf_opt->pp));
+                    spdlog::info("[COMPARE] PP for score: {:.2f}pp (mods='{}' lazer={})",
+                        perf_opt->pp, params.mods, params.lazer);
+                }
+            }
+        }
+
+        // Re-sort by calculated PP
+        std::sort(scores.begin(), scores.end(), [](const Score& a, const Score& b) {
+            if (a.get_pp() != b.get_pp()) return a.get_pp() > b.get_pp();
+            return a.get_total_score() > b.get_total_score();
+        });
+    }
+
     // Create CompareState
-    CompareState state(std::move(scores), beatmap, username, parsed.mods_filter, ctx.author_id());
+    auto user_preset = s->user_settings_service.get_preset(ctx.author_id());
+    CompareState state(std::move(scores), beatmap, username, parsed.mods_filter, ctx.author_id(), user_preset);
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
@@ -237,6 +343,16 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
 
     // Build and send embed
     dpp::message msg = s->message_presenter.build_compare_page(state);
+
+    // Add OAuth link suggestion if user is not OAuth linked
+    if (suggest_oauth_link) {
+        std::string hint = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        if (msg.content.empty()) {
+            msg.content = hint;
+        } else {
+            msg.content = hint + "\n" + msg.content;
+        }
+    }
 
     // Send and cache state for pagination (only if more than 1 page)
     if (state.total_pages > 1) {

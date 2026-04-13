@@ -16,6 +16,7 @@
 #include <nlohmann/json.hpp>
 #include <iomanip>
 #include <sstream>
+#include <random>
 
 using json = nlohmann::json;
 
@@ -69,8 +70,6 @@ void SlashCommandHandler::handle(const dpp::slashcommand_t& event) {
         handle_avatar(event);
     } else if (cmd_name == "update_token") {
         handle_update_token(event);
-    } else if (cmd_name == "set") {
-        handle_set(event);
     } else if (cmd_name == "score") {
         handle_score(event);
     } else if (cmd_name == "autorole_switch") {
@@ -91,9 +90,6 @@ void SlashCommandHandler::register_commands(bool delete_existing) {
         .add_option(dpp::command_option(dpp::co_string, "username", "osu! profile username", true))
     );
     bot_.global_command_create(dpp::slashcommand("update_token", "If peppy doesn't respond", bot_.me.id));
-    bot_.global_command_create(dpp::slashcommand("set", "Set osu username", bot_.me.id)
-        .add_option(dpp::command_option(dpp::co_string, "username", "Your osu! profile username", true))
-    );
     bot_.global_command_create(dpp::slashcommand("autorole_switch", "Manage autorole issuance", bot_.me.id));
     bot_.global_command_create(dpp::slashcommand("weather", "Shows current weather", bot_.me.id)
         .add_option(dpp::command_option(dpp::co_string, "city", "Location", true))
@@ -145,6 +141,60 @@ void SlashCommandHandler::register_commands(bool delete_existing) {
             .add_choice(dpp::command_option_choice("Date", std::string("date"))))
         .add_option(dpp::command_option(dpp::co_string, "beatmap", "Beatmap URL or ID", false))
     );
+
+    bot_.global_command_create(dpp::slashcommand("settings", "Configure bot preferences", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "embed_preset", "Embed layout preset", false)
+            .add_choice(dpp::command_option_choice("Compact", std::string("compact")))
+            .add_choice(dpp::command_option_choice("Classic", std::string("classic")))
+            .add_choice(dpp::command_option_choice("Extended", std::string("extended"))))
+    );
+
+    bot_.global_command_create(dpp::slashcommand("osc", "Show score rank counts from osustats", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "username", "osu! username", false))
+        .add_option(dpp::command_option(dpp::co_string, "mode", "Game mode", false)
+            .add_choice(dpp::command_option_choice("osu!", std::string("osu")))
+            .add_choice(dpp::command_option_choice("taiko", std::string("taiko")))
+            .add_choice(dpp::command_option_choice("catch", std::string("catch")))
+            .add_choice(dpp::command_option_choice("mania", std::string("mania"))))
+    );
+
+    bot_.global_command_create(dpp::slashcommand("osu", "Display user profile statistics", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "username", "osu! username", false))
+        .add_option(dpp::command_option(dpp::co_string, "mode", "Game mode", false)
+            .add_choice(dpp::command_option_choice("osu!", std::string("osu")))
+            .add_choice(dpp::command_option_choice("taiko", std::string("taiko")))
+            .add_choice(dpp::command_option_choice("catch", std::string("fruits")))
+            .add_choice(dpp::command_option_choice("mania", std::string("mania"))))
+    );
+
+    bot_.global_command_create(dpp::slashcommand("top", "Show user's top plays", bot_.me.id)
+        .add_option(dpp::command_option(dpp::co_string, "username", "osu! username", false))
+        .add_option(dpp::command_option(dpp::co_string, "mode", "Game mode", false)
+            .add_choice(dpp::command_option_choice("osu!", std::string("osu")))
+            .add_choice(dpp::command_option_choice("taiko", std::string("taiko")))
+            .add_choice(dpp::command_option_choice("catch", std::string("fruits")))
+            .add_choice(dpp::command_option_choice("mania", std::string("mania"))))
+        .add_option(dpp::command_option(dpp::co_string, "mods", "Filter by mods (e.g., HDDT or -HR to exclude)", false))
+        .add_option(dpp::command_option(dpp::co_string, "grade", "Filter by grade", false)
+            .add_choice(dpp::command_option_choice("SS", std::string("SS")))
+            .add_choice(dpp::command_option_choice("S", std::string("S")))
+            .add_choice(dpp::command_option_choice("A", std::string("A")))
+            .add_choice(dpp::command_option_choice("B", std::string("B")))
+            .add_choice(dpp::command_option_choice("C", std::string("C")))
+            .add_choice(dpp::command_option_choice("D", std::string("D"))))
+        .add_option(dpp::command_option(dpp::co_string, "sort", "Sort method", false)
+            .add_choice(dpp::command_option_choice("PP", std::string("pp")))
+            .add_choice(dpp::command_option_choice("Accuracy", std::string("acc")))
+            .add_choice(dpp::command_option_choice("Score", std::string("score")))
+            .add_choice(dpp::command_option_choice("Combo", std::string("combo")))
+            .add_choice(dpp::command_option_choice("Date", std::string("date")))
+            .add_choice(dpp::command_option_choice("Misses", std::string("misses"))))
+        .add_option(dpp::command_option(dpp::co_boolean, "reverse", "Reverse sort order", false))
+        .add_option(dpp::command_option(dpp::co_integer, "index", "Show specific score (1-100)", false)
+            .set_min_value(1).set_max_value(100))
+    );
+
+    bot_.global_command_create(dpp::slashcommand("link", "Link your osu! account", bot_.me.id));
 }
 
 void SlashCommandHandler::handle_gandon(const dpp::slashcommand_t& event) {
@@ -159,15 +209,25 @@ void SlashCommandHandler::handle_gandon(const dpp::slashcommand_t& event) {
 }
 
 void SlashCommandHandler::handle_avatar(const dpp::slashcommand_t& event) {
-    std::string username = std::get<std::string>(event.get_parameter("username"));
+    std::string username;
+    try {
+        username = std::get<std::string>(event.get_parameter("username"));
+    } catch (const std::exception& e) {
+        event.edit_original_response(dpp::message("Username parameter is required."));
+        return;
+    }
     std::string userid = request_.get_userid_v1(username);
+    if (userid.empty()) {
+        event.edit_original_response(dpp::message(fmt::format("User '{}' not found.", username)));
+        return;
+    }
     auto embed = dpp::embed()
         .set_color(dpp::colors::cream)
         .set_author(username, "https://osu.ppy.sh/users/" + userid, "")
         .set_image("https://a.ppy.sh/" + userid)
         .set_timestamp(time(0));
     dpp::message msg(event.command.channel_id, embed);
-    event.reply(msg);
+    event.edit_original_response(msg);
 }
 
 void SlashCommandHandler::handle_update_token(const dpp::slashcommand_t& event) {
@@ -182,72 +242,45 @@ void SlashCommandHandler::handle_update_token(const dpp::slashcommand_t& event) 
         event.reply(dpp::message("Token update - fail"));
 }
 
-void SlashCommandHandler::handle_set(const dpp::slashcommand_t& event) {
-    auto start = std::chrono::steady_clock::now();
-
-    std::string u_from_com = std::get<std::string>(event.get_parameter("username"));
-    std::string req = request_.get_user(u_from_com);
-
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now() - start).count();
-
-    if (req.empty()) {
-        if (elapsed > 8) {
-            event.edit_original_response(message_presenter_.build_error_message(
-                fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
-        } else {
-            event.edit_original_response(dpp::message(fmt::format("Can't find {} on Bancho.", u_from_com)));
-        }
-        return;
-    }
-
-    try {
-        json j = json::parse(req);
-        std::string key = event.command.usr.id.str();
-        std::string u_from_req = j.at("username").get<std::string>();
-        int user_id = j.at("id").get<int>();
-
-        user_mapping_service_.set_mapping(key, fmt::to_string(user_id));
-
-        // Save to database
-        try {
-            auto& db = db::Database::instance();
-            db.set_user_mapping(dpp::snowflake(key), user_id);
-        } catch (const std::exception& e) {
-            spdlog::error("Failed to save user mapping to database: {}", e.what());
-        }
-
-        // Invalidate username caches for this user (they may have changed their username)
-        // We cache the new username immediately
-        try {
-            auto& db = db::Database::instance();
-            db.cache_username(user_id, u_from_req);
-        } catch (const std::exception& e) {
-            spdlog::warn("Failed to update username cache in PostgreSQL: {}", e.what());
-        }
-
-        try {
-            auto& cache = cache::MemcachedCache::instance();
-            cache.cache_username(user_id, u_from_req);
-        } catch (const std::exception& e) {
-            spdlog::warn("Failed to update username cache in Memcached: {}", e.what());
-        }
-
-        if (elapsed > 8) {
-            spdlog::warn("[CMD] /set took {}s to complete (slow API response)", elapsed);
-        }
-
-        event.edit_original_response(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
-    } catch (const json::exception& e) {
-        spdlog::error("Failed to parse user data for {}: {}", u_from_com, e.what());
-        event.edit_original_response(dpp::message("Failed to process user data. Please try again later."));
-    }
-}
-
 void SlashCommandHandler::handle_score(const dpp::slashcommand_t& event) {
     auto user_opt = user_mapping_service_.get_osu_id(event.command.usr.id.str());
     if (!user_opt.has_value()) {
-        event.edit_original_response(dpp::message("Please /set your osu username before using this command."));
+        // Generate link token and show options
+        std::string token;
+        try {
+            auto& mc = cache::MemcachedCache::instance();
+            token = utils::generate_secure_token();
+
+            json token_data;
+            token_data["discord_id"] = event.command.usr.id.str();
+            token_data["link_url"] = config_.public_url + "/osu/link/" + token;
+            mc.set("osu_link_token:" + token, token_data.dump(), std::chrono::seconds(300));
+        } catch (const std::exception& e) {
+            spdlog::error("[score] Failed to generate link token: {}", e.what());
+        }
+
+        auto embed = dpp::embed()
+            .set_color(0xff66aa)
+            .set_title("Link your osu! Account")
+            .set_description("Link your osu! account to use this command.")
+            .add_field("Option 1: Website", fmt::format("[Open Settings]({})", config_.public_url + "/osu/settings"), true)
+            .add_field("Option 2: Direct Link", "Click the button below to get a link in DMs", true)
+            .set_footer(dpp::embed_footer().set_text("Link expires in 5 minutes"));
+
+        dpp::message msg;
+        msg.add_embed(embed);
+        if (!token.empty()) {
+            msg.add_component(
+                dpp::component().add_component(
+                    dpp::component()
+                        .set_type(dpp::cot_button)
+                        .set_label("Send Link to DMs")
+                        .set_style(dpp::cos_primary)
+                        .set_id("osu_link_dm:" + token)
+                )
+            );
+        }
+        event.reply(msg);
         return;
     }
     const auto& user = user_opt.value();
@@ -316,7 +349,13 @@ void SlashCommandHandler::handle_autorole_switch(const dpp::slashcommand_t& even
 }
 
 void SlashCommandHandler::handle_weather(const dpp::slashcommand_t& event) {
-    const std::string city = std::get<std::string>(event.get_parameter("city"));
+    std::string city;
+    try {
+        city = std::get<std::string>(event.get_parameter("city"));
+    } catch (const std::exception& e) {
+        event.edit_original_response(dpp::message("City parameter is required."));
+        return;
+    }
     std::string w = request_.get_weather(city);
 
     // Check if response is empty before parsing (happens on 404 or other errors)
@@ -325,35 +364,40 @@ void SlashCommandHandler::handle_weather(const dpp::slashcommand_t& event) {
         return;
     }
 
-    json j = json::parse(w);
+    try {
+        json j = json::parse(w);
 
-    if (j.empty() || j.is_null()) {
-        event.edit_original_response(dpp::message("Failed to get weather data. Please try again later."));
-        return;
+        if (j.empty() || j.is_null()) {
+            event.edit_original_response(dpp::message("Failed to get weather data. Please try again later."));
+            return;
+        }
+
+        std::string c = j.value("name", "Unknown");
+        std::string desc = j["weather"].at(0).value("description", "");
+        double temp = j["main"].value("temp", 0.0);
+        double feels = j["main"].value("feels_like", 0.0);
+        int humidity = j["main"].value("humidity", 0);
+        double wind = j["wind"].value("speed", 0.0);
+
+        std::time_t timestamp = j.value("dt", 0);
+        timestamp += j.value("timezone", 0);
+        std::tm tm = *std::gmtime(&timestamp);
+        std::ostringstream time;
+        time << std::put_time(&tm, "%d.%m.%Y %H:%M");
+
+        auto embed = dpp::embed()
+            .set_color(dpp::colors::cream)
+            .set_title(c + " - " + desc)
+            .add_field("Температура", fmt::format("{:.1f}°C, ощущается как {:.1f}°C", temp, feels))
+            .add_field("Влажность", fmt::format("{}%", humidity), true)
+            .add_field("Ветер", fmt::format("{:.1f}м/с", wind), true)
+            .set_footer(dpp::embed_footer().set_text(time.str()));
+
+        event.edit_original_response(dpp::message(event.command.channel_id, embed));
+    } catch (const json::exception& e) {
+        spdlog::error("[CMD] Failed to parse weather data for '{}': {}", city, e.what());
+        event.edit_original_response(dpp::message("Failed to parse weather data. Please try again later."));
     }
-
-    std::string c = j.value("name", "Unknown");
-    std::string desc = j["weather"].at(0).value("description", "");
-    double temp = j["main"].value("temp", 0.0);
-    double feels = j["main"].value("feels_like", 0.0);
-    int humidity = j["main"].value("humidity", 0);
-    double wind = j["wind"].value("speed", 0.0);
-
-    std::time_t timestamp = j.value("dt", 0);
-    timestamp += j.value("timezone", 0);
-    std::tm tm = *std::gmtime(&timestamp);
-    std::ostringstream time;
-    time << std::put_time(&tm, "%d.%m.%Y %H:%M");
-
-    auto embed = dpp::embed()
-        .set_color(dpp::colors::cream)
-        .set_title(c + " - " + desc)
-        .add_field("Температура", fmt::format("{:.1f}°C, ощущается как {:.1f}°C", temp, feels))
-        .add_field("Влажность", fmt::format("{}%", humidity), true)
-        .add_field("Ветер", fmt::format("{:.1f}м/с", wind), true)
-        .set_footer(dpp::embed_footer().set_text(time.str()));
-
-    event.edit_original_response(dpp::message(event.command.channel_id, embed));
 }
 
 } // namespace handlers

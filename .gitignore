@@ -4,3 +4,5 @@ config.json
 CPM_modules/
 .vscode/
 .env
+db_backup.sql
+PLAN.md

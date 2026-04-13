@@ -50,8 +50,11 @@ struct SimulateParams {
     std::string mods;
     int combo = 0;          // 0 = use beatmap max
     int misses = 0;
+    int count_300 = -1;     // -1 = auto
     int count_100 = -1;     // -1 = auto
     int count_50 = -1;      // -1 = auto
+    int passed_objects = 0; // 0 = full map, >0 = partial (for failed scores)
+    bool lazer = false;     // Use stable PP calculation by default (CL mod = stable-like)
 };
 
 /**
@@ -162,6 +165,21 @@ public:
     std::optional<BeatmapDifficultyAttrs> get_difficulty_direct(
         uint32_t beatmap_id,
         const std::string& mods = ""
+    );
+
+    /**
+     * Generate a strain graph PNG for a beatmap.
+     * @param beatmap_id The specific beatmap ID
+     * @param mods Mod string (e.g., "HDDT")
+     * @param width Graph width in pixels (0 = default)
+     * @param height Graph height in pixels (0 = default)
+     * @return PNG image bytes or nullopt on failure
+     */
+    std::optional<std::vector<uint8_t>> get_strain_graph(
+        uint32_t beatmap_id,
+        const std::string& mods = "",
+        uint32_t width = 0,
+        uint32_t height = 0
     );
 
 private:

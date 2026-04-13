@@ -2,6 +2,7 @@
 
 #include <dpp/dpp.h>
 #include <string>
+#include <set>
 
 namespace services {
 class UserMappingService;
@@ -65,6 +66,11 @@ private:
      */
     void validate_tracked_users(size_t synced_count);
 
+    /**
+     * Check top-1 user by message count (24h) and assign/transfer the role.
+     */
+    void update_top_user_role();
+
     services::UserMappingService& user_mapping_service_;
     services::LeaderboardService& leaderboard_service_;
     services::BeatmapCacheService* beatmap_cache_service_;
@@ -75,7 +81,11 @@ private:
     // Sync state
     dpp::snowflake target_guild_id_{0};
     std::atomic<size_t> sync_member_count_{0};
+    std::atomic<size_t> expected_member_count_{0};
     std::atomic<bool> sync_in_progress_{false};
+
+    // Top user role state
+    std::set<dpp::snowflake> current_top_users_;
 
     // Minimum members required to run validation (safety threshold)
     static constexpr size_t MIN_MEMBERS_FOR_VALIDATION = 10;

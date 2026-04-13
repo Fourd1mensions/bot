@@ -4,9 +4,11 @@
 #include "services/message_presenter_service.h"
 #include "services/command_params_service.h"
 #include "services/recent_score_service.h"
+#include "services/user_settings_service.h"
 #include <requests.h>
 #include <osu.h>
 #include <cache.h>
+#include <database.h>
 #include <error_messages.h>
 #include <state/session_state.h>
 #include <spdlog/spdlog.h>
@@ -14,6 +16,7 @@
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <random>
 
 using json = nlohmann::json;
 
@@ -50,13 +53,18 @@ RsCommand::ParsedParams RsCommand::parse(const std::string& content) const {
         cmd_end = content.length();
     }
 
-    // Check if this is a known command prefix
-    bool is_rb = content.find("!rb") == 0;
-    bool is_command = content.find("!rs") == 0 ||
+    // Lowercase prefix for case-insensitive matching (ASCII only)
+    std::string content_lower = content.substr(0, std::min(cmd_end, size_t(10)));
+    std::transform(content_lower.begin(), content_lower.end(), content_lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    // Check if this is a known command prefix (case-insensitive for ASCII)
+    bool is_rb = content_lower.find("!rb") == 0;
+    bool is_command = content_lower.find("!rs") == 0 ||
                       is_rb ||
                       content.find("!кы") == 0 ||
-                      content.find("!КЫ") == 0 ||  // Support uppercase
-                      content.find("/rs") == 0;
+                      content.find("!КЫ") == 0 ||  // Support uppercase Cyrillic
+                      content_lower.find("/rs") == 0;
 
     if (!is_command) {
         // For slash commands without prefix, params start from beginning
@@ -184,10 +192,60 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
     // Resolve osu user_id using service
     auto resolve_result = s->user_resolver_service.resolve(cmd_params.username, ctx.author_id());
     if (!resolve_result) {
-        ctx.reply(s->message_presenter.build_error_message(resolve_result.error_message));
+        // If username was empty, offer link options
+        if (cmd_params.username.empty()) {
+            std::string token;
+            try {
+                auto& mc = cache::MemcachedCache::instance();
+                token = utils::generate_secure_token();
+
+                json token_data;
+                token_data["discord_id"] = ctx.author_id().str();
+                token_data["link_url"] = s->config.public_url + "/osu/link/" + token;
+                mc.set("osu_link_token:" + token, token_data.dump(), std::chrono::seconds(300));
+            } catch (const std::exception& e) {
+                spdlog::error("[rs] Failed to generate link token: {}", e.what());
+            }
+
+            auto embed = dpp::embed()
+                .set_color(0xff66aa)
+                .set_title("Link your osu! Account")
+                .set_description("Link your osu! account to use commands without specifying your username.")
+                .add_field("Option 1: Website", fmt::format("[Open Settings]({})", s->config.public_url + "/osu/settings"), true)
+                .add_field("Option 2: Direct Link", "Click the button below to get a link in DMs", true)
+                .set_footer(dpp::embed_footer().set_text("Link expires in 5 minutes"));
+
+            dpp::message msg;
+            msg.add_embed(embed);
+            if (!token.empty()) {
+                msg.add_component(
+                    dpp::component().add_component(
+                        dpp::component()
+                            .set_type(dpp::cot_button)
+                            .set_label("Send Link to DMs")
+                            .set_style(dpp::cos_primary)
+                            .set_id("osu_link_dm:" + token)
+                    )
+                );
+            }
+            ctx.reply(std::move(msg));
+        } else {
+            ctx.reply(s->message_presenter.build_error_message(resolve_result.error_message));
+        }
         return;
     }
     int64_t osu_user_id = resolve_result.osu_user_id;
+
+    // Check if user should be prompted to OAuth link
+    bool suggest_oauth_link = false;
+    if (cmd_params.username.empty()) {
+        // User is using their own linked account
+        auto& db = db::Database::instance();
+        bool is_oauth = db.is_user_oauth_linked(ctx.author_id());
+        if (!is_oauth) {
+            suggest_oauth_link = true;
+        }
+    }
 
     // Show typing indicator (only for text commands)
     if (!ctx.is_slash()) {
@@ -220,7 +278,11 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
     try {
         json scores_json = json::parse(scores_response);
         if (!scores_json.is_array() || scores_json.empty()) {
-            ctx.reply(s->message_presenter.build_error_message(error_messages::NO_RECENT_SCORES));
+            dpp::message err_msg = s->message_presenter.build_error_message(error_messages::NO_RECENT_SCORES);
+            if (suggest_oauth_link) {
+                err_msg.content = "-# Link your osu! account with `!link` or `/link` for a better experience";
+            }
+            ctx.reply(err_msg);
             return;
         }
 
@@ -237,24 +299,43 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
             });
         }
     } catch (const json::exception& e) {
-        ctx.reply(s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED));
+        dpp::message err_msg = s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED);
+        if (suggest_oauth_link) {
+            err_msg.content = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        }
+        ctx.reply(err_msg);
         spdlog::error("Failed to parse scores: {}", e.what());
         return;
     }
 
     // Validate score index
     if (cmd_params.score_index >= scores.size()) {
-        ctx.reply(s->message_presenter.build_error_message(
-            fmt::format(error_messages::SCORE_INDEX_OUT_OF_RANGE_FORMAT, cmd_params.score_index + 1, scores.size())));
+        dpp::message err_msg = s->message_presenter.build_error_message(
+            fmt::format(error_messages::SCORE_INDEX_OUT_OF_RANGE_FORMAT, cmd_params.score_index + 1, scores.size()));
+        if (suggest_oauth_link) {
+            err_msg.content = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        }
+        ctx.reply(err_msg);
         return;
     }
 
-    // Create state
+    auto preset = s->user_settings_service.get_preset(ctx.author_id());
+
     RecentScoreState rs_state(std::move(scores), cmd_params.score_index, cmd_params.mode,
-        cmd_params.include_fails, cmd_params.use_best_scores, osu_user_id, ctx.author_id());
+        cmd_params.include_fails, cmd_params.use_best_scores, osu_user_id, ctx.author_id(), preset);
 
     // Build first page (will parse .osu file for first score only and cache it)
     dpp::message msg = s->recent_score_service.build_page(rs_state);
+
+    // Add OAuth link suggestion if user is not OAuth linked
+    if (suggest_oauth_link) {
+        std::string hint = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        if (msg.content.empty()) {
+            msg.content = hint;
+        } else {
+            msg.content = hint + "\n" + msg.content;
+        }
+    }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::steady_clock::now() - start).count();

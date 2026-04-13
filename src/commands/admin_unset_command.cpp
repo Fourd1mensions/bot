@@ -85,7 +85,14 @@ void AdminUnsetCommand::execute_unified(const UnifiedContext& ctx) {
         osu_id_opt = std::to_string(*db_opt);
     }
 
-    int64_t osu_user_id = std::stoll(*osu_id_opt);
+    int64_t osu_user_id;
+    try {
+        osu_user_id = std::stoll(*osu_id_opt);
+    } catch (const std::exception& e) {
+        spdlog::error("[adminunset] Failed to parse osu ID '{}': {}", *osu_id_opt, e.what());
+        ctx.reply(":x: Internal error: invalid user ID format in database.");
+        return;
+    }
 
     // Get username before removing (for confirmation message)
     std::string osu_username = s->user_resolver_service.get_username_cached(osu_user_id);

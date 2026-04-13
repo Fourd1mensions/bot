@@ -2,6 +2,7 @@
 #include <spdlog/spdlog.h>
 #include <format>
 #include <sstream>
+#include <iomanip>
 
 namespace db {
 
@@ -77,16 +78,16 @@ Database::Database(const std::string& connection_string, size_t pool_size)
     : pool_(std::make_unique<ConnectionPool>(connection_string, pool_size)) {}
 
 // Users table operations
-void Database::set_user_mapping(dpp::snowflake discord_id, int64_t osu_user_id) {
+void Database::set_user_mapping(dpp::snowflake discord_id, int64_t osu_user_id, bool is_oauth) {
     execute([&](pqxx::connection& conn) {
         pqxx::work txn(conn);
         txn.exec_params(
-            "INSERT INTO users (discord_id, osu_user_id) VALUES ($1, $2) "
-            "ON CONFLICT (discord_id) DO UPDATE SET osu_user_id = $2, updated_at = CURRENT_TIMESTAMP",
-            static_cast<int64_t>(discord_id), osu_user_id
+            "INSERT INTO users (discord_id, osu_user_id, is_oauth_linked) VALUES ($1, $2, $3) "
+            "ON CONFLICT (discord_id) DO UPDATE SET osu_user_id = $2, is_oauth_linked = $3, updated_at = CURRENT_TIMESTAMP",
+            static_cast<int64_t>(discord_id), osu_user_id, is_oauth
         );
         txn.commit();
-        spdlog::debug("Set user mapping: {} -> {}", discord_id, osu_user_id);
+        spdlog::debug("Set user mapping: {} -> {} (oauth: {})", discord_id, osu_user_id, is_oauth);
     });
 }
 
@@ -115,6 +116,22 @@ bool Database::remove_user_mapping(dpp::snowflake discord_id) {
         );
         txn.commit();
         return result.affected_rows() > 0;
+    });
+}
+
+bool Database::is_user_oauth_linked(dpp::snowflake discord_id) {
+    return execute([&](pqxx::connection& conn) -> bool {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(
+            "SELECT is_oauth_linked FROM users WHERE discord_id = $1",
+            static_cast<int64_t>(discord_id)
+        );
+
+        if (result.empty()) {
+            return false;
+        }
+
+        return result[0][0].as<bool>();
     });
 }
 
@@ -589,6 +606,210 @@ bool Database::is_connected() {
         spdlog::error("Database connection check failed: {}", e.what());
         return false;
     }
+}
+
+// ============================================================================
+// User settings operations
+// ============================================================================
+
+void Database::set_embed_preset(dpp::snowflake discord_id, const std::string& preset) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "INSERT INTO user_settings (discord_id, embed_preset) VALUES ($1, $2) "
+            "ON CONFLICT (discord_id) DO UPDATE SET embed_preset = $2",
+            static_cast<int64_t>(discord_id), preset);
+        txn.commit();
+    });
+}
+
+std::string Database::get_embed_preset(dpp::snowflake discord_id) {
+    return execute([&](pqxx::connection& conn) -> std::string {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(
+            "SELECT embed_preset FROM user_settings WHERE discord_id = $1",
+            static_cast<int64_t>(discord_id));
+        if (result.empty()) return "classic";
+        return result[0][0].as<std::string>();
+    });
+}
+
+void Database::delete_embed_preset(dpp::snowflake discord_id) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "DELETE FROM user_settings WHERE discord_id = $1",
+            static_cast<int64_t>(discord_id));
+        txn.commit();
+    });
+}
+
+std::unordered_map<uint64_t, std::string> Database::get_all_embed_presets() {
+    return execute([](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec("SELECT discord_id, embed_preset FROM user_settings");
+        std::unordered_map<uint64_t, std::string> presets;
+        for (const auto& row : result) {
+            presets[static_cast<uint64_t>(row[0].as<int64_t>())] = row[1].as<std::string>();
+        }
+        return presets;
+    });
+}
+
+// ============================================================================
+// User custom template operations
+// ============================================================================
+
+std::unordered_map<std::string, std::string> Database::get_user_custom_templates(dpp::snowflake discord_id) {
+    return execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(
+            "SELECT command_id, json_config FROM user_custom_templates WHERE discord_id = $1",
+            static_cast<int64_t>(discord_id));
+        std::unordered_map<std::string, std::string> templates;
+        for (const auto& row : result) {
+            templates[row[0].as<std::string>()] = row[1].as<std::string>();
+        }
+        return templates;
+    });
+}
+
+std::optional<std::string> Database::get_user_custom_template(dpp::snowflake discord_id, const std::string& command_id) {
+    return execute([&](pqxx::connection& conn) -> std::optional<std::string> {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(
+            "SELECT json_config FROM user_custom_templates WHERE discord_id = $1 AND command_id = $2",
+            static_cast<int64_t>(discord_id), command_id);
+        if (result.empty()) return std::nullopt;
+        return result[0][0].as<std::string>();
+    });
+}
+
+void Database::set_user_custom_template(dpp::snowflake discord_id, const std::string& command_id, const std::string& json_config) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "INSERT INTO user_custom_templates (discord_id, command_id, json_config) VALUES ($1, $2, $3) "
+            "ON CONFLICT (discord_id, command_id) DO UPDATE SET json_config = $3, updated_at = NOW()",
+            static_cast<int64_t>(discord_id), command_id, json_config);
+        txn.commit();
+    });
+}
+
+void Database::delete_user_custom_template(dpp::snowflake discord_id, const std::string& command_id) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "DELETE FROM user_custom_templates WHERE discord_id = $1 AND command_id = $2",
+            static_cast<int64_t>(discord_id), command_id);
+        txn.commit();
+    });
+}
+
+void Database::delete_all_user_custom_templates(dpp::snowflake discord_id) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "DELETE FROM user_custom_templates WHERE discord_id = $1",
+            static_cast<int64_t>(discord_id));
+        txn.commit();
+    });
+}
+
+// ============================================================================
+// Embed preset template operations
+// ============================================================================
+
+std::vector<std::tuple<std::string, std::string, std::string>> Database::get_all_preset_templates() {
+    return execute([](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec("SELECT preset_name, field_name, template FROM embed_preset_templates");
+        std::vector<std::tuple<std::string, std::string, std::string>> templates;
+        for (const auto& row : result) {
+            templates.emplace_back(
+                row[0].as<std::string>(),
+                row[1].as<std::string>(),
+                row[2].as<std::string>());
+        }
+        return templates;
+    });
+}
+
+void Database::set_preset_template(const std::string& preset_name,
+                                   const std::string& field_name,
+                                   const std::string& template_text) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "INSERT INTO embed_preset_templates (preset_name, field_name, template) "
+            "VALUES ($1, $2, $3) "
+            "ON CONFLICT (preset_name, field_name) DO UPDATE SET template = $3",
+            preset_name, field_name, template_text);
+        txn.commit();
+    });
+}
+
+void Database::delete_preset_templates(const std::string& preset_name) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "DELETE FROM embed_preset_templates WHERE preset_name = $1",
+            preset_name);
+        txn.commit();
+    });
+}
+
+// ============================================================================
+// JSON embed template operations
+// ============================================================================
+
+std::vector<std::pair<std::string, std::string>> Database::get_all_json_templates() {
+    return execute([](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec("SELECT template_key, json_config FROM embed_json_templates");
+        std::vector<std::pair<std::string, std::string>> templates;
+        for (const auto& row : result) {
+            templates.emplace_back(
+                row[0].as<std::string>(),
+                row[1].as<std::string>());
+        }
+        return templates;
+    });
+}
+
+std::optional<std::string> Database::get_json_template(const std::string& key) {
+    return execute([&](pqxx::connection& conn) -> std::optional<std::string> {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(
+            "SELECT json_config FROM embed_json_templates WHERE template_key = $1",
+            key);
+        if (result.empty()) {
+            return std::nullopt;
+        }
+        return result[0][0].as<std::string>();
+    });
+}
+
+void Database::set_json_template(const std::string& key, const std::string& json_config) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "INSERT INTO embed_json_templates (template_key, json_config) "
+            "VALUES ($1, $2) "
+            "ON CONFLICT (template_key) DO UPDATE SET json_config = $2",
+            key, json_config);
+        txn.commit();
+    });
+}
+
+void Database::delete_json_template(const std::string& key) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(
+            "DELETE FROM embed_json_templates WHERE template_key = $1",
+            key);
+        txn.commit();
+    });
 }
 
 // ============================================================================
@@ -2087,6 +2308,197 @@ void Database::remove_word_from_blacklist(const std::string& word) {
         txn.exec_params("DELETE FROM word_blacklist WHERE word = $1", word);
         txn.commit();
         spdlog::info("[DB] Removed word '{}' from blacklist", word);
+    });
+}
+
+// ============================================================================
+// Template audit log operations
+// ============================================================================
+
+void Database::log_template_change(
+    dpp::snowflake admin_id,
+    const std::string& admin_username,
+    const std::string& action,
+    const std::string& command_id,
+    const std::string& preset,
+    const std::string& old_fields_json,
+    const std::string& new_fields_json
+) {
+    execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        txn.exec_params(R"(
+            INSERT INTO template_audit_log
+                (discord_id, discord_username, action, command_id, preset, old_fields, new_fields)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+        )",
+            static_cast<int64_t>(admin_id),
+            admin_username,
+            action,
+            command_id,
+            preset.empty() ? std::optional<std::string>{} : preset,
+            old_fields_json.empty() ? std::optional<std::string>{} : old_fields_json,
+            new_fields_json.empty() ? std::optional<std::string>{} : new_fields_json
+        );
+        txn.commit();
+        spdlog::info("[DB] Template audit: {} by {} ({}) - {}:{}",
+            action, admin_username, static_cast<uint64_t>(admin_id), command_id, preset);
+    });
+}
+
+std::vector<TemplateAuditEntry> Database::get_template_audit_log(size_t limit, size_t offset) {
+    return execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(R"(
+            SELECT id, discord_id, discord_username, action, command_id, preset,
+                   old_fields::text, new_fields::text, created_at
+            FROM template_audit_log
+            ORDER BY created_at DESC
+            LIMIT $1 OFFSET $2
+        )", limit, offset);
+
+        std::vector<TemplateAuditEntry> entries;
+        entries.reserve(result.size());
+
+        for (const auto& row : result) {
+            TemplateAuditEntry entry;
+            entry.id = row[0].as<int64_t>();
+            entry.discord_id = dpp::snowflake(row[1].as<int64_t>());
+            entry.discord_username = row[2].is_null() ? "" : row[2].as<std::string>();
+            entry.action = row[3].as<std::string>();
+            entry.command_id = row[4].as<std::string>();
+            entry.preset = row[5].is_null() ? "" : row[5].as<std::string>();
+            entry.old_fields_json = row[6].is_null() ? "" : row[6].as<std::string>();
+            entry.new_fields_json = row[7].is_null() ? "" : row[7].as<std::string>();
+
+            auto ts_str = row[8].as<std::string>();
+            std::tm tm = {};
+            std::istringstream ss(ts_str);
+            ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+            entry.created_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+
+            entries.push_back(std::move(entry));
+        }
+
+        return entries;
+    });
+}
+
+std::vector<TemplateAuditEntry> Database::get_template_audit_log_by_admin(
+    dpp::snowflake admin_id,
+    size_t limit
+) {
+    return execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(R"(
+            SELECT id, discord_id, discord_username, action, command_id, preset,
+                   old_fields::text, new_fields::text, created_at
+            FROM template_audit_log
+            WHERE discord_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+        )", static_cast<int64_t>(admin_id), limit);
+
+        std::vector<TemplateAuditEntry> entries;
+        entries.reserve(result.size());
+
+        for (const auto& row : result) {
+            TemplateAuditEntry entry;
+            entry.id = row[0].as<int64_t>();
+            entry.discord_id = dpp::snowflake(row[1].as<int64_t>());
+            entry.discord_username = row[2].is_null() ? "" : row[2].as<std::string>();
+            entry.action = row[3].as<std::string>();
+            entry.command_id = row[4].as<std::string>();
+            entry.preset = row[5].is_null() ? "" : row[5].as<std::string>();
+            entry.old_fields_json = row[6].is_null() ? "" : row[6].as<std::string>();
+            entry.new_fields_json = row[7].is_null() ? "" : row[7].as<std::string>();
+
+            auto ts_str = row[8].as<std::string>();
+            std::tm tm = {};
+            std::istringstream ss(ts_str);
+            ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+            entry.created_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+
+            entries.push_back(std::move(entry));
+        }
+
+        return entries;
+    });
+}
+
+std::vector<TemplateAuditEntry> Database::get_template_audit_log_by_command(
+    const std::string& command_id,
+    size_t limit
+) {
+    return execute([&](pqxx::connection& conn) {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(R"(
+            SELECT id, discord_id, discord_username, action, command_id, preset,
+                   old_fields::text, new_fields::text, created_at
+            FROM template_audit_log
+            WHERE command_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+        )", command_id, limit);
+
+        std::vector<TemplateAuditEntry> entries;
+        entries.reserve(result.size());
+
+        for (const auto& row : result) {
+            TemplateAuditEntry entry;
+            entry.id = row[0].as<int64_t>();
+            entry.discord_id = dpp::snowflake(row[1].as<int64_t>());
+            entry.discord_username = row[2].is_null() ? "" : row[2].as<std::string>();
+            entry.action = row[3].as<std::string>();
+            entry.command_id = row[4].as<std::string>();
+            entry.preset = row[5].is_null() ? "" : row[5].as<std::string>();
+            entry.old_fields_json = row[6].is_null() ? "" : row[6].as<std::string>();
+            entry.new_fields_json = row[7].is_null() ? "" : row[7].as<std::string>();
+
+            auto ts_str = row[8].as<std::string>();
+            std::tm tm = {};
+            std::istringstream ss(ts_str);
+            ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+            entry.created_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+
+            entries.push_back(std::move(entry));
+        }
+
+        return entries;
+    });
+}
+
+std::optional<TemplateAuditEntry> Database::get_template_audit_entry(int64_t id) {
+    return execute([&](pqxx::connection& conn) -> std::optional<TemplateAuditEntry> {
+        pqxx::work txn(conn);
+        auto result = txn.exec_params(R"(
+            SELECT id, discord_id, discord_username, action, command_id, preset,
+                   old_fields::text, new_fields::text, created_at
+            FROM template_audit_log
+            WHERE id = $1
+        )", id);
+
+        if (result.empty()) {
+            return std::nullopt;
+        }
+
+        const auto& row = result[0];
+        TemplateAuditEntry entry;
+        entry.id = row[0].as<int64_t>();
+        entry.discord_id = dpp::snowflake(row[1].as<int64_t>());
+        entry.discord_username = row[2].is_null() ? "" : row[2].as<std::string>();
+        entry.action = row[3].as<std::string>();
+        entry.command_id = row[4].as<std::string>();
+        entry.preset = row[5].is_null() ? "" : row[5].as<std::string>();
+        entry.old_fields_json = row[6].is_null() ? "" : row[6].as<std::string>();
+        entry.new_fields_json = row[7].is_null() ? "" : row[7].as<std::string>();
+
+        auto ts_str = row[8].as<std::string>();
+        std::tm tm = {};
+        std::istringstream ss(ts_str);
+        ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
+        entry.created_at = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+
+        return entry;
     });
 }
 

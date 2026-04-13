@@ -94,12 +94,13 @@ public:
     ) {
         auto start = std::chrono::steady_clock::now();
 
-        spdlog::info("[RosuPp] CalculatePerformance: mode={} mods={} acc={:.2f}% combo={} miss={} size={}b",
+        spdlog::info("[RosuPp] CalculatePerformance: mode={} mods='{}' acc={:.2f}% combo={} miss={} passed_obj={} size={}b",
             mode ? static_cast<int>(*mode) : 0,
-            settings.mods,
+            settings.mods_str.empty() ? std::to_string(settings.mods) : settings.mods_str,
             score.accuracy.value_or(100.0),
             score.combo.value_or(0),
             score.misses.value_or(0),
+            settings.passed_objects.value_or(0),
             beatmap.content().size());
 
         pp::v1::PerformanceRequest request;
@@ -212,9 +213,58 @@ public:
         return results;
     }
 
+    std::optional<std::vector<uint8_t>> get_strain_graph(
+        const pp::v1::BeatmapSource& beatmap,
+        std::optional<RosuGameMode> mode,
+        const RosuDifficultySettings& settings,
+        uint32_t width,
+        uint32_t height
+    ) {
+        auto start = std::chrono::steady_clock::now();
+
+        spdlog::info("[RosuPp] GetStrainGraph: mode={}, mods={}, size={}b, {}x{}",
+            mode ? static_cast<int>(*mode) : 0,
+            settings.mods_str.empty() ? std::to_string(settings.mods) : settings.mods_str,
+            beatmap.content().size(), width, height);
+
+        pp::v1::StrainGraphRequest request;
+        *request.mutable_beatmap() = beatmap;
+
+        if (mode) {
+            request.set_mode(static_cast<pp::v1::GameMode>(*mode));
+        }
+
+        apply_difficulty_settings(request.mutable_settings(), settings);
+        request.set_width(width);
+        request.set_height(height);
+
+        pp::v1::StrainGraphResponse response;
+        grpc::ClientContext context;
+        context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(60));
+
+        auto status = stub_->GetStrainGraph(&context, request, &response);
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+
+        if (!status.ok()) {
+            spdlog::error("[RosuPp] GetStrainGraph FAILED in {}ms: code={} msg={}",
+                elapsed, static_cast<int>(status.error_code()), status.error_message());
+            return std::nullopt;
+        }
+
+        std::vector<uint8_t> png_data(response.png_data().begin(), response.png_data().end());
+        spdlog::info("[RosuPp] GetStrainGraph OK in {}ms: {} bytes PNG",
+            elapsed, png_data.size());
+
+        return png_data;
+    }
+
 private:
     void apply_difficulty_settings(pp::v1::DifficultySettings* proto, const RosuDifficultySettings& settings) {
-        if (settings.mods != 0) {
+        // Prefer mods_str (acronym-based) for lazer mod support (CL, etc.)
+        if (!settings.mods_str.empty()) {
+            proto->set_mods_str(settings.mods_str);
+        } else if (settings.mods != 0) {
             proto->set_mods(settings.mods);
         }
         if (settings.clock_rate) {
@@ -232,9 +282,12 @@ private:
         if (settings.hp) {
             proto->set_hp(*settings.hp);
         }
-        if (settings.lazer) {
-            proto->set_lazer(true);
+        if (settings.passed_objects) {
+            proto->set_passed_objects(*settings.passed_objects);
         }
+        // Always set lazer flag - rosu-pp next branch defaults to lazer=true,
+        // so we must explicitly send false for stable scores
+        proto->set_lazer(settings.lazer);
     }
 
     void apply_score_params(pp::v1::ScoreParams* proto, const RosuScoreParams& score) {
@@ -426,6 +479,39 @@ std::vector<RosuPerformanceAttrs> RosuPpClient::calculate_batch(
     return impl_->calculate_batch(beatmap, mode, settings, scores);
 }
 
+std::optional<std::vector<uint8_t>> RosuPpClient::get_strain_graph(
+    const std::string& osu_file_path,
+    std::optional<RosuGameMode> mode,
+    const RosuDifficultySettings& settings,
+    uint32_t width,
+    uint32_t height
+) {
+    spdlog::info("[RosuPp] Loading for strain graph: {}", osu_file_path);
+
+    std::ifstream file(osu_file_path, std::ios::binary);
+    if (!file) {
+        spdlog::error("[RosuPp] Failed to open .osu file: {}", osu_file_path);
+        return std::nullopt;
+    }
+    std::vector<uint8_t> content((std::istreambuf_iterator<char>(file)),
+                                  std::istreambuf_iterator<char>());
+
+    spdlog::info("[RosuPp] Loaded {}b for strain graph", content.size());
+    return get_strain_graph_bytes(content, mode, settings, width, height);
+}
+
+std::optional<std::vector<uint8_t>> RosuPpClient::get_strain_graph_bytes(
+    const std::vector<uint8_t>& content,
+    std::optional<RosuGameMode> mode,
+    const RosuDifficultySettings& settings,
+    uint32_t width,
+    uint32_t height
+) {
+    pp::v1::BeatmapSource beatmap;
+    beatmap.set_content(content.data(), content.size());
+    return impl_->get_strain_graph(beatmap, mode, settings, width, height);
+}
+
 uint32_t RosuPpClient::parse_mods(const std::string& mods_str) {
     uint32_t result = 0;
     std::string mods = mods_str;
@@ -453,6 +539,7 @@ uint32_t RosuPpClient::parse_mods(const std::string& mods_str) {
         else if (mod == "SO") result |= mods::SO;
         else if (mod == "AP") result |= mods::AP;
         else if (mod == "PF") result |= mods::PF;
+        else if (mod == "CL") { /* Classic - lazer mod, handled via lazer flag */ }
         else if (mod == "NM") { /* NoMod - do nothing */ }
     }
 

@@ -67,7 +67,6 @@ private:
     void handle_gandon(const dpp::slashcommand_t& event);
     void handle_avatar(const dpp::slashcommand_t& event);
     void handle_update_token(const dpp::slashcommand_t& event);
-    void handle_set(const dpp::slashcommand_t& event);
     void handle_score(const dpp::slashcommand_t& event);
     void handle_autorole_switch(const dpp::slashcommand_t& event);
     void handle_weather(const dpp::slashcommand_t& event);

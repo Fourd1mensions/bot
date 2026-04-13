@@ -7,6 +7,7 @@ service PerformanceService {
   rpc CalculatePerformance(PerformanceRequest) returns (PerformanceResponse);
   rpc CalculateBatch(BatchRequest) returns (BatchResponse);
   rpc GetStrains(StrainsRequest) returns (StrainsResponse);
+  rpc GetStrainGraph(StrainGraphRequest) returns (StrainGraphResponse);
   rpc GetBeatmapInfo(BeatmapInfoRequest) returns (BeatmapInfoResponse);
   rpc GetGradualDifficulty(GradualDifficultyRequest) returns (stream GradualDifficultyResponse);
   rpc GetGradualPerformance(GradualPerformanceRequest) returns (stream GradualPerformanceResponse);
@@ -47,6 +48,7 @@ message DifficultySettings {
   optional uint32 passed_objects = 11;
   optional bool hardrock_offsets = 12;
   optional bool lazer = 13;
+  optional string mods_str = 14;  // Acronym-based mods (e.g., "HDDT", "NFCL")
 }
 
 message ScoreParams {
@@ -94,7 +96,6 @@ message OsuDifficultyAttributes {
   double ar = 9;
   double od = 10;
   double hp = 11;
-  double cs = 19;  // Circle size (with mods applied)
   double great_hit_window = 12;
   double ok_hit_window = 13;
   double meh_hit_window = 14;
@@ -102,6 +103,7 @@ message OsuDifficultyAttributes {
   uint32 n_sliders = 16;
   uint32 n_spinners = 17;
   uint32 n_large_ticks = 18;
+  double cs = 19;
 }
 
 message TaikoDifficultyAttributes {
@@ -120,13 +122,13 @@ message CatchDifficultyAttributes {
   uint32 n_fruits = 2;
   uint32 n_droplets = 3;
   uint32 n_tiny_droplets = 4;
-  bool is_convert = 5;  // Whether the beatmap was converted from osu!standard
+  bool is_convert = 5;
 }
 
 message ManiaDifficultyAttributes {
   uint32 n_objects = 2;
-  uint32 n_hold_notes = 3;  // Number of hold notes in the map
-  bool is_convert = 4;      // Whether the beatmap was converted from osu!standard
+  uint32 n_hold_notes = 3;
+  bool is_convert = 4;
 }
 
 message PerformanceRequest {
@@ -224,6 +226,20 @@ message ManiaStrains {
   repeated double strains = 1;
 }
 
+// Strain graph rendering
+message StrainGraphRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings settings = 3;
+  uint32 width = 4;   // Graph width in pixels (default: 900)
+  uint32 height = 5;  // Graph height in pixels (default: 250)
+  optional bytes background = 6;  // Optional PNG/JPEG background image
+}
+
+message StrainGraphResponse {
+  bytes png_data = 1;  // Rendered graph as PNG
+}
+
 message BeatmapInfoRequest {
   BeatmapSource beatmap = 1;
 }
@@ -231,7 +247,7 @@ message BeatmapInfoRequest {
 message BeatmapInfoResponse {
   uint32 version = 1;
   GameMode mode = 2;
-  bool is_convert = 3;  // Whether this map was converted from another mode
+  bool is_convert = 3;
   double hp = 4;
   double cs = 5;
   double od = 6;

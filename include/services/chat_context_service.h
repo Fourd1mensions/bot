@@ -44,8 +44,9 @@ public:
      * @param content The message content
      * @param channel_id The channel where the message was sent
      * @param msg_id The message ID
+     * @param skip_callbacks If true, don't trigger download callbacks (for bot's own messages)
      */
-    void update_context(const std::string& raw_event, const std::string& content, dpp::snowflake channel_id, dpp::snowflake msg_id);
+    void update_context(const std::string& raw_event, const std::string& content, dpp::snowflake channel_id, dpp::snowflake msg_id, bool skip_callbacks = false);
 
     /**
      * Get the beatmap ID for the most recent beatmap mentioned in a channel.
@@ -69,7 +70,7 @@ public:
 
 private:
     // Contains channel_id : {message_id : beatmap_id}
-    std::unordered_map<dpp::snowflake, std::pair<dpp::snowflake, std::string>> chat_map_;
+    mutable std::unordered_map<dpp::snowflake, std::pair<dpp::snowflake, std::string>> chat_map_;
     mutable std::mutex mutex_;
     BeatmapsetCallback beatmapset_callback_;
     BeatmapCallback beatmap_callback_;

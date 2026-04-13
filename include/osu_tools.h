@@ -104,7 +104,7 @@ struct ToolsConfig {
 
     return ToolsConfig{
       .dotnet_path = fs::path(home) / ".dotnet" / "dotnet",
-      .calculator_path = fs::path("/tmp/osu-tools/PerformanceCalculator/bin/Release/net8.0/PerformanceCalculator.dll")
+      .calculator_path = fs::path(home) / "osu-tools" / "PerformanceCalculator" / "bin" / "Release" / "net8.0" / "PerformanceCalculator.dll"
     };
   }
 

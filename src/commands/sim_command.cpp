@@ -4,6 +4,8 @@
 #include "services/beatmap_resolver_service.h"
 #include "services/message_presenter_service.h"
 #include "services/beatmap_performance_service.h"
+#include "services/embed_template_service.h"
+#include "services/user_settings_service.h"
 #include <requests.h>
 #include <osu.h>
 #include <database.h>
@@ -164,6 +166,11 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
         return;
     }
 
+    // Show typing indicator (only for text commands)
+    if (!ctx.is_slash()) {
+        s->bot.channel_typing(ctx.channel_id());
+    }
+
     ParsedParams parsed;
     std::vector<std::string> warnings;
 
@@ -315,46 +322,70 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
     double star_rating = diff_opt->star_rating;
     int max_combo = diff_opt->max_combo;
 
-    // Build response message
-    std::string mode_display = parsed.mode;
-    std::transform(mode_display.begin(), mode_display.end(), mode_display.begin(), ::toupper);
+    // Build values map for template rendering
+    std::unordered_map<std::string, std::string> values;
+    values["title"] = title;
+    values["mode"] = parsed.mode;
 
-    std::string content = fmt::format("**Simulated Play on {}**", title);
-    if (parsed.mode != "osu") {
-        content += fmt::format(" [{}]", mode_display);
+    {
+        std::string mode_display = parsed.mode;
+        std::transform(mode_display.begin(), mode_display.end(), mode_display.begin(), ::toupper);
+        values["mode_line"] = (!parsed.mode.empty() && parsed.mode != "osu") ? fmt::format(" [{}]", mode_display) : "";
     }
-    content += "\n";
-    content += fmt::format(":star: **{:.2f}★**\n\n", star_rating);
 
-    content += "**Score Parameters:**\n";
-    content += fmt::format("• Accuracy: **{:.2f}%**\n", parsed.accuracy * 100);
+    values["gamemode_string"] = utils::gamemode_to_string(parsed.mode);
+
+    values["sr"] = fmt::format("{:.2f}", star_rating);
+    values["acc"] = fmt::format("{:.2f}", parsed.accuracy * 100);
+    values["mods"] = mods;
+    values["combo"] = std::to_string(parsed.combo);
+    values["max_combo"] = std::to_string(max_combo);
+    values["pp"] = fmt::format("{:.0f}", result->pp);
+    values["aim_pp"] = fmt::format("{:.0f}", result->aim_pp);
+    values["speed_pp"] = fmt::format("{:.0f}", result->speed_pp);
+    values["accuracy_pp"] = fmt::format("{:.0f}", result->accuracy_pp);
+    values["aim_diff"] = fmt::format("{:.2f}", diff_opt->aim_difficulty);
+    values["speed_diff"] = fmt::format("{:.2f}", diff_opt->speed_difficulty);
+
+    // Pre-formatted lines
+    std::string hit_counts_line;
     if (parsed.count_100 >= 0 || parsed.count_50 >= 0 || parsed.misses > 0) {
-        content += "• Hit counts:";
-        if (parsed.count_100 >= 0) content += fmt::format(" **{}**x100", parsed.count_100);
-        if (parsed.count_50 >= 0) content += fmt::format(" **{}**x50", parsed.count_50);
-        if (parsed.misses > 0) content += fmt::format(" **{}**xMiss", parsed.misses);
-        content += "\n";
+        hit_counts_line = "\xe2\x80\xa2 Hit counts:";
+        if (parsed.count_100 >= 0) { hit_counts_line += fmt::format(" **{}**x100", parsed.count_100); values["count_100"] = std::to_string(parsed.count_100); }
+        if (parsed.count_50 >= 0)  { hit_counts_line += fmt::format(" **{}**x50", parsed.count_50);   values["count_50"] = std::to_string(parsed.count_50); }
+        if (parsed.misses > 0)     { hit_counts_line += fmt::format(" **{}**xMiss", parsed.misses);   values["misses"] = std::to_string(parsed.misses); }
+        hit_counts_line += "\n";
     }
-    content += fmt::format("• Mods: **{}**\n", mods);
+    values["hit_counts_line"] = hit_counts_line;
+
     if (parsed.combo > 0) {
-        content += fmt::format("• Combo: **{}x** (max: **{}x**)\n", parsed.combo, max_combo);
+        values["combo_line"] = fmt::format("\xe2\x80\xa2 Combo: **{}x** (max: **{}x**)\n", parsed.combo, max_combo);
     } else {
-        content += fmt::format("• Max Combo: **{}x**\n", max_combo);
+        values["combo_line"] = fmt::format("\xe2\x80\xa2 Max Combo: **{}x**\n", max_combo);
     }
+
     if (parsed.mode == "mania" && parsed.ratio > 0.0) {
-        content += fmt::format("• Ratio: **{:.2f}**\n", parsed.ratio);
+        values["ratio"] = fmt::format("{:.2f}", parsed.ratio);
+        values["ratio_line"] = fmt::format("\xe2\x80\xa2 Ratio: **{:.2f}**\n", parsed.ratio);
+    } else {
+        values["ratio_line"] = "";
     }
-    content += "\n";
 
-    content += "**Performance:**\n";
-    content += fmt::format("• **{:.0f}pp** total\n", result->pp);
-    content += fmt::format("• Aim: **{:.0f}pp**\n", result->aim_pp);
-    content += fmt::format("• Speed: **{:.0f}pp**\n", result->speed_pp);
-    content += fmt::format("• Accuracy: **{:.0f}pp**\n\n", result->accuracy_pp);
+    // Get template and render (supports custom preset)
+    services::TemplateFields tmpl_fields;
+    if (s->template_service) {
+        auto preset = s->user_settings_service.get_preset(ctx.author_id());
+        if (preset == services::EmbedPreset::Custom) {
+            tmpl_fields = s->template_service->get_user_fields(ctx.author_id(), "sim", "custom");
+        } else {
+            tmpl_fields = s->template_service->get_fields("sim");
+        }
+    } else {
+        tmpl_fields = services::EmbedTemplateService::get_default_fields("sim");
+    }
 
-    content += "**Difficulty:**\n";
-    content += fmt::format("• Aim: **{:.2f}★**\n", diff_opt->aim_difficulty);
-    content += fmt::format("• Speed: **{:.2f}★**\n", diff_opt->speed_difficulty);
+    std::string body_tmpl = tmpl_fields.count("body") ? tmpl_fields.at("body") : "";
+    std::string content = services::render_template(body_tmpl, values);
 
     ctx.reply(content);
 }

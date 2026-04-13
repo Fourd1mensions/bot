@@ -22,13 +22,18 @@ struct WebhookConfig {
 struct Config {
   std::string api_v1_key, client_id, client_secret, auth_code, access_token,
       refresh_token, redirect_uri, weather_api_key;
+  std::string discord_client_id, discord_client_secret;
+  std::string osu_oauth_client_id, osu_oauth_client_secret;  // For user linking via OAuth
+  std::string guild_id;
   std::string http_host;
   uint16_t http_port;
   std::string public_url;
   std::vector<std::string> admin_users;
   std::vector<std::string> beatmap_mirrors;
+  std::vector<std::string> music_allowed_users;  // Discord IDs allowed to use music player
   WebhookConfig webhooks;
   size_t expires_in, expires_at;
+  std::string bot_token;  // Discord bot token for API calls
 };
 
 namespace utils {
@@ -100,6 +105,12 @@ namespace utils {
   // URL decode a string (decode %XX sequences)
   std::string url_decode(const std::string& value);
 
+  // Generate cryptographically secure random token (64 hex chars = 256 bits)
+  std::string generate_secure_token();
+
+  // Escape HTML special characters to prevent XSS
+  std::string html_escape(const std::string& text);
+
   // Mod flags for beatmap difficulty calculation
   struct ModFlags {
     bool has_ez = false;
@@ -117,6 +128,7 @@ namespace utils {
     std::vector<std::string> invalid; // List of invalid mod codes found
     bool has_incompatible = false;    // e.g., HR+EZ, DT+HT
     std::string incompatible_msg;     // Description of incompatibility
+    bool is_nomod = false;            // True when input was explicitly "NM" (NoMod)
 
     bool is_valid() const { return invalid.empty() && !has_incompatible; }
   };
@@ -165,8 +177,20 @@ namespace utils {
     return length_seconds;
   }
 
-  // Sanitize filename by replacing problematic characters with safe Unicode alternatives
-  // Replaces: " / \ : * ? < > |
+  inline std::string rtrim(std::string s) {
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
+      return !std::isspace(ch);
+    }).base(), s.end());
+    return s;
+  }
+
+  inline std::string gamemode_to_string(const std::string& mode) {
+    if (mode == "taiko")                        return "Taiko";
+    if (mode == "fruits" || mode == "catch")    return "Catch the Beat";
+    if (mode == "mania")                        return "osu!Mania";
+    return "osu! Standard";
+  }
+
   std::string sanitize_filename(const std::string& filename);
 
   // Check if content starts with a command prefix (handles Cyrillic case-insensitivity)

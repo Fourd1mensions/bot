@@ -22,8 +22,9 @@ void MemberHandler::set_guild_config(dpp::snowflake guild_id, dpp::snowflake aut
 }
 
 void MemberHandler::handle_add(const dpp::guild_member_add_t& event) {
-    if (!event.added.get_user()->is_bot() && slash_command_handler_.get_autorole_enabled()) {
-        bot_.guild_member_add_role(guild_id_, event.added.get_user()->id, autorole_id_);
+    const dpp::user* user = event.added.get_user();
+    if (user && !user->is_bot() && slash_command_handler_.get_autorole_enabled()) {
+        bot_.guild_member_add_role(guild_id_, user->id, autorole_id_);
     }
 }
 

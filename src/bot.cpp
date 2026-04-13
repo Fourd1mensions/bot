@@ -17,6 +17,11 @@
 #include <commands/users_command.h>
 #include <commands/admin_set_command.h>
 #include <commands/admin_unset_command.h>
+#include <commands/settings_command.h>
+#include <commands/osc_command.h>
+#include <commands/profile_command.h>
+#include <commands/top_command.h>
+#include <commands/link_command.h>
 
 // Handlers
 #include <handlers/button_handler.h>
@@ -89,9 +94,12 @@ Bot::Bot(const std::string& token, bool delete_commands)
   // Initialize message crawler service
   message_crawler_service = std::make_unique<services::MessageCrawlerService>(bot);
 
+  // Initialize music player service
+  music_player_service = std::make_unique<services::MusicPlayerService>(bot);
+
   // Initialize handlers
   button_handler = std::make_unique<handlers::ButtonHandler>(
-      *leaderboard_service, *recent_score_service, request);
+      *leaderboard_service, *recent_score_service, message_presenter, request);
 
   slash_command_handler = std::make_unique<handlers::SlashCommandHandler>(
       command_router, request, rand, config,
@@ -99,7 +107,7 @@ Bot::Bot(const std::string& token, bool delete_commands)
       message_presenter, beatmap_downloader, bot);
 
   message_handler = std::make_unique<handlers::MessageHandler>(
-      command_router, chat_context_service);
+      command_router, chat_context_service, bot);
 
   member_handler = std::make_unique<handlers::MemberHandler>(
       user_mapping_service, *slash_command_handler, bot);
@@ -178,12 +186,18 @@ Bot::Bot(const std::string& token, bool delete_commands)
     member_handler->handle_remove(event);
   });
 
+  bot.on_guild_member_update([](const dpp::guild_member_update_t& event) {
+    auto uid = std::to_string(static_cast<uint64_t>(event.updated.user_id));
+    cache::MemcachedCache::instance().del("custom_tmpl_perm:" + uid);
+  });
+
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     // Call thinking() immediately for commands that make API calls
     const std::string& cmd = event.command.get_command_name();
-    if (cmd == "set" || cmd == "score" || cmd == "weather" ||
+    if (cmd == "score" || cmd == "weather" || cmd == "avatar" ||
         cmd == "rs" || cmd == "bg" || cmd == "audio" || cmd == "map" ||
-        cmd == "compare" || cmd == "sim" || cmd == "lb") {
+        cmd == "compare" || cmd == "sim" || cmd == "lb" || cmd == "settings" || cmd == "osc" ||
+        cmd == "osu" || cmd == "taiko" || cmd == "mania" || cmd == "ctb" || cmd == "catch") {
       event.thinking();
     }
     std::jthread([this, event = std::move(event)]() mutable {
@@ -191,8 +205,23 @@ Bot::Bot(const std::string& token, bool delete_commands)
     }).detach();
   });
 
+  bot.on_voice_ready([this](const dpp::voice_ready_t& event) {
+    if (music_player_service) {
+      music_player_service->on_voice_ready(event);
+    }
+  });
+
+  bot.on_voice_state_update([this](const dpp::voice_state_update_t& event) {
+    if (music_player_service) {
+      music_player_service->on_voice_state_update(event);
+    }
+  });
+
   bot.on_ready([this, delete_commands](const dpp::ready_t& event) {
     ready_handler->handle(event, delete_commands);
+    if (music_player_service) {
+      music_player_service->restore_all_states();
+    }
   });
 
   bot.on_guild_members_chunk([this](const dpp::guild_members_chunk_t& event) {
@@ -215,15 +244,28 @@ Bot::Bot(const std::string& token, bool delete_commands)
     .recent_score_service = *recent_score_service,
     .leaderboard_service = *leaderboard_service,
     .beatmap_extract_service = *beatmap_extract_service,
-    .beatmap_cache_service = beatmap_cache_service.get()
+    .user_settings_service = user_settings_service,
+    .beatmap_cache_service = beatmap_cache_service.get(),
+    .template_service = &embed_template_service
   });
+
+  // Load user settings from DB
+  user_settings_service.load_from_db();
+
+  // Load embed templates from DB (seeds defaults if empty)
+  embed_template_service.load_from_db();
+  message_presenter.set_template_service(&embed_template_service);
 
   // Register text commands
   command_router.set_services(service_container.get());
   register_commands();
 
-  // Connect crawler service to HTTP server for status endpoint
+  // Connect services to HTTP server
+  http_server->set_config(&config);
   http_server->set_crawler_service(message_crawler_service.get());
+  http_server->set_user_settings_service(&user_settings_service);
+  http_server->set_template_service(&embed_template_service);
+  http_server->set_music_service(music_player_service.get());
 
   // Start HTTP health check server
   http_server->start();
@@ -240,6 +282,11 @@ void Bot::register_commands() {
   command_router.register_command(std::make_unique<commands::UsersCommand>());
   command_router.register_command(std::make_unique<commands::AdminSetCommand>());
   command_router.register_command(std::make_unique<commands::AdminUnsetCommand>());
+  command_router.register_command(std::make_unique<commands::SettingsCommand>());
+  command_router.register_command(std::make_unique<commands::OscCommand>());
+  command_router.register_command(std::make_unique<commands::ProfileCommand>());
+  command_router.register_command(std::make_unique<commands::TopCommand>());
+  command_router.register_command(std::make_unique<commands::LinkCommand>());
 }
 
 void Bot::start() {
@@ -262,6 +309,11 @@ void Bot::shutdown() {
 
   // Request download abort first so ongoing downloads stop quickly
   beatmap_downloader.request_shutdown();
+
+  // Stop music player service
+  if (music_player_service) {
+    music_player_service->shutdown();
+  }
 
   // Stop message crawler service
   if (message_crawler_service) {

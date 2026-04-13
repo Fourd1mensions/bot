@@ -4,6 +4,7 @@
 #include <string>
 #include <optional>
 #include <dpp/dpp.h>
+#include "services/user_settings_service.h"
 
 // Forward declarations
 class Score;
@@ -11,6 +12,11 @@ class Beatmap;
 struct LeaderboardState;
 struct RecentScoreState;
 struct CompareState;
+struct TopState;
+
+namespace services {
+class EmbedTemplateService;
+}
 
 namespace services {
 
@@ -20,11 +26,23 @@ namespace services {
  */
 struct ScorePresentation {
     size_t rank;              // Position in leaderboard (1-indexed)
-    std::string header;       // "username `123pp` +HDDT"
-    std::string body;         // Score details (accuracy, combo, etc.)
+    std::string header;       // "username `123pp` +HDDT" (pre-formatted fallback)
+    std::string body;         // Score details (pre-formatted fallback)
     double display_pp;        // PP value to show (may be calculated for Loved maps)
     std::string username;     // For author display
     uint64_t user_id = 0;     // For avatar URL
+    // Raw fields for template rendering
+    std::string mods;
+    double accuracy = 0.0;
+    int combo = 0;
+    int max_combo = 0;
+    int count_300 = 0;
+    int count_100 = 0;
+    int count_50 = 0;
+    int count_miss = 0;
+    uint64_t total_score = 0;
+    std::string rank_letter;
+    std::string date;         // Relative time string
 };
 
 /**
@@ -46,10 +64,13 @@ struct DifficultyInfo {
  * PP calculation results for embed display.
  */
 struct PPInfo {
-    double current_pp = 0.0;      // Current score PP
-    double fc_pp = 0.0;           // FC PP (if applicable)
-    double fc_accuracy = 0.0;     // FC accuracy percentage (if applicable)
-    bool has_fc_pp = false;       // Whether FC PP should be shown
+    double current_pp = 0.0;
+    double fc_pp = 0.0;
+    double fc_accuracy = 0.0;
+    bool has_fc_pp = false;
+    double aim_pp = 0.0;
+    double speed_pp = 0.0;
+    double accuracy_pp = 0.0;
 };
 
 /**
@@ -60,6 +81,14 @@ struct PaginationInfo {
     size_t total = 1;
     bool has_refresh = false;
     size_t refresh_count = 0;
+};
+
+/**
+ * Map position info for the user's best score on a beatmap.
+ */
+struct MapPositionInfo {
+    int position = 0;      // 0 = not on leaderboard
+    double best_pp = 0.0;  // user's personal best PP on this map
 };
 
 /**
@@ -75,6 +104,8 @@ public:
     MessagePresenterService(const MessagePresenterService&) = delete;
     MessagePresenterService& operator=(const MessagePresenterService&) = delete;
 
+    void set_template_service(EmbedTemplateService* service) { template_service_ = service; }
+
     /**
      * Build an error message with red embed.
      * @param error_text The error message to display
@@ -86,7 +117,7 @@ public:
      * Build a leaderboard page embed with pagination buttons.
      * @param beatmap The beatmap being displayed
      * @param scores_on_page Scores to display on current page
-     * @param footer_text Footer text (page info, filters, etc.)
+     * @param footer_values Values for footer template placeholders
      * @param mods_filter Active mods filter
      * @param total_pages Total number of pages
      * @param current_page Current page (0-indexed)
@@ -95,10 +126,11 @@ public:
     dpp::message build_leaderboard_page(
         const Beatmap& beatmap,
         const std::vector<ScorePresentation>& scores_on_page,
-        const std::string& footer_text,
+        const std::unordered_map<std::string, std::string>& footer_values,
         const std::string& mods_filter,
         size_t total_pages,
-        size_t current_page
+        size_t current_page,
+        dpp::snowflake discord_id = 0
     ) const;
 
     /**
@@ -123,7 +155,11 @@ public:
         const std::string& score_type,
         float completion_percent,
         float modded_bpm,
-        uint32_t modded_length
+        uint32_t modded_length,
+        EmbedPreset preset = EmbedPreset::Classic,
+        int try_number = 0,
+        const MapPositionInfo& map_position = {},
+        dpp::snowflake discord_id = 0
     ) const;
 
     /**
@@ -144,7 +180,9 @@ public:
         const std::string& mods,
         uint32_t beatmapset_id,
         float modded_bpm,
-        uint32_t modded_length
+        uint32_t modded_length,
+        EmbedPreset preset = EmbedPreset::Classic,
+        dpp::snowflake discord_id = 0
     ) const;
 
     /**
@@ -194,6 +232,13 @@ public:
     dpp::message build_compare_page(const CompareState& state) const;
 
     /**
+     * Build a top scores embed page from TopState.
+     * @param state The top state with all scores
+     * @return Complete Discord message with embed and pagination buttons
+     */
+    dpp::message build_top_page(const TopState& state) const;
+
+    /**
      * Build pagination button row.
      * @param prefix Button ID prefix ("lb_" or "rs_")
      * @param current Current page/index (0-indexed)
@@ -226,15 +271,19 @@ public:
      * Data for caching recent score page content.
      */
     struct RecentScoreCacheData {
+        std::string content;      // message text above the embed
         std::string title;
         std::string url;
         std::string description;
         std::string thumbnail;
         std::string beatmap_info;
         std::string footer;
+        std::string footer_icon;  // URL for small icon left of footer
         time_t timestamp;
         std::string username;
         uint64_t user_id;
+        EmbedPreset preset = EmbedPreset::Classic;
+        uint32_t color = 0x7c4dff;  // embed color (default: viola_purple)
     };
 
     /**
@@ -262,8 +311,15 @@ public:
         const std::string& score_type,
         float completion_percent,
         float modded_bpm,
-        uint32_t modded_length
+        uint32_t modded_length,
+        EmbedPreset preset = EmbedPreset::Classic,
+        int try_number = 0,
+        const MapPositionInfo& map_position = {},
+        dpp::snowflake discord_id = 0
     ) const;
+
+private:
+    EmbedTemplateService* template_service_ = nullptr;
 };
 
 } // namespace services

@@ -64,7 +64,7 @@ private:
 
   public:
   bool update_token();
-  std::string get_user(const std::string_view username, const bool by_id = false);
+  std::string get_user(const std::string_view username, const bool by_id = false, const std::string& mode = "osu");
   std::string get_user_beatmap_score(const std::string_view beatmap,
                                      const std::string_view user,
                                      const bool all = false);
@@ -82,5 +82,17 @@ private:
                                    int limit = 100,
                                    int offset = 0);
   std::string get_weather(const std::string_view city);
+
+  // osustats.ppy.sh API
+  struct OsuStatsCounts {
+    size_t top1 = 0;
+    size_t top8 = 0;
+    size_t top15 = 0;
+    size_t top25 = 0;
+    size_t top50 = 0;
+    size_t top100 = 0;
+  };
+  OsuStatsCounts get_osustats_counts(const std::string& username, int gamemode);
+
   Request();
 };

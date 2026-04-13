@@ -76,6 +76,86 @@ void ReadyHandler::handle(const dpp::ready_t& event, bool delete_commands) {
             sync_guild_members();
         }, 3600);  // Every hour
     }
+
+    // Top user role: check every 5 minutes, transfer role if #1 changes
+    if (dpp::run_once<struct setup_top_user_role_timer>()) {
+        // Initial check after 10 seconds (let other init finish first)
+        bot_.start_timer([this](dpp::timer t) {
+            update_top_user_role();
+            bot_.stop_timer(t);
+        }, 10);
+
+        bot_.start_timer([this](dpp::timer) {
+            update_top_user_role();
+        }, 60);  // Every minute
+    }
+}
+
+void ReadyHandler::update_top_user_role() {
+    static constexpr uint64_t TOP_ROLE_ID = 1474061397695529177ULL;
+    static constexpr uint64_t GUILD_ID = 1030424871173361704ULL;
+
+    try {
+        auto& db = db::Database::instance();
+
+        // Query top-3 users by message count in the last 24 hours (exclude bots)
+        auto new_top = db.execute([](pqxx::connection& conn) -> std::set<dpp::snowflake> {
+            pqxx::work txn(conn);
+            auto result = txn.exec(
+                "SELECT dm.author_id "
+                "FROM discord_messages dm "
+                "LEFT JOIN discord_users du ON dm.author_id = du.user_id "
+                "WHERE dm.created_at > NOW() - INTERVAL '24 hours' "
+                "AND (du.is_bot IS NULL OR du.is_bot = false) "
+                "GROUP BY dm.author_id "
+                "ORDER BY COUNT(*) DESC "
+                "LIMIT 3"
+            );
+            txn.commit();
+            std::set<dpp::snowflake> ids;
+            for (const auto& row : result) {
+                ids.insert(static_cast<uint64_t>(row[0].as<int64_t>()));
+            }
+            return ids;
+        });
+
+        if (new_top == current_top_users_) {
+            return;  // No change
+        }
+
+        // Remove role from users who dropped out of top 3
+        for (auto id : current_top_users_) {
+            if (!new_top.count(id)) {
+                spdlog::info("[TopRole] Removing role from {} (left top 3)", id.str());
+                bot_.guild_member_remove_role(GUILD_ID, id, TOP_ROLE_ID,
+                    [id](const dpp::confirmation_callback_t& cb) {
+                        if (cb.is_error()) {
+                            spdlog::warn("[TopRole] Failed to remove role from {}: {}",
+                                id.str(), cb.get_error().message);
+                        }
+                    });
+            }
+        }
+
+        // Add role to users who entered top 3
+        for (auto id : new_top) {
+            if (!current_top_users_.count(id)) {
+                spdlog::info("[TopRole] Adding role to {} (entered top 3)", id.str());
+                bot_.guild_member_add_role(GUILD_ID, id, TOP_ROLE_ID,
+                    [id](const dpp::confirmation_callback_t& cb) {
+                        if (cb.is_error()) {
+                            spdlog::warn("[TopRole] Failed to add role to {}: {}",
+                                id.str(), cb.get_error().message);
+                        }
+                    });
+            }
+        }
+
+        current_top_users_ = new_top;
+
+    } catch (const std::exception& e) {
+        spdlog::error("[TopRole] Failed to update top user role: {}", e.what());
+    }
 }
 
 void ReadyHandler::process_pending_button_removals() {
@@ -153,8 +233,9 @@ void ReadyHandler::sync_guild_members() {
 
     spdlog::info("[MemberSync] Starting guild members sync for guild {}", guild_id.str());
 
-    // Reset sync counter
+    // Reset sync counters
     sync_member_count_ = 0;
+    expected_member_count_ = 0;
 
     // Clear discord_users cache before re-syncing
     // This ensures users who left the server are removed from cache
@@ -167,38 +248,43 @@ void ReadyHandler::sync_guild_members() {
         return;
     }
 
-    // Fetch guild info first
-    bot_.guild_get(guild_id, [guild_id](const dpp::confirmation_callback_t& callback) {
+    // Fetch guild info first to get expected member count, then start pagination
+    bot_.guild_get(guild_id, [this, guild_id](const dpp::confirmation_callback_t& callback) {
         if (callback.is_error()) {
             spdlog::warn("[MemberSync] Failed to get guild info: {}", callback.get_error().message);
+            // Still try to fetch members even without guild info
+            fetch_members_page(guild_id, 0);
             return;
         }
 
         auto guild = callback.get<dpp::guild>();
+
+        // Save expected member count for validation threshold
+        expected_member_count_ = guild.member_count;
+        spdlog::info("[MemberSync] Guild \"{}\" reports ~{} members", guild.name, guild.member_count);
+
         db::GuildInfo gi;
         gi.guild_id = guild.id;
         gi.name = guild.name;
         if (guild.icon.is_iconhash()) {
             gi.icon_hash = guild.icon.as_iconhash().to_string();
         }
-        // Don't set member_count here - it will be updated after guild_get_members
         gi.member_count = 0;
 
         try {
-            // Only update if no guild info exists yet, or just update name/icon
             auto existing = db::Database::instance().get_guild_info(guild.id);
             if (existing) {
-                gi.member_count = existing->member_count;  // Preserve existing count
+                gi.member_count = existing->member_count;
             }
             db::Database::instance().cache_guild_info(gi);
             spdlog::info("[MemberSync] Cached guild info: {}", guild.name);
         } catch (const std::exception& e) {
             spdlog::error("[MemberSync] Failed to cache guild info: {}", e.what());
         }
-    });
 
-    // Fetch guild members with pagination
-    fetch_members_page(guild_id, 0);
+        // Now start member pagination after we know the expected count
+        fetch_members_page(guild_id, 0);
+    });
 }
 
 void ReadyHandler::fetch_members_page(dpp::snowflake guild_id, dpp::snowflake after) {
@@ -338,12 +424,16 @@ void ReadyHandler::handle_member_chunk(const dpp::guild_members_chunk_t& event) 
 void ReadyHandler::validate_tracked_users(size_t synced_count) {
     spdlog::info("[MemberValidation] Starting validation (synced {} members)...", synced_count);
 
-    // Safety check: don't validate if we synced too few members
-    // This prevents mass deletion due to API failures
-    if (synced_count < MIN_MEMBERS_FOR_VALIDATION) {
-        spdlog::warn("[MemberValidation] SKIPPED - only synced {} members (min: {}). "
-                     "This may indicate an API issue.",
-                     synced_count, MIN_MEMBERS_FOR_VALIDATION);
+    // Dynamic threshold: require at least 80% of expected guild members
+    // This prevents mass deletion when REST API returns incomplete data
+    size_t expected = expected_member_count_.load();
+    size_t threshold = std::max(MIN_MEMBERS_FOR_VALIDATION,
+                                 static_cast<size_t>(expected * 0.8));
+
+    if (synced_count < threshold) {
+        spdlog::warn("[MemberValidation] SKIPPED - only synced {} members (threshold: {}, expected: {}). "
+                     "REST API may have returned incomplete data.",
+                     synced_count, threshold, expected);
         return;
     }
 

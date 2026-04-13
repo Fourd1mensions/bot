@@ -8,6 +8,7 @@ class Request;
 namespace services {
 class LeaderboardService;
 class RecentScoreService;
+class MessagePresenterService;
 }
 
 namespace handlers {
@@ -21,6 +22,7 @@ public:
     ButtonHandler(
         services::LeaderboardService& leaderboard_service,
         services::RecentScoreService& recent_score_service,
+        services::MessagePresenterService& message_presenter,
         Request& request
     );
 
@@ -49,11 +51,18 @@ private:
     // Users button handlers
     void handle_users_pagination(const dpp::button_click_t& event, const std::string& button_id);
 
+    // Top button handlers
+    void handle_top_pagination(const dpp::button_click_t& event, const std::string& button_id);
+
+    // osu! link handler
+    void handle_osu_link_dm(const dpp::button_click_t& event, const std::string& token);
+
     // Form handlers
     void handle_lb_jump_modal(const dpp::form_submit_t& event);
 
     services::LeaderboardService& leaderboard_service_;
     services::RecentScoreService& recent_score_service_;
+    services::MessagePresenterService& message_presenter_;
     Request& request_;
 };
 
