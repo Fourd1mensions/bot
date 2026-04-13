@@ -26,7 +26,7 @@ private:
         std::string error_message;
     };
 
-    ParsedParams parse(const std::string& content) const;
+    ParsedParams parse(const std::string& content, const std::string& prefix = "!") const;
     int parse_int_param(const std::string& content, const std::string& param) const;
     double parse_ratio(const std::string& content) const;
 };

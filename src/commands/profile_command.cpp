@@ -23,7 +23,7 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> ProfileCommand::get_aliases() const {
-    return {"!osu", "!taiko", "!mania", "!ctb", "!catch"};
+    return {"osu", "taiko", "mania", "ctb", "catch"};
 }
 
 void ProfileCommand::execute_unified(const UnifiedContext& ctx) {
@@ -51,11 +51,12 @@ void ProfileCommand::execute_unified(const UnifiedContext& ctx) {
     } else {
         // Determine mode from command alias
         std::string content = ctx.content;
-        if (content.find("!taiko") != std::string::npos) {
+        std::string p = ctx.prefix;
+        if (content.find(p + "taiko") != std::string::npos) {
             mode = "taiko";
-        } else if (content.find("!mania") != std::string::npos) {
+        } else if (content.find(p + "mania") != std::string::npos) {
             mode = "mania";
-        } else if (content.find("!ctb") != std::string::npos || content.find("!catch") != std::string::npos) {
+        } else if (content.find(p + "ctb") != std::string::npos || content.find(p + "catch") != std::string::npos) {
             mode = "fruits";
         }
 
@@ -343,7 +344,7 @@ void ProfileCommand::show_profile(const UnifiedContext& ctx, const std::string& 
 
     // Add OAuth link suggestion if user is not OAuth linked
     if (suggest_oauth_link) {
-        std::string hint = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        std::string hint = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
         if (msg.content.empty()) {
             msg.content = hint;
         } else {

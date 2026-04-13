@@ -11,7 +11,7 @@
 namespace commands {
 
 std::vector<std::string> BgCommand::get_aliases() const {
-    return {"!bg"};
+    return {"bg"};
 }
 
 void BgCommand::execute_unified(const UnifiedContext& ctx) {

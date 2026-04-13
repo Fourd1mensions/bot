@@ -28,6 +28,11 @@ public:
     void set_services(ServiceContainer* services) { services_ = services; }
 
     /**
+     * Set the command prefix (e.g., "!", "?", ".").
+     */
+    void set_prefix(const std::string& prefix) { prefix_ = prefix; }
+
+    /**
      * Register a command handler.
      * If the command has a slash name, it will also be registered for slash command routing.
      */
@@ -57,6 +62,7 @@ private:
     std::vector<std::unique_ptr<ICommand>> commands_;
     std::unordered_map<std::string, ICommand*> slash_commands_;  // Maps slash name to command
     ServiceContainer* services_ = nullptr;
+    std::string prefix_ = "!";
 };
 
 } // namespace commands

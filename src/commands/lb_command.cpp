@@ -12,22 +12,21 @@
 namespace commands {
 
 std::vector<std::string> LbCommand::get_aliases() const {
-    return {"!lb", "!ди"};
+    return {"lb", "ди"};
 }
 
 bool LbCommand::matches(const CommandContext& ctx) const {
-    auto check_boundary = [](const std::string& str, size_t prefix_len) {
-        if (str.length() == prefix_len) return true;  // Exact match
-        char next = str[prefix_len];
+    auto check_boundary = [](const std::string& str, size_t len) {
+        if (str.length() == len) return true;
+        char next = str[len];
         return next == ' ' || next == ':' || next == '\t';
     };
 
-    // Check ASCII alias in lowercase content
-    if (ctx.content_lower.find("!lb") == 0 && check_boundary(ctx.content_lower, 3)) return true;
-    // Check Cyrillic aliases in original content (tolower doesn't work with UTF-8)
-    // Support both lowercase and uppercase variants
-    // Note: "!ди" is 5 bytes in UTF-8 (1 + 2 + 2)
-    if ((ctx.content.find("!ди") == 0 || ctx.content.find("!ДИ") == 0) && check_boundary(ctx.content, 5)) return true;
+    std::string p = ctx.prefix;
+    if (ctx.content_lower.find(p + "lb") == 0 && check_boundary(ctx.content_lower, p.size() + 2)) return true;
+    // Cyrillic: tolower doesn't work with UTF-8, check both cases
+    std::string cyr_lo = p + "ди", cyr_up = p + "ДИ";
+    if ((ctx.content.find(cyr_lo) == 0 || ctx.content.find(cyr_up) == 0) && check_boundary(ctx.content, cyr_lo.size())) return true;
     return false;
 }
 

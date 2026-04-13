@@ -586,66 +586,67 @@ a.btn:hover{background:#c4b5fd}
 
   // Commands documentation endpoint
   CROW_ROUTE(app, "/osu/commands")
-  ([]() {
+  ([this]() {
     crow::json::wvalue response;
 
     // Create array of commands
+    std::string p = config_ ? config_->command_prefix : "!";
     crow::json::wvalue::list commands_list;
 
     // !rs command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!rs";
-      cmd["aliases"] = crow::json::wvalue::list({"!rs", "!кы"});
+      cmd["name"] = p + "rs";
+      cmd["aliases"] = crow::json::wvalue::list({p + "rs", p + "кы"});
       cmd["description"] = "Show recent or best scores for a player";
-      cmd["usage"] = "!rs[:mode] [user] [-p] [-b] [-i INDEX] [-m MODE]";
+      cmd["usage"] = p + "rs[:mode] [user] [-p] [-b] [-i INDEX] [-m MODE]";
 
       crow::json::wvalue::list params;
 
       crow::json::wvalue p1;
       p1["flag"] = ":mode";
       p1["description"] = "Specify game mode (osu, taiko, catch, mania)";
-      p1["example"] = "!rs:taiko";
+      p1["example"] = p + "rs:taiko";
       params.push_back(std::move(p1));
 
       crow::json::wvalue p2;
       p2["flag"] = "user";
       p2["description"] = "Target user (username, Discord mention, or empty for self)";
-      p2["example"] = "!rs peppy  OR  !rs <@123456789>";
+      p2["example"] = p + "rs peppy  OR  " + p + "rs <@123456789>";
       params.push_back(std::move(p2));
 
       crow::json::wvalue p3;
       p3["flag"] = "-p";
       p3["description"] = "Show only passed scores (exclude fails)";
-      p3["example"] = "!rs -p";
+      p3["example"] = p + "rs -p";
       params.push_back(std::move(p3));
 
       crow::json::wvalue p4;
       p4["flag"] = "-b";
       p4["description"] = "Show best scores (top 100) instead of recent";
-      p4["example"] = "!rs -b";
+      p4["example"] = p + "rs -b";
       params.push_back(std::move(p4));
 
       crow::json::wvalue p5;
       p5["flag"] = "-i INDEX";
       p5["description"] = "Show specific score by index (1-based)";
-      p5["example"] = "!rs -i 5";
+      p5["example"] = p + "rs -i 5";
       params.push_back(std::move(p5));
 
       crow::json::wvalue p6;
       p6["flag"] = "-m MODE";
       p6["description"] = "Override game mode (osu, taiko, catch/fruits, mania)";
-      p6["example"] = "!rs -m taiko";
+      p6["example"] = p + "rs -m taiko";
       params.push_back(std::move(p6));
 
       cmd["parameters"] = std::move(params);
 
       crow::json::wvalue::list examples;
-      examples.push_back("!rs");
-      examples.push_back("!rs -p");
-      examples.push_back("!rs peppy -i 3");
-      examples.push_back("!rs:taiko -b");
-      examples.push_back("!rs <@123456789> -p");
+      examples.push_back(p + "rs");
+      examples.push_back(p + "rs -p");
+      examples.push_back(p + "rs peppy -i 3");
+      examples.push_back(p + "rs:taiko -b");
+      examples.push_back(p + "rs <@123456789> -p");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
@@ -654,25 +655,25 @@ a.btn:hover{background:#c4b5fd}
     // !m / !map command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!m";
-      cmd["aliases"] = crow::json::wvalue::list({"!m", "!map"});
+      cmd["name"] = p + "m";
+      cmd["aliases"] = crow::json::wvalue::list({p + "m", p + "map"});
       cmd["description"] = "Show detailed information about the current beatmap";
-      cmd["usage"] = "!m [+MODS]";
+      cmd["usage"] = p + "m [+MODS]";
 
       crow::json::wvalue::list params;
 
       crow::json::wvalue p1;
       p1["flag"] = "+MODS";
       p1["description"] = "Calculate difficulty with specific mods";
-      p1["example"] = "!m +HDDT";
+      p1["example"] = p + "m +HDDT";
       params.push_back(std::move(p1));
 
       cmd["parameters"] = std::move(params);
 
       crow::json::wvalue::list examples;
-      examples.push_back("!m");
-      examples.push_back("!m +HDDT");
-      examples.push_back("!m +HR");
+      examples.push_back(p + "m");
+      examples.push_back(p + "m +HDDT");
+      examples.push_back(p + "m +HR");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
@@ -681,22 +682,23 @@ a.btn:hover{background:#c4b5fd}
     // !sim command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!sim";
-      cmd["aliases"] = crow::json::wvalue::list({"!sim"});
+      cmd["name"] = p + "sim";
+      cmd["aliases"] = crow::json::wvalue::list({p + "sim"});
       cmd["description"] = "Simulate a score with specific accuracy and parameters";
-      cmd["usage"] = "!sim[:mode] ACCURACY% [+MODS] [-c COMBO] [-n100 X] [-n50 X] [-n0 X] [-r RATIO]";
+      cmd["usage"] = p + "sim[:mode] ACCURACY% [+MODS] [-c COMBO] [-n100 X] [-n50 X] [-n0 X] [-r RATIO]";
 
       crow::json::wvalue::list params;
 
       crow::json::wvalue p1;
       p1["flag"] = ":mode";
       p1["description"] = "Specify game mode (osu, taiko, catch, mania)";
-      p1["example"] = "!sim:taiko";
+      p1["example"] = p + "sim:taiko";
       params.push_back(std::move(p1));
 
       crow::json::wvalue p2;
       p2["flag"] = "ACCURACY%";
       p2["description"] = "Target accuracy (required)";
+
       p2["example"] = "99.5%";
       params.push_back(std::move(p2));
 
@@ -739,11 +741,11 @@ a.btn:hover{background:#c4b5fd}
       cmd["parameters"] = std::move(params);
 
       crow::json::wvalue::list examples;
-      examples.push_back("!sim 99%");
-      examples.push_back("!sim 100% +HDDT");
-      examples.push_back("!sim:taiko 99.5% +HR");
-      examples.push_back("!sim 99% -n100 5 -c 1500");
-      examples.push_back("!sim:mania 98% -r 0.95");
+      examples.push_back(p + "sim 99%");
+      examples.push_back(p + "sim 100% +HDDT");
+      examples.push_back(p + "sim:taiko 99.5% +HR");
+      examples.push_back(p + "sim 99% -n100 5 -c 1500");
+      examples.push_back(p + "sim:mania 98% -r 0.95");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
@@ -752,25 +754,25 @@ a.btn:hover{background:#c4b5fd}
     // !lb command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!lb";
-      cmd["aliases"] = crow::json::wvalue::list({"!lb", "!leaderboard"});
+      cmd["name"] = p + "lb";
+      cmd["aliases"] = crow::json::wvalue::list({p + "lb", p + "leaderboard"});
       cmd["description"] = "Show server leaderboard for current beatmap";
-      cmd["usage"] = "!lb [+MODS]";
+      cmd["usage"] = p + "lb [+MODS]";
 
       crow::json::wvalue::list params;
 
       crow::json::wvalue p1;
       p1["flag"] = "+MODS";
       p1["description"] = "Filter by specific mods";
-      p1["example"] = "!lb +HDDT";
+      p1["example"] = p + "lb +HDDT";
       params.push_back(std::move(p1));
 
       cmd["parameters"] = std::move(params);
 
       crow::json::wvalue::list examples;
-      examples.push_back("!lb");
-      examples.push_back("!lb +HDDT");
-      examples.push_back("!lb +HR");
+      examples.push_back(p + "lb");
+      examples.push_back(p + "lb +HDDT");
+      examples.push_back(p + "lb +HR");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
@@ -779,32 +781,32 @@ a.btn:hover{background:#c4b5fd}
     // !c / !compare command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!c";
-      cmd["aliases"] = crow::json::wvalue::list({"!c", "!compare"});
+      cmd["name"] = p + "c";
+      cmd["aliases"] = crow::json::wvalue::list({p + "c", p + "compare"});
       cmd["description"] = "Show all scores for a player on current beatmap";
-      cmd["usage"] = "!c [user] [+MODS]";
+      cmd["usage"] = p + "c [user] [+MODS]";
 
       crow::json::wvalue::list params;
 
       crow::json::wvalue p1;
       p1["flag"] = "user";
       p1["description"] = "Target user (username, Discord mention, or empty for self)";
-      p1["example"] = "!c peppy  OR  !c <@123456789>";
+      p1["example"] = p + "c peppy  OR  " + p + "c <@123456789>";
       params.push_back(std::move(p1));
 
       crow::json::wvalue p2;
       p2["flag"] = "+MODS";
       p2["description"] = "Filter by specific mods";
-      p2["example"] = "!c +HDDT";
+      p2["example"] = p + "c +HDDT";
       params.push_back(std::move(p2));
 
       cmd["parameters"] = std::move(params);
 
       crow::json::wvalue::list examples;
-      examples.push_back("!c");
-      examples.push_back("!c peppy");
-      examples.push_back("!c +HDDT");
-      examples.push_back("!c <@123456789> +HR");
+      examples.push_back(p + "c");
+      examples.push_back(p + "c peppy");
+      examples.push_back(p + "c +HDDT");
+      examples.push_back(p + "c <@123456789> +HR");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
@@ -813,14 +815,14 @@ a.btn:hover{background:#c4b5fd}
     // !bg command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!bg";
-      cmd["aliases"] = crow::json::wvalue::list({"!bg"});
+      cmd["name"] = p + "bg";
+      cmd["aliases"] = crow::json::wvalue::list({p + "bg"});
       cmd["description"] = "Get background image from current beatmap";
-      cmd["usage"] = "!bg";
+      cmd["usage"] = p + "bg";
       cmd["parameters"] = crow::json::wvalue::list();
 
       crow::json::wvalue::list examples;
-      examples.push_back("!bg");
+      examples.push_back(p + "bg");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
@@ -829,15 +831,15 @@ a.btn:hover{background:#c4b5fd}
     // !song / !audio command
     {
       crow::json::wvalue cmd;
-      cmd["name"] = "!song";
-      cmd["aliases"] = crow::json::wvalue::list({"!song", "!audio"});
+      cmd["name"] = p + "song";
+      cmd["aliases"] = crow::json::wvalue::list({p + "song", p + "audio"});
       cmd["description"] = "Get audio file from current beatmap";
-      cmd["usage"] = "!song";
+      cmd["usage"] = p + "song";
       cmd["parameters"] = crow::json::wvalue::list();
 
       crow::json::wvalue::list examples;
-      examples.push_back("!song");
-      examples.push_back("!audio");
+      examples.push_back(p + "song");
+      examples.push_back(p + "audio");
       cmd["examples"] = std::move(examples);
 
       commands_list.push_back(std::move(cmd));
