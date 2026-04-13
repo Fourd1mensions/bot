@@ -3412,7 +3412,7 @@ p { color: #a0a0ab; margin-bottom: 2rem; }
       spdlog::warn("[ws] Failed to send initial state: {}", e.what());
     }
   })
-  .onclose([this](crow::websocket::connection& conn, const std::string& reason) {
+  .onclose([this](crow::websocket::connection& conn, const std::string& reason, uint16_t) {
     auto* data = static_cast<WsConnectionData*>(conn.userdata());
     if (!data) return;
     {
