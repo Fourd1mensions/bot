@@ -12,6 +12,7 @@
   "EXPIRES_AT": 0,
 
   "_comment3": "Optional fields with defaults - can be omitted or customized",
+  "COMMAND_PREFIX": "!",
   "HTTP_HOST": "127.0.0.1",
   "HTTP_PORT": 8080,
   "PUBLIC_URL": "https://kana.nisemonic.net",

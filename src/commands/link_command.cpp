@@ -12,19 +12,21 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> LinkCommand::get_aliases() const {
-    return {"!link", "!линк"};
+    return {"link", "линк"};
 }
 
 bool LinkCommand::matches(const CommandContext& ctx) const {
-    auto check_boundary = [](const std::string& str, size_t prefix_len) {
-        if (str.length() == prefix_len) return true;
-        char next = str[prefix_len];
+    auto check_boundary = [](const std::string& str, size_t len) {
+        if (str.length() == len) return true;
+        char next = str[len];
         return next == ' ' || next == '\t';
     };
 
-    if (ctx.content_lower.find("!link") == 0 && check_boundary(ctx.content_lower, 5)) return true;
-    // "!линк" is 9 bytes in UTF-8 (1 + 4*2)
-    if ((ctx.content.find("!линк") == 0 || ctx.content.find("!ЛИНК") == 0) && check_boundary(ctx.content, 9)) return true;
+    std::string p = ctx.prefix;
+    if (ctx.content_lower.find(p + "link") == 0 && check_boundary(ctx.content_lower, p.size() + 4)) return true;
+    // Cyrillic: tolower doesn't work with UTF-8, check both cases
+    std::string cyr_lo = p + "линк", cyr_up = p + "ЛИНК";
+    if ((ctx.content.find(cyr_lo) == 0 || ctx.content.find(cyr_up) == 0) && check_boundary(ctx.content, cyr_lo.size())) return true;
     return false;
 }
 

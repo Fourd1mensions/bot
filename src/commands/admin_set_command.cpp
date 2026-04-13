@@ -16,7 +16,7 @@ namespace commands {
 using json = nlohmann::json;
 
 std::vector<std::string> AdminSetCommand::get_aliases() const {
-    return {"!adminset", "!aset"};
+    return {"adminset", "aset"};
 }
 
 void AdminSetCommand::execute_unified(const UnifiedContext& ctx) {
@@ -42,14 +42,14 @@ void AdminSetCommand::execute_unified(const UnifiedContext& ctx) {
     // Parse arguments: !adminset <discord_id_or_mention> <osu_username>
     std::string args = utils::extract_args(ctx.content);
     if (args.empty()) {
-        ctx.reply(":x: Usage: `!adminset <discord_id_or_mention> <osu_username>`");
+        ctx.reply(fmt::format(":x: Usage: `{}adminset <discord_id_or_mention> <osu_username>`", ctx.prefix));
         return;
     }
 
     // Split args into discord_id and osu_username
     size_t space_pos = args.find(' ');
     if (space_pos == std::string::npos) {
-        ctx.reply(":x: Usage: `!adminset <discord_id_or_mention> <osu_username>`");
+        ctx.reply(fmt::format(":x: Usage: `{}adminset <discord_id_or_mention> <osu_username>`", ctx.prefix));
         return;
     }
 
@@ -59,7 +59,7 @@ void AdminSetCommand::execute_unified(const UnifiedContext& ctx) {
     // Trim whitespace from osu_username
     size_t start = osu_username.find_first_not_of(" \t");
     if (start == std::string::npos) {
-        ctx.reply(":x: Usage: `!adminset <discord_id_or_mention> <osu_username>`");
+        ctx.reply(fmt::format(":x: Usage: `{}adminset <discord_id_or_mention> <osu_username>`", ctx.prefix));
         return;
     }
     osu_username = osu_username.substr(start);

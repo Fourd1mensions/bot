@@ -13,7 +13,7 @@
 namespace commands {
 
 std::vector<std::string> AudioCommand::get_aliases() const {
-    return {"!song", "!audio"};
+    return {"song", "audio"};
 }
 
 void AudioCommand::execute_unified(const UnifiedContext& ctx) {

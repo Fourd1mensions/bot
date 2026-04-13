@@ -21,7 +21,7 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> SimCommand::get_aliases() const {
-    return {"!sim"};
+    return {"sim"};
 }
 
 int SimCommand::parse_int_param(const std::string& content, const std::string& param) const {
@@ -67,7 +67,7 @@ double SimCommand::parse_ratio(const std::string& content) const {
     return -1.0;
 }
 
-SimCommand::ParsedParams SimCommand::parse(const std::string& content) const {
+SimCommand::ParsedParams SimCommand::parse(const std::string& content, const std::string& prefix) const {
     ParsedParams result;
 
     // Parse mode (e.g., "!sim:taiko")
@@ -89,14 +89,15 @@ SimCommand::ParsedParams SimCommand::parse(const std::string& content) const {
     size_t percent_pos = content.find('%');
     if (percent_pos == std::string::npos) {
         result.valid = false;
-        result.error_message =
-            "Usage: `!sim[:mode] <accuracy>% [+mods] [-c COMBO] [-n100 X] [-n50 X] [-n0 X] [-r RATIO]`\n"
+        result.error_message = fmt::format(
+            "Usage: `{}sim[:mode] <accuracy>% [+mods] [-c COMBO] [-n100 X] [-n50 X] [-n0 X] [-r RATIO]`\n"
             "Modes: `osu` (default), `taiko`, `catch`, `mania`\n"
             "Examples:\n"
-            "• `!sim 99% +HDDT` - standard osu!\n"
-            "• `!sim:taiko 100% +HR` - taiko mode\n"
-            "• `!sim 100% -n100 5 -c 1500` - 5x100, 1500x combo\n"
-            "• `!sim:mania 99% -r 0.95` - mania with 95% ratio";
+            "• `{}sim 99% +HDDT` - standard osu!\n"
+            "• `{}sim:taiko 100% +HR` - taiko mode\n"
+            "• `{}sim 100% -n100 5 -c 1500` - 5x100, 1500x combo\n"
+            "• `{}sim:mania 99% -r 0.95` - mania with 95% ratio",
+            prefix, prefix, prefix, prefix, prefix);
         return result;
     }
 
@@ -104,7 +105,7 @@ SimCommand::ParsedParams SimCommand::parse(const std::string& content) const {
     size_t start_pos = content.find_first_of("0123456789");
     if (start_pos == std::string::npos || start_pos >= percent_pos) {
         result.valid = false;
-        result.error_message = "Invalid accuracy format. Example: `!sim 99%`";
+        result.error_message = fmt::format("Invalid accuracy format. Example: `{}sim 99%`", prefix);
         return result;
     }
 
@@ -118,7 +119,7 @@ SimCommand::ParsedParams SimCommand::parse(const std::string& content) const {
         }
     } catch (const std::exception&) {
         result.valid = false;
-        result.error_message = "Invalid accuracy value. Example: `!sim 99%`";
+        result.error_message = fmt::format("Invalid accuracy value. Example: `{}sim 99%`", prefix);
         return result;
     }
 
@@ -215,7 +216,7 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
         }
     } else {
         // Parse text command
-        parsed = parse(ctx.content);
+        parsed = parse(ctx.content, ctx.prefix);
         if (!parsed.valid) {
             ctx.reply(parsed.error_message);
             return;

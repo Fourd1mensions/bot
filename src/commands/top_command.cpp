@@ -21,20 +21,21 @@ namespace stdr = std::ranges;
 namespace commands {
 
 std::vector<std::string> TopCommand::get_aliases() const {
-    return {"!top", "!ещз"};  // !ещз is Cyrillic for !top
+    return {"top", "ещз"};
 }
 
 bool TopCommand::matches(const CommandContext& ctx) const {
-    auto check_boundary = [](const std::string& str, size_t prefix_len) {
-        if (str.length() == prefix_len) return true;
-        char next = str[prefix_len];
+    auto check_boundary = [](const std::string& str, size_t len) {
+        if (str.length() == len) return true;
+        char next = str[len];
         return next == ' ' || next == ':' || next == '\t';
     };
 
-    // Check ASCII aliases
-    if (ctx.content_lower.find("!top") == 0 && check_boundary(ctx.content_lower, 4)) return true;
-    // Check Cyrillic alias (!ещз = 8 bytes in UTF-8)
-    if ((ctx.content.find("!ещз") == 0 || ctx.content.find("!ЕЩЗ") == 0) && check_boundary(ctx.content, 8)) return true;
+    std::string p = ctx.prefix;
+    if (ctx.content_lower.find(p + "top") == 0 && check_boundary(ctx.content_lower, p.size() + 3)) return true;
+    // Cyrillic: tolower doesn't work with UTF-8, check both cases
+    std::string cyr_lo = p + "ещз", cyr_up = p + "ЕЩЗ";
+    if ((ctx.content.find(cyr_lo) == 0 || ctx.content.find(cyr_up) == 0) && check_boundary(ctx.content, cyr_lo.size())) return true;
     return false;
 }
 
@@ -443,7 +444,7 @@ void TopCommand::execute_unified(const UnifiedContext& ctx) {
 
     // Add OAuth link suggestion if user is not OAuth linked
     if (suggest_oauth_link) {
-        std::string hint = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        std::string hint = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
         if (msg.content.empty()) {
             msg.content = hint;
         } else {

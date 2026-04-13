@@ -26,12 +26,11 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> CompareCommand::get_aliases() const {
-    return {"!compare", "!c"};
+    return {"compare", "c"};
 }
 
 std::string CompareCommand::parse_params(const std::string& content) const {
-    size_t cmd_start = content.find('!');
-    size_t cmd_end = content.find(' ', cmd_start);
+    size_t cmd_end = content.find(' ');
     if (cmd_end == std::string::npos) {
         cmd_end = content.length();
     }
@@ -346,7 +345,7 @@ void CompareCommand::execute_unified(const UnifiedContext& ctx) {
 
     // Add OAuth link suggestion if user is not OAuth linked
     if (suggest_oauth_link) {
-        std::string hint = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        std::string hint = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
         if (msg.content.empty()) {
             msg.content = hint;
         } else {

@@ -34,6 +34,7 @@ struct Config {
   WebhookConfig webhooks;
   size_t expires_in, expires_at;
   std::string bot_token;  // Discord bot token for API calls
+  std::string command_prefix = "!";  // Prefix for text commands
 };
 
 namespace utils {

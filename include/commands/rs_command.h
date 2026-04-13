@@ -22,7 +22,7 @@ private:
         bool use_best = false;  // true when called as !rb
     };
 
-    ParsedParams parse(const std::string& content) const;
+    ParsedParams parse(const std::string& content, const std::string& prefix = "!") const;
 };
 
 } // namespace commands

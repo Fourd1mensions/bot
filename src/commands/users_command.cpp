@@ -11,7 +11,7 @@
 namespace commands {
 
 std::vector<std::string> UsersCommand::get_aliases() const {
-    return {"!users", "!tracked"};
+    return {"users", "tracked"};
 }
 
 namespace {

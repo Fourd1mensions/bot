@@ -17,7 +17,7 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> MapCommand::get_aliases() const {
-    return {"!map", "!m"};
+    return {"map", "m"};
 }
 
 void MapCommand::execute_unified(const UnifiedContext& ctx) {

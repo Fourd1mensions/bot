@@ -23,6 +23,7 @@ struct UnifiedContext {
     std::string content;          // Original content or constructed args
     std::string content_lower;    // Lowercase content for matching
     ServiceContainer* services;
+    std::string prefix = "!";
 
     // Unified accessors
     dpp::snowflake channel_id() const {
@@ -143,6 +144,7 @@ struct CommandContext {
     std::string content_lower;    // Lowercase content for matching
     std::string args;             // Arguments after command name
     ServiceContainer* services;   // Access to all services
+    std::string prefix = "!";     // Command prefix
 
     // Convert to UnifiedContext
     UnifiedContext to_unified() const {
@@ -150,7 +152,8 @@ struct CommandContext {
             .event = event,
             .content = content,
             .content_lower = content_lower,
-            .services = services
+            .services = services,
+            .prefix = prefix
         };
     }
 };
@@ -164,6 +167,7 @@ struct SlashCommandContext {
     std::string command_name;     // The slash command name (without /)
     std::string args;             // Constructed arguments string from parameters
     ServiceContainer* services;   // Access to all services
+    std::string prefix = "!";    // Command prefix
 
     // Helper to get channel_id consistently
     dpp::snowflake channel_id() const { return event.command.channel_id; }
@@ -180,7 +184,8 @@ struct SlashCommandContext {
             .event = event,
             .content = args,
             .content_lower = content_lower,
-            .services = services
+            .services = services,
+            .prefix = prefix
         };
     }
 };
@@ -209,13 +214,13 @@ public:
      */
     virtual bool matches(const CommandContext& ctx) const {
         for (const auto& alias : get_aliases()) {
-            if (ctx.content_lower.find(alias) == 0) {
-                // Check that after alias there's a space, colon, or end of string
-                size_t alias_len = alias.length();
-                if (ctx.content_lower.length() == alias_len) {
-                    return true;  // Exact match
+            std::string full = ctx.prefix + alias;
+            if (ctx.content_lower.find(full) == 0) {
+                size_t full_len = full.length();
+                if (ctx.content_lower.length() == full_len) {
+                    return true;
                 }
-                char next_char = ctx.content_lower[alias_len];
+                char next_char = ctx.content_lower[full_len];
                 if (next_char == ' ' || next_char == ':' || next_char == '\t') {
                     return true;
                 }
