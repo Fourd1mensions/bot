@@ -1,0 +1,325 @@
+#pragma once
+
+#include <vector>
+#include <string>
+#include <optional>
+#include <dpp/dpp.h>
+#include "services/user_settings_service.h"
+
+// Forward declarations
+class Score;
+class Beatmap;
+struct LeaderboardState;
+struct RecentScoreState;
+struct CompareState;
+struct TopState;
+
+namespace services {
+class EmbedTemplateService;
+}
+
+namespace services {
+
+/**
+ * Data structure for presenting a score in leaderboard/recent views.
+ * Separates presentation data from Score domain object.
+ */
+struct ScorePresentation {
+    size_t rank;              // Position in leaderboard (1-indexed)
+    std::string header;       // "username `123pp` +HDDT" (pre-formatted fallback)
+    std::string body;         // Score details (pre-formatted fallback)
+    double display_pp;        // PP value to show (may be calculated for Loved maps)
+    std::string username;     // For author display
+    uint64_t user_id = 0;     // For avatar URL
+    // Raw fields for template rendering
+    std::string mods;
+    double accuracy = 0.0;
+    int combo = 0;
+    int max_combo = 0;
+    int count_300 = 0;
+    int count_100 = 0;
+    int count_50 = 0;
+    int count_miss = 0;
+    uint64_t total_score = 0;
+    std::string rank_letter;
+    std::string date;         // Relative time string
+};
+
+/**
+ * Difficulty information for embed display.
+ */
+struct DifficultyInfo {
+    float approach_rate = 9.0f;
+    float overall_difficulty = 9.0f;
+    float circle_size = 5.0f;
+    float hp_drain_rate = 5.0f;
+    double star_rating = 0.0;
+    double aim_difficulty = 0.0;
+    double speed_difficulty = 0.0;
+    int max_combo = 0;
+    int total_objects = 0;
+};
+
+/**
+ * PP calculation results for embed display.
+ */
+struct PPInfo {
+    double current_pp = 0.0;
+    double fc_pp = 0.0;
+    double fc_accuracy = 0.0;
+    bool has_fc_pp = false;
+    double aim_pp = 0.0;
+    double speed_pp = 0.0;
+    double accuracy_pp = 0.0;
+};
+
+/**
+ * Pagination state for building navigation buttons.
+ */
+struct PaginationInfo {
+    size_t current = 0;
+    size_t total = 1;
+    bool has_refresh = false;
+    size_t refresh_count = 0;
+};
+
+/**
+ * Map position info for the user's best score on a beatmap.
+ */
+struct MapPositionInfo {
+    int position = 0;      // 0 = not on leaderboard
+    double best_pp = 0.0;  // user's personal best PP on this map
+};
+
+/**
+ * Service responsible for building Discord messages and embeds.
+ * Separates presentation logic from business logic in Bot class.
+ */
+class MessagePresenterService {
+public:
+    MessagePresenterService() = default;
+    ~MessagePresenterService() = default;
+
+    // Disable copy
+    MessagePresenterService(const MessagePresenterService&) = delete;
+    MessagePresenterService& operator=(const MessagePresenterService&) = delete;
+
+    void set_template_service(EmbedTemplateService* service) { template_service_ = service; }
+
+    /**
+     * Build an error message with red embed.
+     * @param error_text The error message to display
+     * @return Discord message with error embed
+     */
+    dpp::message build_error_message(std::string_view error_text) const;
+
+    /**
+     * Build a leaderboard page embed with pagination buttons.
+     * @param beatmap The beatmap being displayed
+     * @param scores_on_page Scores to display on current page
+     * @param footer_values Values for footer template placeholders
+     * @param mods_filter Active mods filter
+     * @param total_pages Total number of pages
+     * @param current_page Current page (0-indexed)
+     * @return Complete Discord message with embed and components
+     */
+    dpp::message build_leaderboard_page(
+        const Beatmap& beatmap,
+        const std::vector<ScorePresentation>& scores_on_page,
+        const std::unordered_map<std::string, std::string>& footer_values,
+        const std::string& mods_filter,
+        size_t total_pages,
+        size_t current_page,
+        dpp::snowflake discord_id = 0
+    ) const;
+
+    /**
+     * Build a recent score page embed with pagination buttons.
+     * @param score The score to display
+     * @param beatmap The beatmap for this score
+     * @param difficulty Difficulty attributes (AR, OD, etc.)
+     * @param pp_info PP breakdown (current PP and optional FC PP)
+     * @param pagination Pagination state
+     * @param score_type "recent" or "best"
+     * @param completion_percent Map completion percentage (100.0 if FC)
+     * @param modded_bpm BPM adjusted for speed mods
+     * @param modded_length Length in seconds adjusted for speed mods
+     * @return Complete Discord message with embed and components
+     */
+    dpp::message build_recent_score_page(
+        const Score& score,
+        const Beatmap& beatmap,
+        const DifficultyInfo& difficulty,
+        const PPInfo& pp_info,
+        const PaginationInfo& pagination,
+        const std::string& score_type,
+        float completion_percent,
+        float modded_bpm,
+        uint32_t modded_length,
+        EmbedPreset preset = EmbedPreset::Classic,
+        int try_number = 0,
+        const MapPositionInfo& map_position = {},
+        dpp::snowflake discord_id = 0
+    ) const;
+
+    /**
+     * Build a beatmap info embed (!map command).
+     * @param beatmap The beatmap to display
+     * @param difficulty Difficulty attributes
+     * @param pp_values PP values for 90%, 95%, 99%, 100% accuracy
+     * @param mods Active mods
+     * @param beatmapset_id Beatmapset ID for download links
+     * @param modded_bpm BPM adjusted for speed mods (DT/HT)
+     * @param modded_length Length in seconds adjusted for speed mods
+     * @return Complete Discord message with embed
+     */
+    dpp::message build_map_info(
+        const Beatmap& beatmap,
+        const DifficultyInfo& difficulty,
+        const std::vector<double>& pp_values,
+        const std::string& mods,
+        uint32_t beatmapset_id,
+        float modded_bpm,
+        uint32_t modded_length,
+        EmbedPreset preset = EmbedPreset::Classic,
+        dpp::snowflake discord_id = 0
+    ) const;
+
+    /**
+     * Build a background image embed (!bg command).
+     * @param beatmap The beatmap
+     * @param bg_url URL of the background image
+     * @param source Source indicator (mirror name or "cached")
+     * @return Complete Discord message with embed
+     */
+    dpp::message build_background(
+        const Beatmap& beatmap,
+        const std::string& bg_url,
+        const std::string& source
+    ) const;
+
+    /**
+     * Build an audio download embed (!song command).
+     * @param beatmap The beatmap
+     * @param audio_url URL of the audio file
+     * @param source Source indicator (mirror name or "cached")
+     * @return Complete Discord message with embed
+     */
+    dpp::message build_audio(
+        const Beatmap& beatmap,
+        const std::string& audio_url,
+        const std::string& source
+    ) const;
+
+    /**
+     * Build an audio message for direct file attachment (!song command).
+     * @param beatmap The beatmap
+     * @param filename The audio filename
+     * @param source Source indicator (mirror name or "cached")
+     * @return Complete Discord message with embed (file must be added separately)
+     */
+    dpp::message build_audio_with_attachment(
+        const Beatmap& beatmap,
+        const std::string& filename,
+        const std::string& source
+    ) const;
+
+    /**
+     * Build a compare scores embed page from CompareState.
+     * @param state The compare state with all scores
+     * @return Complete Discord message with embed and pagination buttons
+     */
+    dpp::message build_compare_page(const CompareState& state) const;
+
+    /**
+     * Build a top scores embed page from TopState.
+     * @param state The top state with all scores
+     * @return Complete Discord message with embed and pagination buttons
+     */
+    dpp::message build_top_page(const TopState& state) const;
+
+    /**
+     * Build pagination button row.
+     * @param prefix Button ID prefix ("lb_" or "rs_")
+     * @param current Current page/index (0-indexed)
+     * @param total Total pages/items
+     * @param has_refresh Whether to show refresh button at index 0
+     * @return Action row component with navigation buttons
+     */
+    dpp::component build_pagination_row(
+        const std::string& prefix,
+        size_t current,
+        size_t total,
+        bool has_refresh = false
+    ) const;
+
+    /**
+     * Get rank emoji for a given rank string.
+     * @param rank Rank string (F, D, C, B, A, S, SH, X, XH)
+     * @return Discord emoji string
+     */
+    std::string get_rank_emoji(const std::string& rank) const;
+
+    /**
+     * Get embed color based on star rating.
+     * @param star_rating The star rating
+     * @return Color value
+     */
+    uint32_t get_star_rating_color(double star_rating) const;
+
+    /**
+     * Data for caching recent score page content.
+     */
+    struct RecentScoreCacheData {
+        std::string content;      // message text above the embed
+        std::string title;
+        std::string url;
+        std::string description;
+        std::string thumbnail;
+        std::string beatmap_info;
+        std::string footer;
+        std::string footer_icon;  // URL for small icon left of footer
+        time_t timestamp;
+        std::string username;
+        uint64_t user_id;
+        EmbedPreset preset = EmbedPreset::Classic;
+        uint32_t color = 0x7c4dff;  // embed color (default: viola_purple)
+    };
+
+    /**
+     * Build a recent score page from cached data.
+     * Used for fast navigation without re-parsing the beatmap.
+     * @param cache_data Previously cached page data
+     * @param pagination Current pagination state
+     * @return Complete Discord message with embed and components
+     */
+    dpp::message build_from_cache_data(
+        const RecentScoreCacheData& cache_data,
+        const PaginationInfo& pagination
+    ) const;
+
+    /**
+     * Build cache data for recent score page (avoids duplicating presenter logic).
+     * @return Structured data suitable for JSON serialization
+     */
+    RecentScoreCacheData build_recent_score_cache_data(
+        const Score& score,
+        const Beatmap& beatmap,
+        const DifficultyInfo& difficulty,
+        const PPInfo& pp_info,
+        const PaginationInfo& pagination,
+        const std::string& score_type,
+        float completion_percent,
+        float modded_bpm,
+        uint32_t modded_length,
+        EmbedPreset preset = EmbedPreset::Classic,
+        int try_number = 0,
+        const MapPositionInfo& map_position = {},
+        dpp::snowflake discord_id = 0
+    ) const;
+
+private:
+    EmbedTemplateService* template_service_ = nullptr;
+};
+
+} // namespace services

@@ -26,6 +26,8 @@ endif()
 
 # Options
 option(CMAKE_EXPORT_COMPILE_COMMANDS "" ON)
+option(ENABLE_LEMMATIZER "" ON)
+option(USE_ROSU_PP_SERVICE "" ON)
 
 # Variables
 set(CMAKE_BUILD_TYPE Release)
@@ -33,12 +35,103 @@ set(CMAKE_BUILD_TYPE Release)
 set(DPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
 
+# gRPC settings
+set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "" FORCE)
+set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+
 project(bot)
+
+# Setup gRPC proto generation
+if(USE_ROSU_PP_SERVICE)
+    set(PP_PROTO_PATH "${CMAKE_SOURCE_DIR}/proto")
+    set(PP_PROTO_FILE "${PP_PROTO_PATH}/pp.proto")
+    set(PP_PROTO_GEN_DIR "${CMAKE_BINARY_DIR}/proto_gen")
+    file(MAKE_DIRECTORY ${PP_PROTO_GEN_DIR})
+
+    # Get paths to protoc and grpc_cpp_plugin
+    set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
+    set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+
+    # Generated files
+    set(PP_PROTO_SRCS "${PP_PROTO_GEN_DIR}/pp.pb.cc")
+    set(PP_PROTO_HDRS "${PP_PROTO_GEN_DIR}/pp.pb.h")
+    set(PP_GRPC_SRCS "${PP_PROTO_GEN_DIR}/pp.grpc.pb.cc")
+    set(PP_GRPC_HDRS "${PP_PROTO_GEN_DIR}/pp.grpc.pb.h")
+
+    # Custom command to generate proto files
+    add_custom_command(
+        OUTPUT "${PP_PROTO_SRCS}" "${PP_PROTO_HDRS}" "${PP_GRPC_SRCS}" "${PP_GRPC_HDRS}"
+        COMMAND ${_PROTOBUF_PROTOC}
+        ARGS --grpc_out "${PP_PROTO_GEN_DIR}"
+             --cpp_out "${PP_PROTO_GEN_DIR}"
+             -I "${PP_PROTO_PATH}"
+             --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
+             "${PP_PROTO_FILE}"
+        DEPENDS "${PP_PROTO_FILE}"
+        COMMENT "Generating gRPC C++ files from pp.proto"
+    )
+
+    # Create library target for generated proto files
+    add_library(pp_proto STATIC ${PP_PROTO_SRCS} ${PP_GRPC_SRCS})
+    target_link_libraries(pp_proto PUBLIC grpc++ protobuf::libprotobuf)
+    target_include_directories(pp_proto PUBLIC ${PP_PROTO_GEN_DIR})
+    set_target_properties(pp_proto PROPERTIES CXX_STANDARD 17)
+endif()
+
+# Setup Python lemmatizer service if enabled
+if(ENABLE_LEMMATIZER)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        set(LEMMATIZER_VENV_DIR "${CMAKE_SOURCE_DIR}/scripts/venv")
+        set(LEMMATIZER_VENV_PYTHON "${LEMMATIZER_VENV_DIR}/bin/python3")
+
+        # Create venv and install pymorphy2 if not exists
+        if(NOT EXISTS "${LEMMATIZER_VENV_PYTHON}")
+            message(STATUS "Creating Python venv for lemmatizer...")
+            execute_process(
+                COMMAND ${Python3_EXECUTABLE} -m venv "${LEMMATIZER_VENV_DIR}"
+                RESULT_VARIABLE VENV_RESULT
+            )
+            if(VENV_RESULT EQUAL 0)
+                message(STATUS "Installing pymorphy3...")
+                execute_process(
+                    COMMAND "${LEMMATIZER_VENV_DIR}/bin/pip" install pymorphy3
+                    RESULT_VARIABLE PIP_RESULT
+                )
+                if(PIP_RESULT EQUAL 0)
+                    message(STATUS "Lemmatizer setup complete: ${LEMMATIZER_VENV_DIR}")
+                else()
+                    message(WARNING "Failed to install pymorphy3. Lemmatizer will not work.")
+                endif()
+            else()
+                message(WARNING "Failed to create Python venv. Lemmatizer will not work.")
+            endif()
+        else()
+            message(STATUS "Lemmatizer venv already exists: ${LEMMATIZER_VENV_DIR}")
+        endif()
+    else()
+        message(WARNING "Python3 not found. Lemmatizer will not be available.")
+    endif()
+endif()
 
 # Packages
 find_package(Threads REQUIRED)
 
 find_package(OpenSSL REQUIRED)
+
+find_package(libzip REQUIRED)
+
+find_package(PkgConfig REQUIRED)
 
 include(FetchContent)
 
@@ -82,14 +175,88 @@ FetchContent_Declare(cpr
 )
 FetchContent_MakeAvailable(cpr)
 
+message(STATUS "Fetching crow (v1.2.0)...")
+FetchContent_Declare(crow
+	GIT_REPOSITORY
+		"https://github.com/CrowCpp/Crow.git"
+	GIT_TAG
+		v1.2.0
+)
+FetchContent_MakeAvailable(crow)
+
+message(STATUS "Fetching pqxx (7.9.2)...")
+FetchContent_Declare(pqxx
+	GIT_REPOSITORY
+		"https://github.com/jtv/libpqxx.git"
+	GIT_TAG
+		7.9.2
+)
+FetchContent_MakeAvailable(pqxx)
+
+message(STATUS "Fetching grpc (v1.68.0)...")
+FetchContent_Declare(grpc
+	GIT_REPOSITORY
+		"https://github.com/grpc/grpc.git"
+	GIT_TAG
+		v1.68.0
+)
+FetchContent_MakeAvailable(grpc)
+
 # Target: discord-bot
+set(CMKR_TARGET discord-bot)
+pkg_check_modules(LIBMEMCACHED REQUIRED libmemcached)
+
 set(discord-bot_SOURCES
 	cmake.toml
+	"src/beatmap_downloader.cpp"
 	"src/bot.cpp"
+	"src/cache.cpp"
+	"src/commands/admin_set_command.cpp"
+	"src/commands/admin_unset_command.cpp"
+	"src/commands/audio_command.cpp"
+	"src/commands/bg_command.cpp"
+	"src/commands/command_router.cpp"
+	"src/commands/compare_command.cpp"
+	"src/commands/lb_command.cpp"
+	"src/commands/link_command.cpp"
+	"src/commands/map_command.cpp"
+	"src/commands/osc_command.cpp"
+	"src/commands/profile_command.cpp"
+	"src/commands/rs_command.cpp"
+	"src/commands/settings_command.cpp"
+	"src/commands/sim_command.cpp"
+	"src/commands/top_command.cpp"
+	"src/commands/users_command.cpp"
+	"src/database.cpp"
+	"src/handlers/button_handler.cpp"
+	"src/handlers/member_handler.cpp"
+	"src/handlers/message_handler.cpp"
+	"src/handlers/ready_handler.cpp"
+	"src/handlers/slash_command_handler.cpp"
+	"src/http_server.cpp"
 	"src/main.cpp"
 	"src/message_builder.cpp"
+	"src/migration.cpp"
 	"src/osu.cpp"
 	"src/requests.cpp"
+	"src/services/beatmap_cache_service.cpp"
+	"src/services/beatmap_extract_service.cpp"
+	"src/services/beatmap_performance_service.cpp"
+	"src/services/beatmap_resolver_service.cpp"
+	"src/services/chat_context_service.cpp"
+	"src/services/command_params_service.cpp"
+	"src/services/embed_template_service.cpp"
+	"src/services/leaderboard_service.cpp"
+	"src/services/message_crawler_service.cpp"
+	"src/services/message_presenter_service.cpp"
+	"src/services/music_player_service.cpp"
+	"src/services/pagination_service.cpp"
+	"src/services/recent_score_service.cpp"
+	"src/services/rosu_pp_client.cpp"
+	"src/services/user_mapping_service.cpp"
+	"src/services/user_resolver_service.cpp"
+	"src/services/user_settings_service.cpp"
+	"src/services/webhook_service.cpp"
 	"src/utils.cpp"
 )
 
@@ -115,9 +282,22 @@ target_link_libraries(discord-bot PRIVATE
 	cpr::cpr
 	dpp
 	tbb
+	Crow::Crow
+	libzip::zip
+	pqxx
 )
 
 get_directory_property(CMKR_VS_STARTUP_PROJECT DIRECTORY ${PROJECT_SOURCE_DIR} DEFINITION VS_STARTUP_PROJECT)
 if(NOT CMKR_VS_STARTUP_PROJECT)
 	set_property(DIRECTORY ${PROJECT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT discord-bot)
+endif()
+
+target_link_libraries(discord-bot PRIVATE ${LIBMEMCACHED_LIBRARIES})
+target_include_directories(discord-bot PRIVATE ${LIBMEMCACHED_INCLUDE_DIRS})
+target_compile_options(discord-bot PRIVATE ${LIBMEMCACHED_CFLAGS_OTHER})
+
+# Link gRPC proto library if enabled
+if(USE_ROSU_PP_SERVICE)
+    target_link_libraries(discord-bot PRIVATE pp_proto)
+    target_compile_definitions(discord-bot PRIVATE USE_ROSU_PP_SERVICE=1)
 endif()

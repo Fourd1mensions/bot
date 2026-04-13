@@ -3,11 +3,43 @@
 #include <tbb/tbb.h>
 #include <random>
 #include <unordered_map>
+#include <memory>
+#include <chrono>
 
 #include <osu.h>
 #include <requests.h>
+#include <http_server.h>
+#include <beatmap_downloader.h>
+#include <services/chat_context_service.h>
+#include <services/user_mapping_service.h>
+#include <services/beatmap_resolver_service.h>
+#include <services/message_presenter_service.h>
+#include <services/beatmap_performance_service.h>
+#include <services/command_params_service.h>
+#include <services/user_resolver_service.h>
+#include <services/beatmap_cache_service.h>
+#include <services/recent_score_service.h>
+#include <services/leaderboard_service.h>
+#include <services/beatmap_extract_service.h>
+#include <services/webhook_service.h>
+#include <services/user_settings_service.h>
+#include <services/embed_template_service.h>
+#include <services/message_crawler_service.h>
+#include <services/music_player_service.h>
 
 #include <dpp/dpp.h>
+#include <state/session_state.h>
+#include <commands/command_router.h>
+#include <services/service_container.h>
+
+// Forward declare handlers
+namespace handlers {
+class ButtonHandler;
+class SlashCommandHandler;
+class MessageHandler;
+class MemberHandler;
+class ReadyHandler;
+}
 
 class Random {
 private:
@@ -16,77 +48,77 @@ private:
 
 public:
   template <typename T>
-  T get_real(T min, T max);
+  T get_real(T min, T max) {
+    static_assert(std::is_floating_point<T>::value, "Type must be a floating-point type");
+    std::uniform_real_distribution<> distr(min, max);
+    return distr(_gen);
+  }
+
   template <typename T>
-  T    get_int(T min, T max);
-  bool get_bool();
+  T get_int(T min, T max) {
+    static_assert(std::is_integral<T>::value, "Type must be an integral type");
+    std::uniform_int_distribution<> distr(min, max);
+    return distr(_gen);
+  }
+
+  bool get_bool() {
+    std::bernoulli_distribution distr(0.5);
+    return distr(_gen);
+  }
 
   Random() : _rd(), _gen(_rd()) {}
 };
 
 using snowflake_string_map = std::unordered_map<dpp::snowflake, std::string>;
 
-struct LeaderboardState {
-  std::vector<Score> scores;
-  Beatmap beatmap;
-  std::string mods_filter;
-  size_t current_page;
-  size_t total_pages;
-
-  LeaderboardState() : current_page(0), total_pages(0) {}
-  LeaderboardState(std::vector<Score> s, Beatmap b, size_t page = 0, std::string mods = "")
-    : scores(std::move(s)), beatmap(std::move(b)), mods_filter(std::move(mods)), current_page(page) {
-    constexpr size_t SCORES_PER_PAGE = 5;
-    total_pages = (scores.size() + SCORES_PER_PAGE - 1) / SCORES_PER_PAGE;
-    if (total_pages == 0) total_pages = 1;
-  }
-};
-
 class Bot {
 private:
-  bool                  give_autorole = true;
-
   dpp::cluster          bot;
-  dpp::snowflake        guild_id,
-                        autorole_id;
 
   Random                rand;
   Request               request;
   Config                config;
+  std::unique_ptr<HttpServer> http_server;
+  BeatmapDownloader     beatmap_downloader;
 
-  std::mutex            mutex;
-  std::mutex            lb_states_mutex;
   tbb::task_arena       arena;
 
-  // Contains channel_id : {message_id : beatmap_id}
-  std::unordered_map<dpp::snowflake, std::pair<dpp::snowflake, std::string>> chat_map;
+  // Services
+  services::WebhookService            webhook_service;
+  services::ChatContextService        chat_context_service;
+  services::UserMappingService        user_mapping_service;
+  services::BeatmapResolverService    beatmap_resolver_service;
+  services::MessagePresenterService   message_presenter;
+  services::BeatmapPerformanceService performance_service;
+  services::CommandParamsService      command_params_service;
+  services::UserResolverService       user_resolver_service;
+  std::unique_ptr<services::BeatmapCacheService> beatmap_cache_service;
+  std::unique_ptr<services::RecentScoreService> recent_score_service;
+  std::unique_ptr<services::LeaderboardService> leaderboard_service;
+  std::unique_ptr<services::BeatmapExtractService> beatmap_extract_service;
+  services::UserSettingsService        user_settings_service;
+  services::EmbedTemplateService       embed_template_service;
+  std::unique_ptr<services::MessageCrawlerService> message_crawler_service;
+  std::unique_ptr<services::MusicPlayerService> music_player_service;
 
-  // Contains discord_member_id: osu_user_id. Loads from map.json on bot start, filled via slashcommand /set
-  snowflake_string_map  disid_osuid_map;
+  // Event handlers
+  std::unique_ptr<handlers::ButtonHandler> button_handler;
+  std::unique_ptr<handlers::SlashCommandHandler> slash_command_handler;
+  std::unique_ptr<handlers::MessageHandler> message_handler;
+  std::unique_ptr<handlers::MemberHandler> member_handler;
+  std::unique_ptr<handlers::ReadyHandler> ready_handler;
 
-  // Stores leaderboard state by message ID for pagination (protected by lb_states_mutex)
-  std::unordered_map<dpp::snowflake, LeaderboardState> leaderboard_states;
+  // Command routing
+  commands::CommandRouter             command_router;
+  std::unique_ptr<ServiceContainer>   service_container;
 
-  void                  update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id);
-  dpp::message          build_lb_page(const LeaderboardState& state, const std::string& mods_filter = "");
-  void                  invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id);
-  bool                  is_admin(const std::string& user_id) const;
-
-  // TODO: delete all this shit
- void                  create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter = "");
-  // TODO: check guild members 
-
-  // Handle events
-
-  void button_click_event(const dpp::button_click_t& event);
-  void form_submit_event(const dpp::form_submit_t& event);
-  void message_create_event(const dpp::message_create_t& event);
-  void message_update_event(const dpp::message_update_t& event);
-  void member_add_event(const dpp::guild_member_add_t& event);
-  void member_remove_event(const dpp::guild_member_remove_t& event);
-  void slashcommand_event(const dpp::slashcommand_t& event);
-  void ready_event(const dpp::ready_t& event, bool);
+  // Register text commands with the router
+  void                  register_commands();
 
 public:
   Bot(const std::string& token, bool delete_commands);
+  ~Bot();  // Destructor defined in bot.cpp for unique_ptr with forward declarations
+  void start();
+  void shutdown();
+
 };

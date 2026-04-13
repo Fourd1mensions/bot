@@ -8,7 +8,11 @@ void Score::from_json(const json& j) {
     if (j.contains("mods") && j["mods"].is_array()) {
       const json& mods_j = j.at("mods");
       for (const auto& mod : mods_j) {
-        mods += mod.get<std::string>();
+        if (mod.is_string()) {
+          mods += mod.get<std::string>();
+        } else if (mod.is_object() && mod.contains("acronym")) {
+          mods += mod.at("acronym").get<std::string>();
+        }
       }
     }
     if (mods.empty())
@@ -22,18 +26,61 @@ void Score::from_json(const json& j) {
     created_at          = score_j.value("created_at", "");
     max_combo           = score_j.value("max_combo", 0);
     user_id             = score_j.value("user_id", 0);
+    passed              = score_j.value("passed", true);
 
     pp        = !score_j["pp"].is_null() ? score_j.value("pp", 0.0) : 0.0;
     username  = score_j.contains("user") ? score_j.at("user").value("username", "") : "";
 
-    const auto& stat_j = score_j.at("statistics");
-    count_miss = stat_j.value("count_miss", 0);
-    count_50   = stat_j.value("count_50", 0);
-    count_100  = stat_j.value("count_100", 0);
-    count_300  = stat_j.value("count_300", 0);
+    // Parse beatmap info from nested beatmap/beatmapset object
+    if (score_j.contains("beatmap")) {
+      const auto& bm = score_j.at("beatmap");
+      beatmap_id = bm.value("id", 0);
+      beatmap_version = bm.value("version", "");
+      beatmap_max_combo = bm.value("max_combo", 0);
 
-    from_json_mods(score_j);
+      // Parse beatmapset info
+      if (bm.contains("beatmapset")) {
+        const auto& bms = bm.at("beatmapset");
+        beatmapset_id = bms.value("id", 0);
+        beatmap_title = bms.value("title", "");
+        beatmap_artist = bms.value("artist", "");
+      } else if (score_j.contains("beatmapset")) {
+        const auto& bms = score_j.at("beatmapset");
+        beatmapset_id = bms.value("id", 0);
+        beatmap_title = bms.value("title", "");
+        beatmap_artist = bms.value("artist", "");
+      }
+    } else {
+      beatmap_id = score_j.value("beatmap_id", 0);
+    }
+
+    if (score_j.contains("statistics") && score_j["statistics"].is_object()) {
+      const auto& stat_j = score_j.at("statistics");
+      auto safe_get = [&](const char* key) -> uint32_t {
+        return stat_j.contains(key) && !stat_j[key].is_null() ? stat_j[key].get<uint32_t>() : 0;
+      };
+      // Support both old (count_300) and new lazer (great) field names
+      count_300  = safe_get("count_300")  + safe_get("great");
+      count_100  = safe_get("count_100")  + safe_get("ok");
+      count_50   = safe_get("count_50")   + safe_get("meh");
+      count_miss = safe_get("count_miss") + safe_get("miss");
+    } else {
+      count_miss = count_50 = count_100 = count_300 = 0;
+    }
+
+    mode = score_j.value("mode", "osu");
+
+    // Parse weight (only present in best scores responses)
+    if (score_j.contains("weight") && score_j["weight"].is_object()) {
+      weight_percentage = score_j["weight"].value("percentage", 0.0f);
+      weight_pp = score_j["weight"].value("pp", 0.0f);
+    }
+
+    // Parse lazer flag (build_id present = lazer score)
+    set_on_lazer = score_j.contains("build_id") && !score_j["build_id"].is_null();
+
     is_empty = false;
+    from_json_mods(score_j);
   } catch (const json::exception& e) { spdlog::error("Failed to parse score: {}", e.what()); }
 }
 
@@ -110,12 +157,33 @@ void Beatmap::from_json(const json& j) {
     beatmap_id        = j.at("id").get<int>();
     beatmapset_id     = j.at("beatmapset_id").get<int>();
     difficulty_rating = j.at("difficulty_rating").get<double>();
-    max_combo         = j.at("max_combo").get<int>();
+    max_combo         = j.value("max_combo", 0);
+    bpm               = j.value("bpm", 0.0);
+    total_length      = j.value("total_length", 0);
+    mode              = j.value("mode", "osu"); // Default to osu if not specified
     artist            = j.at("beatmapset").at("artist").get<std::string>();
     title             = j.at("beatmapset").at("title").get<std::string>();
     version           = j.at("version").get<std::string>();
+    creator           = j.at("beatmapset").value("creator", "");
     beatmap_url       = j.at("url").get<std::string>();
-    image_url         = j.at("beatmapset").at("covers").at("list").get<std::string>();
+    uint32_t set_id   = j.at("beatmapset").at("id").get<uint32_t>();
+    thumbnail_url     = fmt::format("https://b.ppy.sh/thumb/{}l.jpg", set_id);
+    image_url         = j.at("beatmapset").at("covers").at("slimcover").get<std::string>();
+
+    // Parse difficulty attributes
+    ar = j.value("ar", 0.0f);
+    od = j.value("accuracy", 0.0f);  // osu! API uses "accuracy" for OD
+    cs = j.value("cs", 0.0f);
+    hp = j.value("drain", 0.0f);     // osu! API uses "drain" for HP
+
+    // Parse ranked status - can be in beatmap or beatmapset
+    if (j.contains("ranked")) {
+      status = static_cast<BeatmapStatus>(j["ranked"].get<int>());
+    } else if (j.contains("beatmapset") && j["beatmapset"].contains("ranked")) {
+      status = static_cast<BeatmapStatus>(j["beatmapset"]["ranked"].get<int>());
+    } else {
+      status = BeatmapStatus::Pending;
+    }
   } catch (json::exception e) { spdlog::error("Failed to parse beatmap: {}", e.what()); }
 }
 
@@ -128,12 +196,28 @@ std::string Beatmap::get_beatmap_url() const {
   return beatmap_url;
 }
 
+std::string Beatmap::get_thumbnail_url() const {
+  return thumbnail_url;
+}
+
 std::string Beatmap::get_image_url() const {
   return image_url;
 }
 
+std::string Beatmap::get_mode() const {
+  return mode;
+}
+
 uint32_t Beatmap::get_max_combo() const {
   return max_combo;
+}
+
+uint32_t Beatmap::get_beatmap_id() const {
+  return beatmap_id;
+}
+
+uint32_t Beatmap::get_beatmapset_id() const {
+  return beatmapset_id;
 }
 
 void Beatmap::set_modded_attributes(const json& attributes_json) {

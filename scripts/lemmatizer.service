@@ -1,0 +1,24 @@
+[Unit]
+Description=Pymorphy2 Lemmatizer Service
+After=network.target
+
+[Service]
+Type=simple
+User=nisemonic
+WorkingDirectory=/home/nisemonic/patchouli/bot/scripts
+ExecStart=/home/nisemonic/patchouli/bot/scripts/venv/bin/python3 /home/nisemonic/patchouli/bot/scripts/lemmatizer_service.py --socket /tmp/lemmatizer.sock
+Restart=on-failure
+RestartSec=5
+
+# Cleanup socket on stop
+ExecStopPost=/bin/rm -f /tmp/lemmatizer.sock
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=false
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

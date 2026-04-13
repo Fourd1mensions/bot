@@ -3,10 +3,36 @@
 #include <bot.h>
 #include <requests.h>
 #include <utils.h>
+#include <database.h>
+#include <cache.h>
+
+// Commands
+#include <commands/lb_command.h>
+#include <commands/rs_command.h>
+#include <commands/bg_command.h>
+#include <commands/audio_command.h>
+#include <commands/map_command.h>
+#include <commands/compare_command.h>
+#include <commands/sim_command.h>
+#include <commands/users_command.h>
+#include <commands/admin_set_command.h>
+#include <commands/admin_unset_command.h>
+#include <commands/settings_command.h>
+#include <commands/osc_command.h>
+#include <commands/profile_command.h>
+#include <commands/top_command.h>
+#include <commands/link_command.h>
+
+// Handlers
+#include <handlers/button_handler.h>
+#include <handlers/slash_command_handler.h>
+#include <handlers/message_handler.h>
+#include <handlers/member_handler.h>
+#include <handlers/ready_handler.h>
 
 #include <algorithm>
 #include <cstdlib>
-#include <regex>
+#include <fstream>
 #include <thread>
 #include <type_traits>
 
@@ -15,752 +41,13 @@
 
 namespace stdr = std::ranges;
 
-template <typename T>
-T Random::get_real(T min, T max) {
-  static_assert(std::is_floating_point<T>::value, "Type must be a floating-point type");
-  std::uniform_real_distribution<> distr(min, max);
-  return distr(_gen);
-}
-
-template <typename T>
-T Random::get_int(T min, T max) {
-  static_assert(std::is_integral<T>::value, "Type must be an integral type");
-  std::uniform_int_distribution<> distr(min, max);
-  return distr(_gen);
-}
-
-bool Random::get_bool() {
-  std::bernoulli_distribution distr(0.5);
-  return distr(_gen);
-}
-
-bool Bot::is_admin(const std::string& user_id) const {
-  return std::find(config.admin_users.begin(), config.admin_users.end(), user_id) != config.admin_users.end();
-}
-
-void Bot::update_chat_map(const std::string& msg, const dpp::snowflake& channel_id, const dpp::snowflake& msg_id) {
-  std::regex url_reg(R"(https:\/\/osu\.ppy\.sh\/(beatmapsets\/\d+\/?#(?:osu|taiko|fruits|mania)\/|beatmaps\/|b\/)(\d+))");
-  std::smatch m;
-
-  if (std::regex_search(msg, m, url_reg) && m.size() > 2) {
-    auto& p = chat_map[channel_id];
-    p.first = msg_id;
-    p.second = m.str(2);
-
-    // Save chat_map to file for persistence (channel_id -> beatmap_id)
-    std::unordered_map<std::string, std::string> persist_map;
-    for (const auto& entry : chat_map) {
-      persist_map[entry.first.str()] = entry.second.second;
-    }
-    utils::map_to_file(persist_map, "chat_map.json");
-  }
-}
-
-dpp::message Bot::build_lb_page(const LeaderboardState& state, const std::string& mods_filter) {
-  constexpr size_t SCORES_PER_PAGE = 5;
-
-  size_t start = state.current_page * SCORES_PER_PAGE;
-  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
-  size_t scores_on_page = end - start;
-
-  // Use mods_filter from state if available, otherwise use parameter
-  const std::string& active_mods = state.mods_filter.empty() ? mods_filter : state.mods_filter;
-
-  std::string title = state.beatmap.to_string();
-  if (!active_mods.empty()) {
-    title += fmt::format(" +{}", active_mods);
-  }
-
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(title)
-    .set_url(state.beatmap.get_beatmap_url())
-    .set_thumbnail(state.beatmap.get_image_url())
-    .set_footer(dpp::embed_footer().set_text(
-      fmt::format("Page {}/{} • {}/{} {} shown{}",
-        state.current_page + 1,
-        state.total_pages,
-        scores_on_page,
-        state.scores.size(),
-        scores_on_page == 1 ? "score" : "scores",
-        active_mods.empty() ? "" : fmt::format(" • Filter: +{}", active_mods))
-    ));
-
-  for (size_t i = start; i < end; i++) {
-    dpp::embed_field field;
-    field.name      = fmt::format("{}) {}", i + 1, state.scores[i].get_header());
-    field.value     = state.scores[i].get_body(state.beatmap.get_max_combo());
-    field.is_inline = false;
-    embed.fields.push_back(field);
-  }
-
-  dpp::message msg;
-  msg.add_embed(embed);
-
-  // Add pagination buttons if there's more than one page
-  if (state.total_pages > 1) {
-    dpp::component action_row;
-    action_row.set_type(dpp::cot_action_row);
-
-    dpp::component prev_button;
-    prev_button.set_type(dpp::cot_button)
-      .set_id("lb_prev")
-      .set_style(dpp::cos_primary)
-      .set_emoji("⬅️")
-      .set_disabled(state.current_page == 0);
-
-    dpp::component page_indicator;
-    page_indicator.set_type(dpp::cot_button)
-      .set_id("lb_jump")
-      .set_label(fmt::format("{}/{}", state.current_page + 1, state.total_pages))
-      .set_style(dpp::cos_secondary);
-
-    dpp::component next_button;
-    next_button.set_type(dpp::cot_button)
-      .set_id("lb_next")
-      .set_style(dpp::cos_primary)
-      .set_emoji("➡️")
-      .set_disabled(state.current_page >= state.total_pages - 1);
-
-    action_row.add_component(prev_button);
-    action_row.add_component(page_indicator);
-    action_row.add_component(next_button);
-
-    msg.add_component(action_row);
-  }
-
-  return msg;
-}
-
-void Bot::invalidate_leaderboard(dpp::snowflake channel_id, dpp::snowflake message_id) {
-  LeaderboardState state;
-  {
-    std::lock_guard<std::mutex> lock(lb_states_mutex);
-    auto it = leaderboard_states.find(message_id);
-    if (it == leaderboard_states.end()) {
-      return; // Already cleaned up
-    }
-    state = it->second; // Copy state while holding lock
-  }
-
-  constexpr size_t SCORES_PER_PAGE = 5;
-  size_t start = state.current_page * SCORES_PER_PAGE;
-  size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
-  size_t scores_on_page = end - start;
-
-  // Build message without components
-  auto embed = dpp::embed()
-    .set_color(dpp::colors::viola_purple)
-    .set_title(state.beatmap.to_string())
-    .set_url(state.beatmap.get_beatmap_url())
-    .set_thumbnail(state.beatmap.get_image_url())
-    .set_footer(dpp::embed_footer().set_text(
-      fmt::format("Page {}/{} • {}/{} {} shown",
-        state.current_page + 1,
-        state.total_pages,
-        scores_on_page,
-        state.scores.size(),
-        scores_on_page == 1 ? "score" : "scores")
-    ));
-
-  for (size_t i = start; i < end; i++) {
-    dpp::embed_field field;
-    field.name      = fmt::format("{}) {}", i + 1, state.scores[i].get_header());
-    field.value     = state.scores[i].get_body(state.beatmap.get_max_combo());
-    field.is_inline = false;
-    embed.fields.push_back(field);
-  }
-
-  dpp::message msg(channel_id, embed);
-  msg.id = message_id;
-
-  // Edit message to remove components
-  bot.message_edit(msg, [this, message_id](const dpp::confirmation_callback_t& callback) {
-    if (!callback.is_error()) {
-      // Clean up state
-      {
-        std::lock_guard<std::mutex> lock(lb_states_mutex);
-        leaderboard_states.erase(message_id);
-      }
-      spdlog::info("Leaderboard pagination expired for message {}", message_id.str());
-    }
-  });
-}
-
-void Bot::form_submit_event(const dpp::form_submit_t& event) {
-  spdlog::info("[FORM] user={} ({}) channel={} form_id={}",
-    event.command.usr.id.str(), event.command.usr.username,
-    event.command.channel_id.str(), event.custom_id);
-
-  if (event.custom_id == "lb_jump_modal") {
-    auto msg_id = event.command.message_id;
-
-    // Get the page number from the form
-    std::string page_str = std::get<std::string>(event.components[0].components[0].value);
-
-    try {
-      int page_num = std::stoi(page_str);
-
-      // Access state with mutex protection
-      std::lock_guard<std::mutex> lock(lb_states_mutex);
-      auto it = leaderboard_states.find(msg_id);
-
-      if (it == leaderboard_states.end()) {
-        event.reply(dpp::ir_channel_message_with_source,
-          dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
-        return;
-      }
-
-      auto& state = it->second;
-
-      // Validate page number
-      if (page_num < 1 || page_num > static_cast<int>(state.total_pages)) {
-        event.reply(dpp::ir_channel_message_with_source,
-          dpp::message(fmt::format("Invalid page number. Please enter a number between 1 and {}.", state.total_pages))
-            .set_flags(dpp::m_ephemeral));
-        return;
-      }
-
-      // Update to the requested page (convert to 0-indexed)
-      state.current_page = page_num - 1;
-
-      // Build updated message with new page
-      dpp::message updated_msg = build_lb_page(state);
-
-      // Update the message
-      event.reply(dpp::ir_update_message, updated_msg);
-
-    } catch (const std::exception& e) {
-      event.reply(dpp::ir_channel_message_with_source,
-        dpp::message("Invalid input. Please enter a valid number.").set_flags(dpp::m_ephemeral));
-    }
-  }
-}
-
-void Bot::button_click_event(const dpp::button_click_t& event) {
-  const std::string& button_id = event.custom_id;
-
-  spdlog::info("[BTN] user={} ({}) channel={} button={}",
-    event.command.usr.id.str(), event.command.usr.username,
-    event.command.channel_id.str(), button_id);
-
-  // Handle page jump modal
-  if (button_id == "lb_jump") {
-    auto msg_id = event.command.message_id;
-
-    size_t total_pages;
-    {
-      std::lock_guard<std::mutex> lock(lb_states_mutex);
-      auto it = leaderboard_states.find(msg_id);
-
-      if (it == leaderboard_states.end()) {
-        event.reply(dpp::ir_channel_message_with_source,
-          dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
-        return;
-      }
-
-      total_pages = it->second.total_pages;
-    }
-
-    // Create modal for page jump
-    dpp::interaction_modal_response modal("lb_jump_modal", "Jump to Page");
-
-    dpp::component text_input;
-    text_input.set_label("Page Number")
-      .set_id("page_number")
-      .set_text_style(dpp::text_short)
-      .set_placeholder(fmt::format("Enter 1-{}", total_pages))
-      .set_min_length(1)
-      .set_max_length(3)
-      .set_required(true);
-
-    modal.add_component(text_input);
-
-    event.dialog(modal);
-    return;
-  }
-
-  // Handle leaderboard pagination
-  if (button_id == "lb_prev" || button_id == "lb_next") {
-    auto msg_id = event.command.message_id;
-
-    std::lock_guard<std::mutex> lock(lb_states_mutex);
-    auto it = leaderboard_states.find(msg_id);
-
-    if (it == leaderboard_states.end()) {
-      event.reply(dpp::ir_channel_message_with_source,
-        dpp::message("Leaderboard data expired. Please run !lb again.").set_flags(dpp::m_ephemeral));
-      return;
-    }
-
-    auto& state = it->second;
-
-    // Update page number
-    if (button_id == "lb_prev" && state.current_page > 0) {
-      state.current_page--;
-    } else if (button_id == "lb_next" && state.current_page < state.total_pages - 1) {
-      state.current_page++;
-    } else {
-      // Button shouldn't be clickable if at boundary, but just in case
-      return;
-    }
-
-    // Build updated message with new page
-    dpp::message updated_msg = build_lb_page(state);
-
-    // Update the message
-    event.reply(dpp::ir_update_message, updated_msg);
-  }
-}
-
-void Bot::create_lb_message(const dpp::message_create_t& event, const std::string& mods_filter) {
-  const std::string& channel_id = event.msg.channel_id.str();
-  const std::string& beatmap_id = chat_map[channel_id].second;
-
-  if (beatmap_id.empty()) {
-    event.reply(dpp::message("Can't find the map. Please send the map link and use this command again."));
-    return;
-  }
-
-  // Show typing indicator
-  bot.channel_typing(event.msg.channel_id);
-
-  auto start = std::chrono::steady_clock::now();
-
-  std::string response_beatmap = request.get_beatmap(beatmap_id);
-  if (response_beatmap.empty()) {
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-      std::chrono::steady_clock::now() - start).count();
-
-    if (elapsed > 8) {
-      event.reply(dpp::message(
-        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
-    } else {
-      event.reply(dpp::message("❌ Peppy didn't respond"));
-    }
-    spdlog::error("Unable to send request");
-    return;
-  }
-
-  Beatmap            beatmap(response_beatmap);
-
-  // Fetch mod-adjusted beatmap attributes if mods filter is present
-  if (!mods_filter.empty()) {
-    uint32_t mods_bitset = utils::mods_string_to_bitset(mods_filter);
-    std::string attributes_response = request.get_beatmap_attributes(beatmap_id, mods_bitset);
-    if (!attributes_response.empty()) {
-      try {
-        json attributes_json = json::parse(attributes_response);
-        beatmap.set_modded_attributes(attributes_json);
-      } catch (const json::exception& e) {
-        spdlog::error("Failed to parse beatmap attributes: {}", e.what());
-      }
-    }
-  }
-
-  std::vector<Score> scores(disid_osuid_map.size());
-
-  // Create stable index mapping to avoid race condition
-  std::unordered_map<std::string, size_t> user_to_index;
-  size_t idx = 0;
-  for (const auto& [dis_id, user_id] : disid_osuid_map) {
-    user_to_index[user_id] = idx++;
-  }
-
-  // Parse required mods for filtering
-  std::vector<std::string> required_mods;
-  if (!mods_filter.empty()) {
-    for (size_t i = 0; i + 1 < mods_filter.length(); i += 2) {
-      required_mods.push_back(mods_filter.substr(i, 2));
-    }
-  }
-
-  // force tbb parallelization ???
-  arena.execute([&]() { tbb::parallel_for_each(std::begin(disid_osuid_map), std::end(disid_osuid_map),
-    [&](const auto& pair) {
-      const auto& [dis_id, user_id] = pair;
-      auto& score = scores[user_to_index[user_id]];
-      std::string scores_j = request.get_user_beatmap_score(beatmap_id, user_id, true);
-      if (!scores_j.empty()) {
-        json j = json::parse(scores_j);
-        j = j["scores"];
-
-        // Filter scores by mods if filter is specified
-        if (!required_mods.empty()) {
-          auto filtered_scores = json::array();
-          for (const auto& score_json : j) {
-            // Parse mods from this score
-            std::string score_mods_str;
-            if (score_json.contains("mods") && score_json["mods"].is_array()) {
-              for (const auto& mod : score_json["mods"]) {
-                score_mods_str += mod.get<std::string>();
-              }
-            }
-            if (score_mods_str.empty()) score_mods_str = "NM";
-
-            // Check if all required mods are present
-            bool has_all_mods = true;
-            for (const auto& required_mod : required_mods) {
-              if (score_mods_str.find(required_mod) == std::string::npos) {
-                has_all_mods = false;
-                break;
-              }
-            }
-
-            if (has_all_mods) {
-              filtered_scores.push_back(score_json);
-            }
-          }
-          j = filtered_scores;
-        }
-
-        // If we have scores after filtering, take the best one
-        if (!j.empty()) {
-          // sort specific user's scores
-          std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
-            return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
-          });
-          score.from_json(j.at(0));
-          std::string usr_j = request.get_user(fmt::format("{}", score.get_user_id()), true); // TODO: store usernames
-          json usr = json::parse(usr_j);
-          score.set_username(usr.at("username"));
-        }
-      }
-    });
-  });
-  // Remove empty scores
-  for (auto it = scores.begin(); it != scores.end();) {
-    if (!it->is_empty) ++it;
-    else scores.erase(it);
-  }
-
-  auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-    std::chrono::steady_clock::now() - start).count();
-
-  if (scores.empty()) {
-    if (elapsed > 8) {
-      event.reply(dpp::message(
-        fmt::format("❌ Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
-      spdlog::warn("[CMD] !lb took {}s and found no scores (slow API response)", elapsed);
-    } else {
-      event.reply(dpp::message("❌ Can't find any scores on " + beatmap.to_string()));
-    }
-    return;
-  }
-
-  // sort best user scores
-  if (scores.size() > 1) {
-    stdr::sort(scores, [](const Score& a, const Score& b) {
-      return std::make_tuple(a.get_pp(), a.get_total_score()) >
-          std::make_tuple(b.get_pp(), b.get_total_score());
-    });
-  }
-
-  if (elapsed > 8) {
-    spdlog::warn("[CMD] !lb took {}s to complete (slow API response)", elapsed);
-  }
-
-  // Create leaderboard state and build first page
-  LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0, mods_filter);
-  dpp::message msg = build_lb_page(lb_state);
-
-  // Reply with leaderboard
-  event.reply(msg, false, [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) {
-    if (callback.is_error()) {
-      spdlog::error("Failed to send leaderboard message");
-      return;
-    }
-    auto reply_msg = callback.get<dpp::message>();
-    {
-      std::lock_guard<std::mutex> lock(lb_states_mutex);
-      leaderboard_states[reply_msg.id] = lb_state;
-    }
-
-    // Schedule invalidation after 5 minutes (only if there are multiple pages)
-    if (lb_state.total_pages > 1) {
-      dpp::snowflake msg_id = reply_msg.id;
-      dpp::snowflake chan_id = reply_msg.channel_id;
-
-      std::jthread([this, msg_id, chan_id]() {
-        std::this_thread::sleep_for(std::chrono::minutes(5));
-        invalidate_leaderboard(chan_id, msg_id);
-      }).detach();
-    }
-  });
-}
-
-void Bot::message_create_event(const dpp::message_create_t& event) {
-  spdlog::info("[MSG] user={} ({}) channel={} content=\"{}\"",
-    event.msg.author.id.str(), event.msg.author.username,
-    event.msg.channel_id.str(), event.msg.content);
-
-  std::lock_guard<std::mutex> lock(mutex);
-  update_chat_map(event.raw_event, event.msg.channel_id.str(), event.msg.id.str());
-
-  // Case-insensitive command check
-  std::string content_lower = event.msg.content;
-  std::transform(content_lower.begin(), content_lower.end(), content_lower.begin(),
-    [](unsigned char c) { return std::tolower(c); });
-
-  if (content_lower.find("!lb") == 0) {
-    // Parse mods parameter (e.g., "!lb +hddt" or "!lb +hd+dt")
-    std::string mods_filter;
-    size_t plus_pos = event.msg.content.find('+');
-    if (plus_pos != std::string::npos) {
-      mods_filter = event.msg.content.substr(plus_pos + 1);
-      // Remove spaces and convert to uppercase
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), ' '), mods_filter.end());
-      mods_filter.erase(std::remove(mods_filter.begin(), mods_filter.end(), '+'), mods_filter.end());
-      std::transform(mods_filter.begin(), mods_filter.end(), mods_filter.begin(),
-        [](unsigned char c) { return std::toupper(c); });
-    }
-
-    std::jthread(&Bot::create_lb_message, this, std::move(event), mods_filter).detach();
-  }
-}
-
-void Bot::message_update_event(const dpp::message_update_t& event) {
-  const auto& channel_id = event.msg.channel_id.str();
-  const auto& msg_id = chat_map[channel_id].first;
-  if (msg_id == event.msg.id)
-    update_chat_map(event.raw_event, channel_id, msg_id);
-}
-
-void Bot::member_add_event(const dpp::guild_member_add_t& event) {
-  if (!event.added.get_user()->is_bot() && give_autorole) 
-    bot.guild_member_add_role(guild_id, event.added.get_user()->id, autorole_id);
-}
-
-void Bot::member_remove_event(const dpp::guild_member_remove_t& event) {
-  disid_osuid_map.erase(event.removed.id.str());
-}
-
-void Bot::slashcommand_event(const dpp::slashcommand_t& event) {
-  // Log all slash commands with structured context
-  const std::string& cmd_name = event.command.get_command_name();
-  const std::string& user_id = event.command.usr.id.str();
-  const std::string& username = event.command.usr.username;
-  const std::string& channel_id = event.command.channel_id.str();
-
-  spdlog::info("[CMD] user={} ({}) channel={} command=/{}", user_id, username, channel_id, cmd_name);
-
-  // lol
-  if (cmd_name == "гандон") {
-    float_t    f     = rand.get_real(0.0f, 100.0f);
-    auto embed = dpp::embed()
-      .set_color(dpp::colors::cream)
-      .set_title("Тест на гандона")
-      .set_description(fmt::format("**Вы гандон на {:.2f}%**", f))
-      .set_timestamp(time(0));
-    dpp::message msg(event.command.channel_id, embed);
-    event.reply(msg);
-  }
-
-  // avatar
-  if (event.command.get_command_name() == "avatar") {
-    std::string username = std::get<std::string>(event.get_parameter("username"));
-    std::string userid = request.get_userid_v1(username);
-    auto embed = dpp::embed()
-      .set_color(dpp::colors::cream)
-      .set_author(username, "https://osu.ppy.sh/users/" + userid, "")
-      .set_image("https://a.ppy.sh/" + userid)
-      .set_timestamp(time(0));
-    dpp::message msg(event.command.channel_id, embed);
-    event.reply(msg);
-  }
-
-  // update_token
-  if (event.command.get_command_name() == "update_token") {
-    auto invoker_id = event.command.usr.id.str();
-    if (!is_admin(invoker_id)) {
-      event.reply(dpp::message("<:FRICK:1241513672480653475>"));
-      return;
-    }
-    if (request.update_token())
-      event.reply(dpp::message("Token update - success"));
-    else
-      event.reply(dpp::message("Token update - fail"));
-  }
-
-  // set
-  if (event.command.get_command_name() == "set") {
-    auto start = std::chrono::steady_clock::now();
-
-    std::string u_from_com = std::get<std::string>(event.get_parameter("username"));
-    std::string req        = request.get_user(u_from_com);
-
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-      std::chrono::steady_clock::now() - start).count();
-
-    if (req.empty()) {
-      if (elapsed > 8) {
-        event.edit_original_response(dpp::message(
-          fmt::format("Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
-      } else {
-        event.edit_original_response(dpp::message(fmt::format("Can't find {} on Bancho.", u_from_com)));
-      }
-      return;
-    }
-
-    try {
-      json j = json::parse(req);
-      std::string key = event.command.usr.id.str();
-      std::string u_from_req = j.at("username").get<std::string>();
-      int user_id = j.at("id").get<int>();
-
-      disid_osuid_map[key] = fmt::to_string(user_id);
-      utils::map_to_file(disid_osuid_map, "users.json");
-
-      if (elapsed > 8) {
-        spdlog::warn("[CMD] /set took {}s to complete (slow API response)", elapsed);
-      }
-
-      event.edit_original_response(dpp::message(fmt::format("Your osu username: {}", u_from_req)));
-    } catch (const json::exception& e) {
-      spdlog::error("Failed to parse user data for {}: {}", u_from_com, e.what());
-      event.edit_original_response(dpp::message("Failed to process user data. Please try again later."));
-    }
-  }
-
-  // score
-  if (event.command.get_command_name() == "score") {
-    const auto& user = disid_osuid_map[event.command.usr.id.str()];
-    if (user.empty()) {
-      event.edit_original_response(dpp::message("Please /set your osu username before using this command."));
-      return;
-    }
-
-    const std::string& beatmap_id = chat_map[event.command.channel_id.str()].second;
-    if (beatmap_id.empty()) {
-      event.edit_original_response(dpp::message("Can't find the map. Please send the map link and use this command again."));
-      return;
-    }
-
-    auto start = std::chrono::steady_clock::now();
-
-    std::string response_beatmap = request.get_beatmap(beatmap_id);
-    std::string response_score   = request.get_user_beatmap_score(beatmap_id, user);
-
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-      std::chrono::steady_clock::now() - start).count();
-
-    if (response_score.empty() || response_beatmap.empty()) {
-      if (elapsed > 8) {
-        event.edit_original_response(dpp::message(
-          fmt::format("Request timeout: osu! API took too long to respond ({}s). Please try again later.", elapsed)));
-      } else {
-        event.edit_original_response(dpp::message("Can't find score on this map."));
-      }
-      return;
-    }
-
-    Score      score(response_score);
-    Beatmap    beatmap(response_beatmap);
-    auto embed = dpp::embed()
-      .set_color(dpp::colors::cream)
-      .set_title(beatmap.to_string())
-      .set_url(beatmap.get_beatmap_url())
-      .set_thumbnail(beatmap.get_image_url())
-      .add_field("Your best score on map", score.to_string(beatmap.get_max_combo()));
-
-    if (elapsed > 8) {
-      spdlog::warn("[CMD] /score took {}s to complete (slow API response)", elapsed);
-    }
-
-    event.edit_original_response(dpp::message(event.command.channel_id, embed));
-  }
-
-  // autorole_switch
-  if (event.command.get_command_name() == "autorole_switch") {
-    auto invoker_id = event.command.usr.id.str();
-    if (!is_admin(invoker_id)) {
-      event.reply(dpp::message("<:FRICK:1241513672480653475>"));
-      return;
-    }
-    if (give_autorole) {
-      give_autorole = false;
-      event.reply("Giving autorole switched to off");
-    }
-    else {
-      give_autorole = true;
-      event.reply("Giving autorole switched to on");
-    }
-  }
-
-  // weather
-  if (event.command.get_command_name() == "weather") {
-    const std::string city = std::get<std::string>(event.get_parameter("city"));
-    std::string w = request.get_weather(city);
-    json j = json::parse(w);
-
-    if (j.empty() || j.is_null()) {
-      event.edit_original_response(dpp::message("Failed to get weather data. Please try again later."));
-      return;
-    }
-
-    std::string c  = j.value("name", "Unknown");
-    std::string desc  = j["weather"].at(0).value("description", "");
-    double temp       = j["main"].value("temp", 0.0);
-    double feels      = j["main"].value("feels_like", 0.0);
-    int humidity      = j["main"].value("humidity", 0);
-    double wind       = j["wind"].value("speed", 0.0);
-
-    std::time_t timestamp = j.value("dt", 0);
-    timestamp += j.value("timezone", 0);
-    std::tm tm = *std::gmtime(&timestamp);
-    std::ostringstream time;
-    time << std::put_time(&tm, "%d.%m.%Y %H:%M");
-
-    auto embed = dpp::embed()
-        .set_color(dpp::colors::cream)
-        .set_title(c + " - " + desc)
-        //.set_description(desc)
-        .add_field("Температура", fmt::format("{:.1f}°C, ощущается как {:.1f}°C", temp, feels ))
-        .add_field("Влажность", fmt::format("{}%", humidity), true)
-        .add_field("Ветер", fmt::format("{:.1f}м/с", wind), true)
-        .set_footer(dpp::embed_footer().set_text(time.str()));
-
-    event.edit_original_response(dpp::message(event.command.channel_id, embed));
-  }
-}
-
-void Bot::ready_event(const dpp::ready_t& event, bool delete_commands) {
-  if (dpp::run_once<struct register_bot_commands>()) {
-    if (delete_commands) 
-      bot.global_bulk_command_delete();
-
-    bot.global_command_create(dpp::slashcommand("гандон", "Проверка", bot.me.id));
-    bot.global_command_create(dpp::slashcommand("pages", "test", bot.me.id));
-    bot.global_command_create(dpp::slashcommand("avatar", "Display osu! profile avatar", bot.me.id)
-      .add_option(dpp::command_option(dpp::co_string, "username", "osu! profile username", true))
-    );
-    bot.global_command_create(dpp::slashcommand("update_token", "If peppy doesn't respond", bot.me.id));
-    bot.global_command_create(dpp::slashcommand("set", "Set osu username", bot.me.id)
-      .add_option(dpp::command_option(dpp::co_string, "username", "Your osu! profile username", true))
-    );
-    bot.global_command_create(dpp::slashcommand("autorole_switch", "Manage autorole issuance", bot.me.id));
-    /*bot.global_command_create(
-        dpp::slashcommand("score", "Displays your score", bot.me.id));*/
-    bot.global_command_create(dpp::slashcommand("weather", "Shows current weather", bot.me.id)
-      .add_option(dpp::command_option(dpp::co_string, "city", "Location", true))
-    );
-  }
-  guild_id = utils::read_field("GUILD_ID", "config.json");
-  autorole_id =  utils::read_field("AUTOROLE_ID", "config.json");
-  utils::file_to_map(disid_osuid_map, "users.json");
-
-  // Load chat_map from file (channel_id -> beatmap_id)
-  std::unordered_map<std::string, std::string> persist_map;
-  utils::file_to_map(persist_map, "chat_map.json");
-  for (const auto& entry : persist_map) {
-    dpp::snowflake chan_id(entry.first);
-    chat_map[chan_id] = {0, entry.second}; // message_id = 0, will be updated on next message
-  }
-  spdlog::info("Loaded {} beatmap mappings from chat_map.json", persist_map.size());
-}
-
-Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb::task_arena(16)) {
-  bot.intents = dpp::i_default_intents | dpp::i_message_content;
+Bot::Bot(const std::string& token, bool delete_commands)
+    : bot(token),
+      arena(tbb::task_arena(16)),
+      beatmap_resolver_service(request),
+      performance_service(beatmap_downloader),
+      user_resolver_service(request) {
+  bot.intents = dpp::i_default_intents | dpp::i_message_content | dpp::i_guild_members;
 
   // Configure spdlog with structured logging pattern
   spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
@@ -772,37 +59,282 @@ Bot::Bot(const std::string& token, bool delete_commands) : bot(token), arena(tbb
     spdlog::error("Failed to load config.json");
   }
 
-  bot.on_log(dpp::utility::cout_logger());
+  // Configure webhook service
+  webhook_service.set_webhook(services::WebhookChannel::MirrorErrors, config.webhooks.mirror_errors);
+  webhook_service.set_webhook(services::WebhookChannel::General, config.webhooks.general);
+  webhook_service.set_webhook(services::WebhookChannel::Debug, config.webhooks.debug);
+
+  // Configure beatmap downloader from config
+  beatmap_downloader.set_mirrors(config.beatmap_mirrors);
+  beatmap_downloader.set_webhook_service(&webhook_service);
+
+  // Initialize HTTP server with config values
+  http_server = std::make_unique<HttpServer>(config.http_host, config.http_port, config.beatmap_mirrors);
+
+  // Initialize beatmap cache service for proactive caching
+  beatmap_cache_service = std::make_unique<services::BeatmapCacheService>(beatmap_downloader, request, bot);
+  beatmap_cache_service->set_error_channel(dpp::snowflake(1284189678035009670ULL));
+
+  // Link performance service to cache service for background .osz downloads
+  performance_service.set_cache_service(beatmap_cache_service.get());
+
+  // Initialize recent score service
+  recent_score_service = std::make_unique<services::RecentScoreService>(
+      request, performance_service, message_presenter, bot);
+
+  // Initialize leaderboard service
+  leaderboard_service = std::make_unique<services::LeaderboardService>(
+      request, beatmap_downloader, chat_context_service, beatmap_resolver_service,
+      user_mapping_service, user_resolver_service, message_presenter, performance_service, bot);
+
+  // Initialize beatmap extract service
+  beatmap_extract_service = std::make_unique<services::BeatmapExtractService>(
+      beatmap_downloader, request, chat_context_service, beatmap_resolver_service, message_presenter);
+
+  // Initialize message crawler service
+  message_crawler_service = std::make_unique<services::MessageCrawlerService>(bot);
+
+  // Initialize music player service
+  music_player_service = std::make_unique<services::MusicPlayerService>(bot);
+
+  // Initialize handlers
+  button_handler = std::make_unique<handlers::ButtonHandler>(
+      *leaderboard_service, *recent_score_service, message_presenter, request);
+
+  slash_command_handler = std::make_unique<handlers::SlashCommandHandler>(
+      command_router, request, rand, config,
+      chat_context_service, user_mapping_service, beatmap_resolver_service,
+      message_presenter, beatmap_downloader, bot);
+
+  message_handler = std::make_unique<handlers::MessageHandler>(
+      command_router, chat_context_service, bot);
+
+  member_handler = std::make_unique<handlers::MemberHandler>(
+      user_mapping_service, *slash_command_handler, bot);
+
+  ready_handler = std::make_unique<handlers::ReadyHandler>(
+      user_mapping_service, *leaderboard_service, beatmap_cache_service.get(),
+      *slash_command_handler, *member_handler, bot);
+
+  // Set up callbacks for proactive beatmap caching
+  chat_context_service.set_beatmapset_callback([this](uint32_t beatmapset_id) {
+    beatmap_cache_service->queue_download(beatmapset_id);
+  });
+  chat_context_service.set_beatmap_callback([this](uint32_t beatmap_id) {
+    beatmap_cache_service->queue_download_by_beatmap_id(beatmap_id);
+  });
+
+  // Cleanup database entries for missing beatmap files
+  beatmap_downloader.cleanup_missing_files();
+
+  // Register event handlers - route DPP logs through spdlog
+  bot.on_log([](const dpp::log_t& event) {
+    switch (event.severity) {
+      case dpp::ll_trace:
+        spdlog::trace("[DPP] {}", event.message);
+        break;
+      case dpp::ll_debug:
+        spdlog::debug("[DPP] {}", event.message);
+        break;
+      case dpp::ll_info:
+        spdlog::info("[DPP] {}", event.message);
+        break;
+      case dpp::ll_warning:
+        spdlog::warn("[DPP] {}", event.message);
+        break;
+      case dpp::ll_error:
+        spdlog::error("[DPP] {}", event.message);
+        break;
+      case dpp::ll_critical:
+        spdlog::critical("[DPP] {}", event.message);
+        break;
+      default:
+        spdlog::info("[DPP] {}", event.message);
+        break;
+    }
+  });
+
   bot.on_button_click([this](const dpp::button_click_t& event) {
-    button_click_event(event);
+    button_handler->handle_button_click(event);
   });
+
   bot.on_form_submit([this](const dpp::form_submit_t& event) {
-    form_submit_event(event);
+    button_handler->handle_form_submit(event);
   });
+
   bot.on_message_create([this](const dpp::message_create_t& event) {
-    message_create_event(event);
+    message_handler->handle_create(event);
+    // Store new message in crawler database
+    if (message_crawler_service) {
+      message_crawler_service->on_new_message(event.msg);
+    }
   });
-  bot.on_message_update([this](const dpp::message_update_t& event){
-    message_update_event(event);
+
+  bot.on_message_update([this](const dpp::message_update_t& event) {
+    message_handler->handle_update(event);
+    // Update message in crawler database if it was edited
+    if (message_crawler_service) {
+      message_crawler_service->on_message_update(event.msg);
+    }
   });
+
   bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
-    member_add_event(event);
+    member_handler->handle_add(event);
   });
+
   bot.on_guild_member_remove([this](const dpp::guild_member_remove_t& event) {
-    member_remove_event(event);
+    member_handler->handle_remove(event);
   });
+
+  bot.on_guild_member_update([](const dpp::guild_member_update_t& event) {
+    auto uid = std::to_string(static_cast<uint64_t>(event.updated.user_id));
+    cache::MemcachedCache::instance().del("custom_tmpl_perm:" + uid);
+  });
+
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     // Call thinking() immediately for commands that make API calls
     const std::string& cmd = event.command.get_command_name();
-    if (cmd == "set" || cmd == "score" || cmd == "weather") {
+    if (cmd == "score" || cmd == "weather" || cmd == "avatar" ||
+        cmd == "rs" || cmd == "bg" || cmd == "audio" || cmd == "map" ||
+        cmd == "compare" || cmd == "sim" || cmd == "lb" || cmd == "settings" || cmd == "osc" ||
+        cmd == "osu" || cmd == "taiko" || cmd == "mania" || cmd == "ctb" || cmd == "catch") {
       event.thinking();
     }
-    std::jthread(&Bot::slashcommand_event, this, std::move(event)).detach();
+    std::jthread([this, event = std::move(event)]() mutable {
+      slash_command_handler->handle(event);
+    }).detach();
   });
-  bot.on_ready([this, delete_commands](const dpp::ready_t& event) { 
-    ready_event(event, delete_commands); 
-  });
-  
 
-  bot.start(dpp::st_wait);
+  bot.on_voice_ready([this](const dpp::voice_ready_t& event) {
+    if (music_player_service) {
+      music_player_service->on_voice_ready(event);
+    }
+  });
+
+  bot.on_voice_state_update([this](const dpp::voice_state_update_t& event) {
+    if (music_player_service) {
+      music_player_service->on_voice_state_update(event);
+    }
+  });
+
+  bot.on_ready([this, delete_commands](const dpp::ready_t& event) {
+    ready_handler->handle(event, delete_commands);
+    if (music_player_service) {
+      music_player_service->restore_all_states();
+    }
+  });
+
+  bot.on_guild_members_chunk([this](const dpp::guild_members_chunk_t& event) {
+    ready_handler->handle_member_chunk(event);
+  });
+
+  // Create service container for command dependency injection
+  service_container = std::make_unique<ServiceContainer>(ServiceContainer{
+    .bot = bot,
+    .request = request,
+    .beatmap_downloader = beatmap_downloader,
+    .config = config,
+    .chat_context_service = chat_context_service,
+    .beatmap_resolver_service = beatmap_resolver_service,
+    .user_resolver_service = user_resolver_service,
+    .user_mapping_service = user_mapping_service,
+    .message_presenter = message_presenter,
+    .command_params_service = command_params_service,
+    .performance_service = performance_service,
+    .recent_score_service = *recent_score_service,
+    .leaderboard_service = *leaderboard_service,
+    .beatmap_extract_service = *beatmap_extract_service,
+    .user_settings_service = user_settings_service,
+    .beatmap_cache_service = beatmap_cache_service.get(),
+    .template_service = &embed_template_service
+  });
+
+  // Load user settings from DB
+  user_settings_service.load_from_db();
+
+  // Load embed templates from DB (seeds defaults if empty)
+  embed_template_service.load_from_db();
+  message_presenter.set_template_service(&embed_template_service);
+
+  // Register text commands
+  command_router.set_services(service_container.get());
+  register_commands();
+
+  // Connect services to HTTP server
+  http_server->set_config(&config);
+  http_server->set_crawler_service(message_crawler_service.get());
+  http_server->set_user_settings_service(&user_settings_service);
+  http_server->set_template_service(&embed_template_service);
+  http_server->set_music_service(music_player_service.get());
+
+  // Start HTTP health check server
+  http_server->start();
 }
+
+void Bot::register_commands() {
+  command_router.register_command(std::make_unique<commands::LbCommand>());
+  command_router.register_command(std::make_unique<commands::RsCommand>());
+  command_router.register_command(std::make_unique<commands::BgCommand>());
+  command_router.register_command(std::make_unique<commands::AudioCommand>());
+  command_router.register_command(std::make_unique<commands::MapCommand>());
+  command_router.register_command(std::make_unique<commands::CompareCommand>());
+  command_router.register_command(std::make_unique<commands::SimCommand>());
+  command_router.register_command(std::make_unique<commands::UsersCommand>());
+  command_router.register_command(std::make_unique<commands::AdminSetCommand>());
+  command_router.register_command(std::make_unique<commands::AdminUnsetCommand>());
+  command_router.register_command(std::make_unique<commands::SettingsCommand>());
+  command_router.register_command(std::make_unique<commands::OscCommand>());
+  command_router.register_command(std::make_unique<commands::ProfileCommand>());
+  command_router.register_command(std::make_unique<commands::TopCommand>());
+  command_router.register_command(std::make_unique<commands::LinkCommand>());
+}
+
+void Bot::start() {
+  // Start beatmap cache service
+  if (beatmap_cache_service) {
+    beatmap_cache_service->start();
+  }
+
+  // Start message crawler service
+  if (message_crawler_service) {
+    message_crawler_service->start();
+  }
+
+  // Non-blocking start so main thread can manage shutdown
+  bot.start(dpp::st_return);
+}
+
+void Bot::shutdown() {
+  spdlog::info("Shutting down bot...");
+
+  // Request download abort first so ongoing downloads stop quickly
+  beatmap_downloader.request_shutdown();
+
+  // Stop music player service
+  if (music_player_service) {
+    music_player_service->shutdown();
+  }
+
+  // Stop message crawler service
+  if (message_crawler_service) {
+    message_crawler_service->stop();
+  }
+
+  // Stop beatmap cache service
+  if (beatmap_cache_service) {
+    beatmap_cache_service->stop();
+  }
+
+  // Stop HTTP server
+  if (http_server) {
+    http_server->stop();
+  }
+
+  // Stop Discord bot
+  bot.shutdown();
+
+  spdlog::info("Shutdown complete");
+}
+
+// Destructor must be defined in cpp where handler types are complete
+Bot::~Bot() = default;

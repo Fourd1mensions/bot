@@ -1,0 +1,295 @@
+syntax = "proto3";
+
+package pp.v1;
+
+service PerformanceService {
+  rpc CalculateDifficulty(DifficultyRequest) returns (DifficultyResponse);
+  rpc CalculatePerformance(PerformanceRequest) returns (PerformanceResponse);
+  rpc CalculateBatch(BatchRequest) returns (BatchResponse);
+  rpc GetStrains(StrainsRequest) returns (StrainsResponse);
+  rpc GetStrainGraph(StrainGraphRequest) returns (StrainGraphResponse);
+  rpc GetBeatmapInfo(BeatmapInfoRequest) returns (BeatmapInfoResponse);
+  rpc GetGradualDifficulty(GradualDifficultyRequest) returns (stream GradualDifficultyResponse);
+  rpc GetGradualPerformance(GradualPerformanceRequest) returns (stream GradualPerformanceResponse);
+}
+
+enum GameMode {
+  GAME_MODE_UNSPECIFIED = 0;
+  GAME_MODE_OSU = 1;
+  GAME_MODE_TAIKO = 2;
+  GAME_MODE_CATCH = 3;
+  GAME_MODE_MANIA = 4;
+}
+
+enum HitResultPriority {
+  HIT_RESULT_PRIORITY_BEST_CASE = 0;
+  HIT_RESULT_PRIORITY_WORST_CASE = 1;
+  HIT_RESULT_PRIORITY_FASTEST = 2;
+}
+
+message BeatmapSource {
+  oneof source {
+    bytes content = 1;
+    string path = 2;
+  }
+}
+
+message DifficultySettings {
+  optional uint32 mods = 1;
+  optional double clock_rate = 2;
+  optional float ar = 3;
+  optional bool ar_with_mods = 4;
+  optional float cs = 5;
+  optional bool cs_with_mods = 6;
+  optional float hp = 7;
+  optional bool hp_with_mods = 8;
+  optional float od = 9;
+  optional bool od_with_mods = 10;
+  optional uint32 passed_objects = 11;
+  optional bool hardrock_offsets = 12;
+  optional bool lazer = 13;
+  optional string mods_str = 14;  // Acronym-based mods (e.g., "HDDT", "NFCL")
+}
+
+message ScoreParams {
+  optional uint32 combo = 1;
+  optional double accuracy = 2;
+  optional uint32 misses = 3;
+  optional uint32 n300 = 4;
+  optional uint32 n100 = 5;
+  optional uint32 n50 = 6;
+  optional uint32 n_geki = 7;
+  optional uint32 n_katu = 8;
+  optional uint32 large_tick_hits = 9;
+  optional uint32 small_tick_hits = 10;
+  optional uint32 slider_end_hits = 11;
+  optional HitResultPriority hitresult_priority = 12;
+}
+
+message DifficultyRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings settings = 3;
+}
+
+message DifficultyResponse {
+  GameMode mode = 1;
+  double stars = 2;
+  uint32 max_combo = 3;
+  oneof attributes {
+    OsuDifficultyAttributes osu = 10;
+    TaikoDifficultyAttributes taiko = 11;
+    CatchDifficultyAttributes catch = 12;
+    ManiaDifficultyAttributes mania = 13;
+  }
+}
+
+message OsuDifficultyAttributes {
+  double aim = 1;
+  double speed = 2;
+  double flashlight = 3;
+  double slider_factor = 4;
+  double speed_note_count = 5;
+  double aim_difficult_strain_count = 6;
+  double speed_difficult_strain_count = 7;
+  double aim_difficult_slider_count = 8;
+  double ar = 9;
+  double od = 10;
+  double hp = 11;
+  double great_hit_window = 12;
+  double ok_hit_window = 13;
+  double meh_hit_window = 14;
+  uint32 n_circles = 15;
+  uint32 n_sliders = 16;
+  uint32 n_spinners = 17;
+  uint32 n_large_ticks = 18;
+  double cs = 19;
+}
+
+message TaikoDifficultyAttributes {
+  double stamina = 1;
+  double rhythm = 2;
+  double color = 3;
+  double reading = 4;
+  double great_hit_window = 5;
+  double ok_hit_window = 6;
+  double mono_stamina_factor = 7;
+  bool is_convert = 8;
+}
+
+message CatchDifficultyAttributes {
+  double ar = 1;
+  uint32 n_fruits = 2;
+  uint32 n_droplets = 3;
+  uint32 n_tiny_droplets = 4;
+  bool is_convert = 5;
+}
+
+message ManiaDifficultyAttributes {
+  uint32 n_objects = 2;
+  uint32 n_hold_notes = 3;
+  bool is_convert = 4;
+}
+
+message PerformanceRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings difficulty_settings = 3;
+  ScoreParams score = 4;
+}
+
+message PerformanceResponse {
+  GameMode mode = 1;
+  double pp = 2;
+  double stars = 3;
+  uint32 max_combo = 4;
+  oneof attributes {
+    OsuPerformanceAttributes osu = 10;
+    TaikoPerformanceAttributes taiko = 11;
+    CatchPerformanceAttributes catch = 12;
+    ManiaPerformanceAttributes mania = 13;
+  }
+}
+
+message OsuPerformanceAttributes {
+  OsuDifficultyAttributes difficulty = 1;
+  double pp_aim = 2;
+  double pp_speed = 3;
+  double pp_acc = 4;
+  double pp_flashlight = 5;
+  double effective_miss_count = 6;
+  optional double speed_deviation = 7;
+}
+
+message TaikoPerformanceAttributes {
+  TaikoDifficultyAttributes difficulty = 1;
+  double pp_acc = 2;
+  double pp_difficulty = 3;
+  double effective_miss_count = 4;
+  optional double estimated_unstable_rate = 5;
+}
+
+message CatchPerformanceAttributes {
+  CatchDifficultyAttributes difficulty = 1;
+}
+
+message ManiaPerformanceAttributes {
+  ManiaDifficultyAttributes difficulty = 1;
+  double pp_difficulty = 2;
+}
+
+message BatchRequest {
+  repeated PerformanceRequest requests = 1;
+}
+
+message BatchResponse {
+  repeated PerformanceResponse responses = 1;
+}
+
+message StrainsRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings settings = 3;
+}
+
+message StrainsResponse {
+  GameMode mode = 1;
+  double section_length = 2;
+  oneof strains {
+    OsuStrains osu = 10;
+    TaikoStrains taiko = 11;
+    CatchStrains catch = 12;
+    ManiaStrains mania = 13;
+  }
+}
+
+message OsuStrains {
+  repeated double aim = 1;
+  repeated double aim_no_sliders = 2;
+  repeated double speed = 3;
+  repeated double flashlight = 4;
+}
+
+message TaikoStrains {
+  repeated double color = 1;
+  repeated double reading = 2;
+  repeated double rhythm = 3;
+  repeated double stamina = 4;
+  repeated double single_color_stamina = 5;
+}
+
+message CatchStrains {
+  repeated double movement = 1;
+}
+
+message ManiaStrains {
+  repeated double strains = 1;
+}
+
+// Strain graph rendering
+message StrainGraphRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings settings = 3;
+  uint32 width = 4;   // Graph width in pixels (default: 900)
+  uint32 height = 5;  // Graph height in pixels (default: 250)
+  optional bytes background = 6;  // Optional PNG/JPEG background image
+}
+
+message StrainGraphResponse {
+  bytes png_data = 1;  // Rendered graph as PNG
+}
+
+message BeatmapInfoRequest {
+  BeatmapSource beatmap = 1;
+}
+
+message BeatmapInfoResponse {
+  uint32 version = 1;
+  GameMode mode = 2;
+  bool is_convert = 3;
+  double hp = 4;
+  double cs = 5;
+  double od = 6;
+  double ar = 7;
+  double slider_multiplier = 8;
+  double slider_tick_rate = 9;
+  double stack_leniency = 10;
+  double bpm = 11;
+  uint32 n_circles = 12;
+  uint32 n_sliders = 13;
+  uint32 n_spinners = 14;
+  uint32 n_holds = 15;
+  uint32 n_objects = 16;
+}
+
+message GradualDifficultyRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings settings = 3;
+}
+
+message GradualDifficultyResponse {
+  uint32 object_index = 1;
+  double stars = 2;
+  uint32 max_combo = 3;
+  oneof attributes {
+    OsuDifficultyAttributes osu = 10;
+    TaikoDifficultyAttributes taiko = 11;
+    CatchDifficultyAttributes catch = 12;
+    ManiaDifficultyAttributes mania = 13;
+  }
+}
+
+message GradualPerformanceRequest {
+  BeatmapSource beatmap = 1;
+  optional GameMode mode = 2;
+  DifficultySettings difficulty_settings = 3;
+  ScoreParams score = 4;
+}
+
+message GradualPerformanceResponse {
+  uint32 object_index = 1;
+  double pp = 2;
+  double stars = 3;
+}

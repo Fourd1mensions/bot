@@ -1,0 +1,4471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patchouli</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #050507;
+  --bg-subtle: #08080c;
+  --surface: #0c0c10;
+  --surface-raised: #121218;
+  --surface-hover: #18181f;
+  --surface-active: #1e1e28;
+  --border: #1a1a24;
+  --border-hover: #2a2a38;
+  --border-active: #3a3a4a;
+  --text: #f0f0f5;
+  --text-secondary: #a8a8b8;
+  --text-dim: #606070;
+  --text-muted: #404050;
+  --accent: #a78bfa;
+  --accent-light: #c4b5fd;
+  --accent-dark: #7c3aed;
+  --accent-soft: rgba(167, 139, 250, 0.08);
+  --accent-medium: rgba(167, 139, 250, 0.15);
+  --accent-border: rgba(167, 139, 250, 0.25);
+  --accent-glow: 0 0 40px rgba(167, 139, 250, 0.15);
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.1);
+  --red: #f87171;
+  --red-soft: rgba(248, 113, 113, 0.1);
+  --yellow: #fbbf24;
+  --yellow-soft: rgba(251, 191, 36, 0.1);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  --font: 'Outfit', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0.33, 1, 0.68, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+html { font-size: 15px; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Ambient background */
+body::before {
+  content: '';
+  position: fixed;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background:
+    radial-gradient(ellipse 40% 30% at 70% 20%, rgba(167, 139, 250, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 40% at 30% 80%, rgba(124, 58, 237, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Film grain */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  opacity: 0.02;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 10000;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); background-clip: content-box; }
+
+/* ═══════════════════════════════════════════════════════════════
+   LOGIN SCREEN
+   ═══════════════════════════════════════════════════════════════ */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 5000;
+  overflow: hidden;
+}
+
+/* Animated gradient orbs */
+.login-overlay::before,
+.login-overlay::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.5;
+  animation: floatOrb 20s ease-in-out infinite;
+}
+
+.login-overlay::before {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, rgba(167, 139, 250, 0.15) 0%, transparent 70%);
+  top: 10%;
+  left: 20%;
+  animation-delay: -5s;
+}
+
+.login-overlay::after {
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.12) 0%, transparent 70%);
+  bottom: 10%;
+  right: 15%;
+  animation-delay: -10s;
+}
+
+@keyframes floatOrb {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30px, -40px) scale(1.05); }
+  50% { transform: translate(-20px, 20px) scale(0.95); }
+  75% { transform: translate(40px, 30px) scale(1.02); }
+}
+
+/* Decorative rings */
+.login-ring {
+  position: absolute;
+  width: 450px;
+  height: 450px;
+  border-radius: 50%;
+  border: 1px solid rgba(167, 139, 250, 0.08);
+  animation: ringRotate 40s linear infinite;
+}
+
+.login-ring::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 20px 4px rgba(167, 139, 250, 0.5);
+}
+
+.login-ring-2 {
+  position: absolute;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  border: 1px solid rgba(167, 139, 250, 0.04);
+  animation: ringRotate 60s linear infinite reverse;
+}
+
+.login-ring-2::before {
+  content: '';
+  position: absolute;
+  bottom: 20%;
+  left: -2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(167, 139, 250, 0.6);
+  box-shadow: 0 0 12px 2px rgba(167, 139, 250, 0.4);
+}
+
+@keyframes ringRotate {
+  to { transform: rotate(360deg); }
+}
+
+.login-box {
+  text-align: center;
+  position: relative;
+  z-index: 10;
+  animation: loginReveal 0.8s var(--ease) both;
+  animation-delay: 0.1s;
+}
+
+@keyframes loginReveal {
+  from {
+    opacity: 0;
+    transform: translateY(30px) scale(0.95);
+    filter: blur(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.login-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 2rem;
+  border-radius: 20px;
+  background: linear-gradient(135deg, var(--surface-raised) 0%, var(--surface) 100%);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  position: relative;
+}
+
+.login-icon::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.2) 0%, transparent 50%);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  padding: 1px;
+  pointer-events: none;
+}
+
+.login-box h2 {
+  font-family: var(--font);
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  margin-bottom: 0.6rem;
+  background: linear-gradient(135deg, var(--text) 0%, var(--text-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.login-box p {
+  font-size: 0.95rem;
+  color: var(--text-dim);
+  margin-bottom: 2.5rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.btn-discord {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #5865F2;
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 1rem 2.5rem;
+  cursor: pointer;
+  transition: all 0.3s var(--ease);
+  text-decoration: none;
+  position: relative;
+  overflow: hidden;
+  box-shadow:
+    0 4px 20px rgba(88, 101, 242, 0.3),
+    0 0 0 0 rgba(88, 101, 242, 0);
+}
+
+.btn-discord::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.btn-discord::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.15) 0%, transparent 50%);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.btn-discord:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 10px 40px rgba(88, 101, 242, 0.4),
+    0 0 0 0 rgba(88, 101, 242, 0);
+}
+.btn-discord:hover::after { opacity: 1; }
+
+.btn-discord:active {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(88, 101, 242, 0.3);
+}
+
+.btn-discord svg { width: 22px; height: 22px; fill: #fff; flex-shrink: 0; }
+
+/* osu! button */
+.btn-osu {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #ff66aa;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  cursor: pointer;
+  transition: all 0.3s var(--ease);
+  text-decoration: none;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(255, 102, 170, 0.25);
+}
+.btn-osu::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 50%);
+  pointer-events: none;
+}
+.btn-osu:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(255, 102, 170, 0.35);
+  background: #ff7ab8;
+}
+.btn-osu:active {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(255, 102, 170, 0.25);
+}
+
+.btn-unlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  margin-left: 0.75rem;
+}
+.btn-unlink:hover {
+  border-color: var(--red);
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.osu-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: all 0.2s var(--ease);
+}
+.osu-link-row:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+
+.osu-link-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.osu-link-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff66aa 0%, #ff99cc 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(255, 102, 170, 0.2);
+  overflow: hidden;
+}
+.osu-link-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.osu-link-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: #fff;
+}
+.osu-link-text {
+  flex: 1;
+}
+.osu-link-status {
+  font-family: var(--font);
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.osu-link-status.linked {
+  color: var(--green);
+}
+.osu-link-desc {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-top: 0.15rem;
+}
+
+.login-error {
+  color: var(--red);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-top: 2rem;
+  max-width: 340px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+  padding: 0.75rem 1.25rem;
+  background: var(--red-soft);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(248, 113, 113, 0.15);
+}
+
+.login-error:empty { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN SHELL
+   ═══════════════════════════════════════════════════════════════ */
+.shell {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 2.5rem 3rem 6rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HEADER
+   ═══════════════════════════════════════════════════════════════ */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2.5rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+  animation: fadeSlideUp 0.6s var(--ease) both;
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+header h1 {
+  font-family: var(--font);
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.2;
+}
+
+header h1 span:first-child {
+  background: linear-gradient(135deg, var(--accent-light) 0%, var(--accent) 50%, var(--accent-dark) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+header p {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-weight: 400;
+  margin-top: 0.35rem;
+  letter-spacing: 0.02em;
+}
+
+/* User info */
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.user-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  transition: all 0.2s var(--ease);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.user-avatar:hover {
+  border-color: var(--accent-border);
+  transform: scale(1.05);
+}
+
+.user-name {
+  font-family: var(--font);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.btn-logout {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.btn-logout:hover {
+  border-color: var(--border-hover);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  transform: translateY(-1px);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PAGE TABS
+   ═══════════════════════════════════════════════════════════════ */
+.page-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 2.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px;
+  animation: fadeSlideUp 0.6s var(--ease) both;
+  animation-delay: 0.05s;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.page-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.7rem 1.75rem;
+  cursor: pointer;
+  transition: all 0.25s var(--ease);
+  white-space: nowrap;
+  position: relative;
+}
+
+.page-tab:hover { color: var(--text-secondary); }
+
+.page-tab.active {
+  background: linear-gradient(135deg, var(--accent-medium) 0%, var(--accent-soft) 100%);
+  color: var(--accent-light);
+  box-shadow: 0 2px 12px rgba(167, 139, 250, 0.15);
+}
+
+.page-tab.active::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SETTINGS SECTION
+   ═══════════════════════════════════════════════════════════════ */
+.settings-section {
+  max-width: 960px;
+  margin: 0 auto;
+  animation: fadeSlideUp 0.6s var(--ease) both;
+  animation-delay: 0.1s;
+}
+
+.settings-group {
+  margin-bottom: 2.5rem;
+}
+
+.settings-group-label {
+  font-family: var(--font);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.settings-group-label .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(167, 139, 250, 0.5);
+  animation: dotPulse 2s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.9); }
+}
+
+/* Preset Cards */
+.preset-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.preset-card {
+  appearance: none;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 1.5rem 1.35rem;
+  cursor: pointer;
+  transition: all 0.3s var(--ease);
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Glow effect on hover */
+.preset-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100px;
+  background: radial-gradient(ellipse 80% 100% at 50% -20%, rgba(167, 139, 250, 0.08) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.4s;
+  pointer-events: none;
+}
+
+/* Bottom shine */
+.preset-card::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 60%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(167, 139, 250, 0.3), transparent);
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.preset-card:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+  transform: translateY(-4px);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+.preset-card:hover::before { opacity: 1; }
+
+.preset-card:active {
+  transform: translateY(-2px);
+}
+
+.preset-card.active {
+  border-color: var(--accent-border);
+  background: linear-gradient(135deg, var(--accent-soft) 0%, var(--surface) 100%);
+  box-shadow: var(--accent-glow);
+}
+.preset-card.active::before { opacity: 1; }
+.preset-card.active::after { opacity: 1; }
+
+/* Active checkmark */
+.preset-card.active .preset-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.preset-check {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.3s var(--ease-spring);
+  box-shadow: 0 2px 10px rgba(167, 139, 250, 0.4);
+}
+
+.preset-check svg {
+  width: 12px;
+  height: 12px;
+  stroke: white;
+  stroke-width: 3;
+  fill: none;
+}
+
+.preset-card-name {
+  font-family: var(--font);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+  letter-spacing: -0.01em;
+  transition: color 0.2s;
+}
+
+.preset-card-desc {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+  font-weight: 400;
+  transition: color 0.2s;
+}
+
+.preset-card:hover .preset-card-desc { color: var(--text-secondary); }
+
+.preset-card.active .preset-card-name {
+  color: var(--accent-light);
+}
+.preset-card.active .preset-card-desc {
+  color: var(--text-secondary);
+}
+
+.preset-edit-icon {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: all 0.2s var(--ease);
+}
+.preset-card:hover .preset-edit-icon,
+.preset-card.active .preset-edit-icon {
+  opacity: 1;
+}
+.preset-card.active .preset-edit-icon {
+  color: var(--accent);
+}
+
+/* Custom Template Editor */
+.custom-editor-header {
+  margin-bottom: 1rem;
+}
+
+.custom-cmd-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.custom-cmd-selector label {
+  font-family: var(--font);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.custom-cmd-selector select {
+  flex: 1;
+  max-width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 1rem;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.custom-cmd-selector select:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+
+.custom-cmd-selector select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.custom-editor-workspace {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.custom-fields-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  min-height: 300px;
+}
+
+.custom-fields-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.custom-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.custom-field-label {
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.custom-field-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  resize: vertical;
+  min-height: 60px;
+  transition: all 0.2s var(--ease);
+}
+
+.custom-field-input:hover {
+  border-color: var(--border-hover);
+}
+
+.custom-field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.custom-placeholders-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+.placeholders-header {
+  font-family: var(--font);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.placeholders-hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.75rem;
+}
+
+.placeholders-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.placeholder-chip {
+  display: inline-block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.placeholder-chip:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-light);
+}
+
+.custom-validation {
+  margin-bottom: 1rem;
+}
+
+.validation-error,
+.validation-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  margin-bottom: 0.5rem;
+}
+
+.validation-error {
+  background: var(--red-soft);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: var(--red);
+}
+
+.validation-warning {
+  background: var(--yellow-soft);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  color: var(--yellow);
+}
+
+.custom-no-permission {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.no-perm-icon {
+  font-size: 2rem;
+  margin-bottom: 0.75rem;
+  opacity: 0.7;
+}
+
+.no-perm-text {
+  font-family: var(--font);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.no-perm-hint {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.custom-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .custom-editor-workspace {
+    grid-template-columns: 1fr;
+  }
+  .custom-placeholders-panel {
+    max-height: 200px;
+  }
+}
+
+.settings-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--green);
+  margin-left: 1rem;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: all 0.3s var(--ease);
+}
+.settings-saved.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Toggle Switch */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+  transition: all 0.2s var(--ease);
+}
+.toggle-row:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+
+.toggle-label {
+  font-family: var(--font);
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.toggle-desc {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-top: 0.2rem;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 48px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--border-hover);
+  border-radius: 26px;
+  transition: background 0.25s;
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: all 0.25s var(--ease);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--accent);
+}
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(22px);
+  background: #fff;
+}
+
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+  transition: all 0.2s var(--ease);
+}
+.input-row:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+
+.input-row input[type="number"] {
+  width: 90px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  padding: 0.55rem 0.75rem;
+  text-align: right;
+  transition: all 0.2s;
+  -moz-appearance: textfield;
+}
+.input-row input[type="number"]::-webkit-outer-spin-button,
+.input-row input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.input-row input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Slider + Input combo */
+.slider-input-combo {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-width: 240px;
+}
+
+.slider-input-combo input[type="range"] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.slider-input-combo input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.4);
+  transition: transform 0.15s var(--ease), box-shadow 0.15s;
+}
+
+.slider-input-combo input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 12px rgba(167, 139, 250, 0.6);
+}
+
+.slider-input-combo input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.4);
+}
+
+.slider-input-combo input[type="range"]::-moz-range-track {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TEMPLATES SECTION
+   ═══════════════════════════════════════════════════════════════ */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+  animation: fadeSlideUp 0.6s var(--ease) both;
+  animation-delay: 0.1s;
+  flex-wrap: wrap;
+}
+
+/* Command selector dropdown */
+.cmd-selector {
+  position: relative;
+  min-width: 220px;
+}
+
+.cmd-selector-label {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+}
+
+.cmd-select {
+  appearance: none;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 0.75rem 2.5rem 0.75rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.cmd-select:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+
+.cmd-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.cmd-selector::after {
+  content: '';
+  position: absolute;
+  right: 1rem;
+  bottom: 0.95rem;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid var(--text-dim);
+  pointer-events: none;
+}
+
+.cmd-select option {
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.5rem;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  white-space: nowrap;
+}
+
+.tab-btn:hover { color: var(--text-secondary); }
+
+.tab-btn.active {
+  background: var(--surface-hover);
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Two-column workspace */
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 2.5rem;
+  align-items: start;
+  animation: fadeSlideUp 0.6s var(--ease) both;
+  animation-delay: 0.15s;
+}
+
+/* Editor panel */
+.editor-panel {
+  min-width: 0;
+}
+
+.panel-header {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.panel-header .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px rgba(167, 139, 250, 0.5);
+}
+
+.fields-container {
+  min-height: 120px;
+}
+
+.tmpl-field {
+  margin-bottom: 1.35rem;
+}
+
+.tmpl-label {
+  font-family: var(--font);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  letter-spacing: 0.01em;
+}
+
+.tmpl-textarea {
+  width: 100%;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  padding: 0.9rem 1.1rem;
+  resize: vertical;
+  min-height: 3rem;
+  line-height: 1.7;
+  transition: all 0.25s var(--ease);
+}
+
+.tmpl-textarea:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+
+.tmpl-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow:
+    0 0 0 4px var(--accent-soft),
+    0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+/* Validation states */
+.tmpl-textarea.valid {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.1);
+}
+.tmpl-textarea.valid:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.12);
+}
+
+.tmpl-textarea.has-warnings {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.1);
+}
+.tmpl-textarea.has-warnings:focus {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.12);
+}
+
+.tmpl-textarea.has-errors {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.1);
+}
+.tmpl-textarea.has-errors:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
+}
+
+/* Color field */
+.color-field-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+.tmpl-input.color-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  padding: 0.7rem 1rem;
+  transition: all 0.25s var(--ease);
+}
+.tmpl-input.color-input:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-raised);
+}
+.tmpl-input.color-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.color-preview {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border);
+  flex-shrink: 0;
+  transition: background-color 0.2s ease;
+}
+
+.validation-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  overflow: hidden;
+}
+
+.validation-msg {
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 500;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  animation: msgSlideIn 0.2s var(--ease) both;
+}
+
+@keyframes msgSlideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.validation-msg.error {
+  color: var(--red);
+  background: var(--red-soft);
+  border: 1px solid rgba(248, 113, 113, 0.15);
+}
+
+.validation-msg.warning {
+  color: var(--yellow);
+  background: var(--yellow-soft);
+  border: 1px solid rgba(251, 191, 36, 0.12);
+}
+
+.validation-icon {
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+
+.btn-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-left: 0.5rem;
+  line-height: 1;
+  vertical-align: middle;
+}
+.btn-badge.error { background: var(--red); color: #fff; }
+.btn-badge.warning { background: var(--yellow); color: #000; }
+
+/* Action bar */
+.tmpl-actions {
+  display: flex;
+  gap: 0.85rem;
+  margin-top: 1.75rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.btn-save {
+  appearance: none;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.75rem 2rem;
+  cursor: pointer;
+  transition: all 0.25s var(--ease);
+  min-width: 120px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(167, 139, 250, 0.25);
+}
+
+.btn-save::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.btn-save:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 28px rgba(167, 139, 250, 0.35);
+}
+.btn-save:active { transform: translateY(0); }
+
+.btn-save:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.btn-save.saved {
+  background: linear-gradient(135deg, var(--green) 0%, #059669 100%);
+  box-shadow: 0 4px 16px rgba(52, 211, 153, 0.3);
+}
+
+.btn-reset {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 0.75rem 1.5rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.btn-reset:hover {
+  border-color: var(--border-hover);
+  color: var(--text-secondary);
+  background: var(--surface);
+  transform: translateY(-1px);
+}
+
+/* Sidebar panel */
+.sidebar-panel {
+  position: sticky;
+  top: 2rem;
+  max-height: calc(100vh - 4rem);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Syntax guide button */
+.syntax-guide-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  width: 100%;
+}
+.syntax-guide-btn:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+
+.sg-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Placeholder table */
+.ph-table {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.ph-table::-webkit-scrollbar { width: 6px; }
+.ph-table::-webkit-scrollbar-track { background: transparent; }
+.ph-table::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 3px; }
+
+.ph-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  transition: background 0.15s;
+}
+
+.ph-row:last-child { border-bottom: none; }
+.ph-row:hover { background: var(--surface-raised); }
+
+.ph-name {
+  padding: 0.6rem 0.9rem;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  word-break: break-all;
+  border-right: 1px solid var(--border);
+  background: rgba(167, 139, 250, 0.03);
+}
+
+.ph-desc {
+  padding: 0.6rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SYNTAX GUIDE MODAL
+   ═══════════════════════════════════════════════════════════════ */
+.sg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 6000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s;
+  padding: 2rem;
+}
+.sg-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sg-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: min(680px, 100%);
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  padding: 2rem 2.25rem;
+  box-shadow:
+    0 40px 100px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  transform: translateY(20px) scale(0.96);
+  transition: transform 0.3s var(--ease);
+}
+.sg-overlay.open .sg-modal {
+  transform: translateY(0) scale(1);
+}
+
+.sg-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.sg-modal-title {
+  font-family: var(--font);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sg-modal-close {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  line-height: 1;
+  transition: all 0.15s;
+}
+.sg-modal-close:hover {
+  color: var(--text);
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+}
+
+.sg-section-label {
+  font-family: var(--font);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--accent-border);
+}
+.sg-section-label:first-child { margin-top: 0; }
+
+.sg-item {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 0.6rem 0;
+}
+.sg-item + .sg-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.sg-code {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sg-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.sg-desc em {
+  color: var(--accent);
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.sg-ops-grid {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr;
+  gap: 0.4rem 1rem;
+  padding: 0.6rem 0;
+}
+.sg-ops-grid code {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+.sg-ops-grid span {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.sg-note {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.6;
+  padding: 0.5rem 0;
+}
+.sg-note em {
+  color: var(--accent);
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.sg-examples-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.85rem;
+}
+
+.sg-example {
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+}
+
+.sg-example-label {
+  font-family: var(--font);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 0.45rem;
+}
+
+.sg-example code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.sg-example-results {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.sg-example-results b {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TOAST NOTIFICATIONS
+   ═══════════════════════════════════════════════════════════════ */
+#toast-container {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  z-index: 9999;
+}
+
+.toast {
+  font-family: var(--font);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 1rem 1.5rem;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  animation: toastSlideIn 0.4s var(--ease) both;
+  max-width: 400px;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  backdrop-filter: blur(16px);
+}
+
+.toast.ok {
+  border-left: 4px solid var(--green);
+  background: linear-gradient(90deg, var(--green-soft) 0%, var(--surface-raised) 50%);
+}
+
+.toast.err {
+  border-left: 4px solid var(--red);
+  background: linear-gradient(90deg, var(--red-soft) 0%, var(--surface-raised) 50%);
+}
+
+.toast.out {
+  animation: toastSlideOut 0.3s var(--ease) both;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(30px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes toastSlideOut {
+  to {
+    opacity: 0;
+    transform: translateX(20px) scale(0.95);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   UTILITIES
+   ═══════════════════════════════════════════════════════════════ */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 0.5rem;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.hidden { display: none !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Tablet */
+@media (max-width: 960px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .sidebar-panel {
+    position: static;
+    max-height: none;
+  }
+  .ph-table { max-height: 400px; }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .shell { padding: 1.5rem 1.25rem 5rem; }
+
+  header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+  }
+
+  header h1 { font-size: 1.4rem; }
+  header p { font-size: 0.8rem; }
+
+  .user-info {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .user-avatar { width: 32px; height: 32px; }
+  .user-name { font-size: 0.85rem; }
+  .btn-logout { font-size: 0.75rem; padding: 0.45rem 0.9rem; }
+
+  .page-tabs {
+    display: flex;
+    width: 100%;
+    margin-bottom: 2rem;
+    padding: 4px;
+  }
+  .page-tab {
+    flex: 1;
+    text-align: center;
+    padding: 0.75rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .settings-section { max-width: none; }
+  .preset-cards {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  .preset-card { padding: 1.25rem; }
+  .preset-card-name { font-size: 0.95rem; }
+  .preset-card-desc { font-size: 0.8rem; }
+
+  .top-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .cmd-selector { min-width: 100%; }
+  .cmd-select { font-size: 0.85rem; }
+  .tab-bar { align-self: flex-start; margin-top: 0.5rem; }
+  .tab-btn { padding: 0.55rem 0.95rem; font-size: 0.78rem; }
+
+  .tmpl-textarea {
+    font-size: 0.82rem;
+    padding: 0.8rem 1rem;
+  }
+  .tmpl-label { font-size: 0.75rem; }
+
+  .tmpl-actions {
+    flex-direction: column;
+    gap: 0.65rem;
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+  }
+  .btn-save, .btn-reset {
+    width: 100%;
+    justify-content: center;
+    padding: 0.9rem;
+    font-size: 0.9rem;
+  }
+
+  .ph-row { grid-template-columns: 125px 1fr; }
+  .ph-name { font-size: 0.72rem; padding: 0.5rem 0.7rem; }
+  .ph-desc { font-size: 0.75rem; padding: 0.5rem 0.7rem; }
+
+  #toast-container {
+    left: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+  }
+  .toast {
+    max-width: none;
+    font-size: 0.85rem;
+    padding: 0.9rem 1.25rem;
+  }
+
+  .login-ring { width: 320px; height: 320px; }
+  .login-ring-2 { width: 450px; height: 450px; }
+  .login-box h2 { font-size: 1.6rem; }
+  .login-box p { font-size: 0.9rem; margin-bottom: 2rem; }
+  .btn-discord { padding: 0.9rem 2rem; font-size: 0.9rem; }
+  .login-error { font-size: 0.82rem; max-width: 300px; }
+
+  .sg-modal { padding: 1.5rem; }
+  .sg-examples-grid { grid-template-columns: 1fr; }
+}
+
+/* Small mobile */
+@media (max-width: 400px) {
+  .shell { padding: 1.25rem 1rem 4.5rem; }
+  header h1 { font-size: 1.25rem; }
+  .preset-card { padding: 1.1rem; }
+  .ph-row { grid-template-columns: 110px 1fr; }
+  .login-ring { width: 260px; height: 260px; }
+  .login-ring-2 { width: 360px; height: 360px; }
+}
+
+/* Ultra-wide */
+@media (min-width: 1500px) {
+  .shell { max-width: 1480px; }
+  .workspace { grid-template-columns: 1fr 450px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   AUDIT LOG PAGE
+   ═══════════════════════════════════════════════════════════════ */
+.audit-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.audit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.audit-title {
+  font-family: var(--font);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.audit-title .dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.audit-filters {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.audit-filter-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.audit-filter-select:hover {
+  border-color: var(--border-hover);
+}
+
+.audit-filter-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.audit-refresh-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.audit-refresh-btn:hover {
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.audit-table {
+  width: 100%;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: 140px 120px 100px 100px 1fr;
+  padding: 0.875rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s var(--ease);
+  align-items: center;
+  gap: 1rem;
+}
+
+.audit-row:hover {
+  background: var(--surface-hover);
+}
+
+.audit-row:last-child {
+  border-bottom: none;
+}
+
+.audit-row-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface);
+}
+
+.audit-row-header:hover {
+  background: var(--surface);
+}
+
+.audit-cell {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-cell.time {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+.audit-cell.user {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.audit-cell.action {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.audit-action-badge {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.audit-action-badge.update {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.audit-action-badge.reset {
+  background: var(--yellow-soft);
+  color: var(--yellow);
+}
+
+.audit-cell.command {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent-light);
+}
+
+.audit-cell.details {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.audit-diff-btn {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.audit-diff-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.audit-empty {
+  padding: 3rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.audit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.audit-page-btn {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.875rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.audit-page-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.audit-page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.audit-page-info {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  padding: 0 0.75rem;
+}
+
+/* Diff modal - Git-like unified diff */
+.diff-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 6000;
+  padding: 2rem;
+}
+
+.diff-overlay.open {
+  display: flex;
+}
+
+.diff-modal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  max-width: 800px;
+  width: 100%;
+  max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.diff-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.diff-modal-title {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.diff-modal-title::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  background: linear-gradient(135deg, var(--red) 50%, var(--green) 50%);
+  border-radius: 2px;
+}
+
+.diff-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.diff-modal-close:hover {
+  color: var(--text);
+}
+
+.diff-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.diff-revert-btn {
+  background: linear-gradient(135deg, var(--accent-dark), var(--accent));
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 0.875rem;
+  color: white;
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.25);
+}
+
+.diff-revert-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(167, 139, 250, 0.35);
+}
+
+.diff-revert-btn:active {
+  transform: translateY(0);
+}
+
+.diff-revert-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.diff-stats {
+  display: flex;
+  gap: 1rem;
+  padding: 0.625rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.diff-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.diff-stat.additions { color: var(--green); }
+.diff-stat.deletions { color: var(--red); }
+.diff-stat.unchanged { color: var(--text-dim); }
+
+.diff-content {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.diff-file-header {
+  padding: 0.5rem 1rem;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.diff-lines {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.diff-line {
+  display: flex;
+  min-height: 1.5em;
+}
+
+.diff-line-num {
+  width: 45px;
+  padding: 0 0.5rem;
+  text-align: right;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+}
+
+.diff-line-num.old { width: 45px; }
+.diff-line-num.new { width: 45px; }
+
+.diff-line-sign {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.diff-line-text {
+  flex: 1;
+  padding: 0 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Line types */
+.diff-line.addition {
+  background: rgba(52, 211, 153, 0.1);
+}
+.diff-line.addition .diff-line-sign {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.15);
+}
+.diff-line.addition .diff-line-text {
+  color: var(--green);
+}
+.diff-line.addition .diff-line-num.new {
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.diff-line.deletion {
+  background: rgba(248, 113, 113, 0.1);
+}
+.diff-line.deletion .diff-line-sign {
+  color: var(--red);
+  background: rgba(248, 113, 113, 0.15);
+}
+.diff-line.deletion .diff-line-text {
+  color: var(--red);
+}
+.diff-line.deletion .diff-line-num.old {
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.diff-line.context {
+  background: transparent;
+}
+.diff-line.context .diff-line-sign {
+  color: var(--text-muted);
+}
+.diff-line.context .diff-line-text {
+  color: var(--text-secondary);
+}
+
+.diff-line.hunk-header {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 0.25rem 1rem;
+  font-size: 0.75rem;
+}
+
+.diff-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .audit-row {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+    padding: 1rem;
+  }
+  .audit-row-header { display: none; }
+  .audit-cell::before {
+    content: attr(data-label);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 0.2rem;
+  }
+  .audit-filters { flex-wrap: wrap; }
+  .diff-line-num { width: 35px; font-size: 0.65rem; }
+  .diff-modal { max-height: 90vh; }
+}
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="loginScreen">
+  <div class="login-ring"></div>
+  <div class="login-ring-2"></div>
+  <div class="login-box">
+    <div class="login-icon">&#9734;</div>
+    <h2>Patchouli Settings</h2>
+    <p>Sign in with Discord to access settings</p>
+    <a class="btn-discord" href="/osu/auth/discord">
+      <svg viewBox="0 0 24 24"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
+      Login with Discord
+    </a>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
+
+<div class="shell" id="app" style="display:none">
+  <header>
+    <div>
+      <h1><span>Patchouli</span> <span id="pageTitle">Settings</span></h1>
+      <p id="pageSubtitle">Personal settings</p>
+    </div>
+    <div class="user-info" id="userInfo"></div>
+  </header>
+
+  <!-- Page-level tabs (admin only) -->
+  <div class="page-tabs hidden" id="pageTabs">
+    <button class="page-tab active" data-page="settings">My Settings</button>
+    <button class="page-tab" data-page="templates">Templates</button>
+    <button class="page-tab" data-page="audit">Audit Log</button>
+  </div>
+
+  <!-- Settings section (all users) -->
+  <div id="settingsPage">
+    <div class="settings-section">
+      <!-- osu! Account Linking -->
+      <div class="settings-group">
+        <div class="settings-group-label">
+          <span class="dot"></span>
+          osu! Account
+        </div>
+        <div class="osu-link-row" id="osuLinkRow">
+          <div class="osu-link-info">
+            <div class="osu-link-icon" id="osuLinkIcon"></div>
+            <div class="osu-link-text">
+              <div class="osu-link-status" id="osuLinkStatus">Checking...</div>
+              <div class="osu-link-desc" id="osuLinkDesc">Link your osu! account to use commands without specifying username</div>
+            </div>
+          </div>
+          <div id="osuLinkActions"></div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-label">
+          <span class="dot"></span>
+          Embed Preset
+          <span class="settings-saved" id="settingsSaved">Saved &#10003;</span>
+        </div>
+        <div class="preset-cards" id="presetCards"></div>
+
+        <!-- No permission message for custom templates -->
+        <div class="custom-no-permission hidden" id="customNoPermission">
+          <div class="no-perm-icon">🔒</div>
+          <div class="no-perm-text">You don't have permission to edit custom templates.</div>
+          <div class="no-perm-hint">You can still use the Custom preset if you have a saved template.</div>
+        </div>
+      </div>
+
+      <!-- Custom template editor -->
+      <div class="settings-group hidden" id="customEditorGroup">
+        <div class="settings-group-label">
+          <span class="dot"></span>
+          Custom Template Editor
+          <span class="settings-saved hidden" id="customSaved">Saved &#10003;</span>
+        </div>
+
+        <div class="custom-editor-header">
+          <div class="custom-cmd-selector">
+            <label>Command</label>
+            <select id="customCmdSelect">
+              <option value="rs">Recent Score (!rs)</option>
+              <option value="compare">Compare (!c)</option>
+              <option value="map">Map Info (!map)</option>
+              <option value="lb">Leaderboard (!lb)</option>
+              <option value="top">Top Scores (!top)</option>
+              <option value="profile">Profile (!osu)</option>
+              <option value="osc">Score Counts (!osc)</option>
+              <option value="sim">Simulate (!sim)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="custom-editor-workspace">
+          <div class="custom-fields-panel">
+            <div class="custom-fields-container" id="customFieldsContainer">
+              <div class="empty"><span class="spinner"></span> Loading...</div>
+            </div>
+          </div>
+          <div class="custom-placeholders-panel">
+            <div class="placeholders-header">Available Placeholders</div>
+            <div class="placeholders-hint">Click to copy</div>
+            <div class="placeholders-list" id="customPlaceholdersList"></div>
+          </div>
+        </div>
+
+        <div class="custom-validation" id="customValidation"></div>
+
+        <div class="custom-actions">
+          <button class="btn-reset" id="btnResetCustom">Reset to Classic</button>
+          <button class="btn-save" id="btnSaveCustom">Save Template</button>
+        </div>
+      </div>
+
+      <!-- Debug settings (admin only) -->
+      <div class="settings-group hidden" id="debugSettingsGroup">
+        <div class="settings-group-label"><span class="dot"></span> Debug Settings</div>
+
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Verbose osu! API</div>
+            <div class="toggle-desc">Log full request/response for osu! API calls</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggleVerboseOsuApi">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Verbose rosu-pp</div>
+            <div class="toggle-desc">Log full request/response for rosu-pp gRPC calls</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="toggleVerboseRosuPp">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="input-row">
+          <div style="flex:1">
+            <div class="toggle-label">Max response log length</div>
+            <div class="toggle-desc">0 = unlimited</div>
+          </div>
+          <div class="slider-input-combo">
+            <input type="range" id="sliderMaxLogLength" min="0" max="10000" step="500" value="2000">
+            <input type="number" id="inputMaxLogLength" min="0" step="500" value="2000">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Templates section (admin only) -->
+  <div id="templatesPage" class="hidden">
+    <div class="top-bar">
+      <div class="cmd-selector">
+        <div class="cmd-selector-label">Command</div>
+        <select class="cmd-select" id="cmdSelect"></select>
+      </div>
+      <div class="tab-bar hidden" id="tabBar"></div>
+    </div>
+
+    <div class="workspace">
+      <div class="editor-panel">
+        <div class="panel-header"><span class="dot"></span> Template fields</div>
+        <div class="fields-container" id="fieldsContainer">
+          <div class="empty"><span class="spinner"></span> Loading...</div>
+        </div>
+        <div class="tmpl-actions">
+          <button class="btn-save" id="btnSave">Save</button>
+          <button class="btn-reset" id="btnReset">Reset to default</button>
+        </div>
+      </div>
+
+      <div class="sidebar-panel">
+        <div class="panel-header"><span class="dot"></span> Available placeholders</div>
+        <button class="syntax-guide-btn" id="syntaxGuideBtn">
+          <span class="sg-icon">?</span> Syntax Guide
+        </button>
+        <div class="ph-table" id="phTable">
+          <div class="empty"><span class="spinner"></span> Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audit Log section (admin only) -->
+  <div id="auditPage" class="hidden">
+    <div class="audit-container">
+      <div class="audit-header">
+        <div class="audit-title"><span class="dot"></span> Template Change History</div>
+        <div class="audit-filters">
+          <select class="audit-filter-select" id="auditCmdFilter">
+            <option value="">All commands</option>
+          </select>
+          <button class="audit-refresh-btn" id="auditRefreshBtn">
+            &#8635; Refresh
+          </button>
+        </div>
+      </div>
+      <div class="audit-table" id="auditTable">
+        <div class="audit-row audit-row-header">
+          <div class="audit-cell">Time</div>
+          <div class="audit-cell">User</div>
+          <div class="audit-cell">Action</div>
+          <div class="audit-cell">Command</div>
+          <div class="audit-cell">Details</div>
+        </div>
+        <div class="audit-empty" id="auditEmpty">Loading...</div>
+      </div>
+      <div class="audit-pagination" id="auditPagination">
+        <button class="audit-page-btn" id="auditPrevBtn" disabled>&laquo; Previous</button>
+        <span class="audit-page-info" id="auditPageInfo">Page 1</span>
+        <button class="audit-page-btn" id="auditNextBtn">Next &raquo;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Diff Modal -->
+<div class="diff-overlay" id="diffOverlay">
+  <div class="diff-modal">
+    <div class="diff-modal-header">
+      <span class="diff-modal-title" id="diffTitle">Template Changes</span>
+      <div class="diff-modal-actions">
+        <button class="diff-revert-btn hidden" id="diffRevertBtn">Revert to this</button>
+        <button class="diff-modal-close" id="diffClose">&times;</button>
+      </div>
+    </div>
+    <div class="diff-stats" id="diffStats"></div>
+    <div class="diff-content">
+      <div class="diff-lines" id="diffLines"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Syntax Guide Modal -->
+<div class="sg-overlay" id="sgOverlay">
+  <div class="sg-modal">
+    <div class="sg-modal-header">
+      <span class="sg-modal-title">Syntax Guide</span>
+      <button class="sg-modal-close" id="sgClose">&times;</button>
+    </div>
+
+    <div class="sg-section-label">Placeholders</div>
+    <div class="sg-item">
+      <code class="sg-code">{key}</code>
+      <span class="sg-desc">Replace with value. Unknown keys stay as literal text.</span>
+    </div>
+
+    <div class="sg-section-label">Conditionals</div>
+    <div class="sg-item">
+      <code class="sg-code">{?key}...{/key}</code>
+      <span class="sg-desc">Show block if <em>key</em> is non-empty</span>
+    </div>
+    <div class="sg-item">
+      <code class="sg-code">{!key}...{/key}</code>
+      <span class="sg-desc">Show block if <em>key</em> is empty (negation)</span>
+    </div>
+    <div class="sg-item">
+      <code class="sg-code">{?key}...{:key}...{/key}</code>
+      <span class="sg-desc">If / else &mdash; first branch if true, second if false</span>
+    </div>
+
+    <div class="sg-section-label">Comparisons</div>
+    <div class="sg-ops-grid">
+      <code>{?key=val}</code><span>equals</span>
+      <code>{?key!=val}</code><span>not equals</span>
+      <code>{?key&gt;val}</code><span>greater than</span>
+      <code>{?key&lt;val}</code><span>less than</span>
+      <code>{?key&gt;=val}</code><span>greater or equal</span>
+      <code>{?key&lt;=val}</code><span>less or equal</span>
+    </div>
+    <div class="sg-note">All comparisons support <em>{:key}</em> else clause. Use <em>{!</em> prefix to negate any condition.</div>
+
+    <div class="sg-section-label">Loops</div>
+    <div class="sg-item">
+      <code class="sg-code">{#array}...{/array}</code>
+      <span class="sg-desc">Repeat block for each item in array (e.g., scores)</span>
+    </div>
+    <div class="sg-item">
+      <code class="sg-code">{.field}</code>
+      <span class="sg-desc">Access field of current item inside loop</span>
+    </div>
+    <div class="sg-item">
+      <code class="sg-code">{#index}</code>
+      <span class="sg-desc">Current index (0-based: 0, 1, 2...)</span>
+    </div>
+    <div class="sg-item">
+      <code class="sg-code">{#position}</code>
+      <span class="sg-desc">Current position (1-based: 1, 2, 3...)</span>
+    </div>
+    <div class="sg-note">Inside loops, use <em>{.field}</em> for per-item values and <em>{field}</em> for global values.</div>
+
+    <div class="sg-section-label">Colors</div>
+    <div class="sg-item">
+      <code class="sg-code">#rrggbb</code>
+      <span class="sg-desc">Hex color (e.g., #ff66aa, #7c4dff)</span>
+    </div>
+    <div class="sg-ops-grid">
+      <code>viola_purple</code><span>#7c4dff</span>
+      <code>osu_pink</code><span>#ff66aa</span>
+      <code>easy</code><span>#4290f5</span>
+      <code>normal</code><span>#4fc0ff</span>
+      <code>hard</code><span>#ffb641</span>
+      <code>insane</code><span>#ff6682</span>
+      <code>expert</code><span>#c967e5</span>
+      <code>success</code><span>#2ecc71</span>
+      <code>error</code><span>#ff4444</span>
+      <code>warning</code><span>#f1c40f</span>
+    </div>
+
+    <div class="sg-section-label">Examples</div>
+    <div class="sg-examples-grid">
+      <div class="sg-example">
+        <div class="sg-example-label">Pass / Fail with else</div>
+        <code>{rank}{?completion} ({completion}){:completion} FC{/completion}</code>
+        <div class="sg-example-results">
+          <span><b>Pass:</b> S FC</span>
+          <span><b>Fail:</b> F (85.32%)</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">FC suggestion</div>
+        <code>**{pp}PP**{?fc_line} {fc_line}{/fc_line}</code>
+        <div class="sg-example-results">
+          <span><b>FC:</b> **350PP**</span>
+          <span><b>Miss:</b> **300PP** (350pp for 99% FC)</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">Zero misses = FC</div>
+        <code>{?miss=0}Full Combo!{:miss}{miss} miss(es){/miss}</code>
+        <div class="sg-example-results">
+          <span><b>0:</b> Full Combo!</span>
+          <span><b>3:</b> 3 miss(es)</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">PP threshold</div>
+        <code>{?pp&gt;500}&#x1f525; {/pp}**{pp}PP**</code>
+        <div class="sg-example-results">
+          <span><b>300pp:</b> **300PP**</span>
+          <span><b>600pp:</b> &#x1f525; **600PP**</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">Rank detection</div>
+        <code>{?rank_raw=SS}&#x2b50; PERFECT{:rank_raw}{rank}{/rank_raw}</code>
+        <div class="sg-example-results">
+          <span><b>SS:</b> &#x2b50; PERFECT</span>
+          <span><b>A:</b> (rank emoji)</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">High accuracy</div>
+        <code>{?acc&gt;=99.50}Insane acc! {/acc}{acc}%</code>
+        <div class="sg-example-results">
+          <span><b>99.73%:</b> Insane acc! 99.73%</span>
+          <span><b>95%:</b> 95.00%</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">Negation</div>
+        <code>{!completion}&#x2713; Passed{/completion}</code>
+        <div class="sg-example-results">
+          <span><b>Pass:</b> &#x2713; Passed</span>
+          <span><b>Fail:</b> (hidden)</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">Try counter</div>
+        <code>{?try_line}{try_line} &#x2014; {/try_line}{rank} **{pp}PP**</code>
+        <div class="sg-example-results">
+          <span><b>No:</b> S **350PP**</span>
+          <span><b>Yes:</b> Try #5 &#x2014; S **350PP**</span>
+        </div>
+      </div>
+
+      <div class="sg-example">
+        <div class="sg-example-label">Score loop</div>
+        <code>{#scores}#{#position} {.username} **{.pp}pp**\n{/scores}</code>
+        <div class="sg-example-results">
+          <span>#1 cookiezi **800pp**</span>
+          <span>#2 Rafis **750pp**</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+const API = {
+  templates: '/osu/api/templates',
+  resetTemplate: '/osu/api/templates/reset',
+  templateAudit: '/osu/api/templates/audit',
+  mySettings: '/osu/api/my-settings',
+  myTemplates: '/osu/api/my-templates',
+  me: '/osu/auth/discord/me',
+  logout: '/osu/auth/discord/logout',
+  debug: '/osu/api/debug',
+  osuLink: '/osu/api/me/osu'
+};
+
+const loginScreen = document.getElementById('loginScreen');
+const loginError = document.getElementById('loginError');
+const appEl = document.getElementById('app');
+
+// Check for error or success in URL
+const urlParams = new URLSearchParams(window.location.search);
+let pendingOsuToast = null;
+
+if (urlParams.has('error')) {
+  const err = urlParams.get('error');
+  if (err === 'not_member') {
+    loginError.textContent = 'You must be a member of the Discord server to access this page.';
+  } else if (err === 'guild_check_failed') {
+    loginError.textContent = 'Could not verify server membership. Please try again later.';
+  } else if (err === 'access_denied') {
+    loginError.textContent = 'Access denied.';
+  } else if (err === 'login_required') {
+    loginError.textContent = 'Please log in with Discord first.';
+  } else if (err === 'link_failed') {
+    pendingOsuToast = { msg: 'Failed to save osu! link.', ok: false };
+  } else if (err.startsWith('osu_')) {
+    // osu! OAuth errors - show after app loads
+    const osuErrors = {
+      'osu_access_denied': 'osu! authorization denied.',
+      'osu_token_failed': 'Failed to authenticate with osu!',
+      'osu_invalid_response': 'Invalid response from osu!',
+      'osu_user_failed': 'Failed to get osu! user info.',
+      'osu_invalid_user': 'Invalid osu! user response.'
+    };
+    pendingOsuToast = { msg: osuErrors[err] || err, ok: false };
+  } else {
+    loginError.textContent = 'Authentication error: ' + err;
+  }
+  history.replaceState(null, '', window.location.pathname);
+}
+
+if (urlParams.has('osu_linked')) {
+  pendingOsuToast = { msg: 'osu! account linked successfully!', ok: true };
+  history.replaceState(null, '', window.location.pathname);
+}
+
+// Check session on load
+fetch(API.me)
+  .then(r => {
+    if (r.ok) return r.json();
+    if (r.status === 401) throw new Error('not authenticated');
+    throw new Error('server');
+  })
+  .then(user => showApp(user))
+  .catch(err => {
+    loginScreen.style.display = 'flex';
+    if (err.message !== 'not authenticated') {
+      loginError.textContent = 'Could not reach server. Try again later.';
+    }
+  });
+
+let userRole = 'member';
+let canRevert = false;
+let activePage = 'settings';
+let currentSettings = {};
+
+const PRESET_DESCRIPTIONS = {
+  compact: 'Minimal view with key stats only',
+  classic: 'Standard layout with map info and FC line',
+  extended: 'Full details with PP breakdown',
+  custom: 'Your personalized template'
+};
+
+function showApp(user) {
+  loginScreen.style.display = 'none';
+  appEl.style.display = 'block';
+  userRole = user.role || 'member';
+  canRevert = user.can_revert === true;
+
+  // Render user info using DOM API (avoid innerHTML for untrusted data)
+  const userInfo = document.getElementById('userInfo');
+  userInfo.innerHTML = '';
+
+  const img = document.createElement('img');
+  img.className = 'user-avatar';
+  img.alt = '';
+  img.src = user.avatar && user.discord_id
+    ? `https://cdn.discordapp.com/avatars/${encodeURIComponent(user.discord_id)}/${encodeURIComponent(user.avatar)}.png?size=64`
+    : 'https://cdn.discordapp.com/embed/avatars/0.png';
+  userInfo.appendChild(img);
+
+  const name = document.createElement('span');
+  name.className = 'user-name';
+  name.textContent = user.username || '';
+  userInfo.appendChild(name);
+
+  const btn = document.createElement('button');
+  btn.className = 'btn-logout';
+  btn.textContent = 'Logout';
+  btn.addEventListener('click', async () => {
+    await fetch(API.logout, { method: 'POST' });
+    location.reload();
+  });
+  userInfo.appendChild(btn);
+
+  // Show page tabs for admins
+  if (userRole === 'admin') {
+    document.getElementById('pageTabs').classList.remove('hidden');
+    document.getElementById('pageTitle').textContent = 'Settings';
+    document.getElementById('pageSubtitle').textContent = 'Personal & global settings';
+    document.getElementById('debugSettingsGroup').classList.remove('hidden');
+    loadDebugSettings();
+    initDebugToggles();
+  } else {
+    document.getElementById('pageTitle').textContent = 'Settings';
+    document.getElementById('pageSubtitle').textContent = 'Personal settings';
+  }
+
+  // Load personal settings first, then templates if admin
+  loadMySettings().then(() => {
+    if (userRole === 'admin') {
+      init(); // loads templates
+    }
+  });
+
+  // Load osu! link status
+  loadOsuLinkStatus();
+
+  // Show pending osu toast if any
+  if (pendingOsuToast) {
+    setTimeout(() => toast(pendingOsuToast.msg, pendingOsuToast.ok), 300);
+    pendingOsuToast = null;
+  }
+}
+
+// osu! logo SVG
+const OSU_LOGO_SVG = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#fff" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="#fff"/></svg>';
+
+async function loadOsuLinkStatus() {
+  const iconEl = document.getElementById('osuLinkIcon');
+  const statusEl = document.getElementById('osuLinkStatus');
+  const descEl = document.getElementById('osuLinkDesc');
+  const actionsEl = document.getElementById('osuLinkActions');
+
+  try {
+    const data = await apiGet(API.osuLink);
+
+    if (data.linked) {
+      // Show osu! avatar
+      iconEl.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = 'https://a.ppy.sh/' + data.osu_user_id;
+      img.alt = '';
+      img.onerror = () => { iconEl.innerHTML = OSU_LOGO_SVG; };
+      iconEl.appendChild(img);
+
+      const displayName = data.osu_username || ('#' + data.osu_user_id);
+      statusEl.textContent = 'Linked to ' + displayName;
+      statusEl.classList.add('linked');
+      descEl.textContent = 'osu! user ID: ' + data.osu_user_id;
+
+      actionsEl.innerHTML = '';
+      const unlinkBtn = document.createElement('button');
+      unlinkBtn.className = 'btn-unlink';
+      unlinkBtn.textContent = 'Unlink';
+      unlinkBtn.addEventListener('click', unlinkOsuAccount);
+      actionsEl.appendChild(unlinkBtn);
+    } else {
+      // Show osu! logo
+      iconEl.innerHTML = OSU_LOGO_SVG;
+
+      statusEl.textContent = 'Not linked';
+      statusEl.classList.remove('linked');
+      descEl.textContent = 'Link your osu! account to use commands without specifying username';
+
+      actionsEl.innerHTML = '';
+      const linkBtn = document.createElement('a');
+      linkBtn.className = 'btn-osu';
+      linkBtn.href = '/osu/auth/osu';
+      linkBtn.textContent = 'Link osu! account';
+      actionsEl.appendChild(linkBtn);
+    }
+  } catch (err) {
+    iconEl.innerHTML = OSU_LOGO_SVG;
+    statusEl.textContent = 'Error loading status';
+    statusEl.classList.remove('linked');
+    descEl.textContent = err.message;
+    actionsEl.innerHTML = '';
+  }
+}
+
+async function unlinkOsuAccount() {
+  if (!confirm('Unlink your osu! account? You can always link it again.')) return;
+
+  try {
+    const r = await fetch(API.osuLink, { method: 'DELETE' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    toast('osu! account unlinked');
+    loadOsuLinkStatus();
+  } catch (err) {
+    toast('Failed to unlink: ' + err.message, false);
+  }
+}
+
+// ---- Debug Settings ----
+async function loadDebugSettings() {
+  try {
+    const data = await apiGet(API.debug);
+    document.getElementById('toggleVerboseOsuApi').checked = data.verbose_osu_api || false;
+    document.getElementById('toggleVerboseRosuPp').checked = data.verbose_rosu_pp || false;
+    const logVal = data.max_response_log_length || 2000;
+    document.getElementById('inputMaxLogLength').value = logVal;
+    document.getElementById('sliderMaxLogLength').value = Math.min(logVal, 10000);
+  } catch (err) {
+    console.error('Failed to load debug settings:', err);
+  }
+}
+
+async function updateDebugSetting(key, value) {
+  try {
+    const body = {};
+    body[key] = value;
+    await apiPost(API.debug, body);
+    toast(`${key} = ${value}`);
+  } catch (err) {
+    toast('Failed to update: ' + err.message, false);
+    // Revert UI
+    loadDebugSettings();
+  }
+}
+
+function initDebugToggles() {
+  document.getElementById('toggleVerboseOsuApi').addEventListener('change', (e) => {
+    updateDebugSetting('verbose_osu_api', e.target.checked);
+  });
+
+  document.getElementById('toggleVerboseRosuPp').addEventListener('change', (e) => {
+    updateDebugSetting('verbose_rosu_pp', e.target.checked);
+  });
+
+  const logLengthInput = document.getElementById('inputMaxLogLength');
+  const logLengthSlider = document.getElementById('sliderMaxLogLength');
+  let logLengthTimeout;
+
+  function updateLogLength(val) {
+    clearTimeout(logLengthTimeout);
+    logLengthTimeout = setTimeout(() => {
+      updateDebugSetting('max_response_log_length', val);
+    }, 500);
+  }
+
+  logLengthSlider.addEventListener('input', () => {
+    const val = parseInt(logLengthSlider.value, 10) || 0;
+    logLengthInput.value = val;
+    updateLogLength(val);
+  });
+
+  logLengthInput.addEventListener('input', () => {
+    const val = parseInt(logLengthInput.value, 10) || 0;
+    logLengthSlider.value = Math.min(val, 10000);
+    updateLogLength(val);
+  });
+}
+
+function switchPage(page) {
+  activePage = page;
+  const settingsPage = document.getElementById('settingsPage');
+  const templatesPage = document.getElementById('templatesPage');
+  const auditPage = document.getElementById('auditPage');
+
+  document.querySelectorAll('.page-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.page === page);
+  });
+
+  settingsPage.classList.add('hidden');
+  templatesPage.classList.add('hidden');
+  auditPage.classList.add('hidden');
+
+  if (page === 'settings') {
+    settingsPage.classList.remove('hidden');
+  } else if (page === 'templates') {
+    templatesPage.classList.remove('hidden');
+  } else if (page === 'audit') {
+    auditPage.classList.remove('hidden');
+    loadAuditLog();
+  }
+}
+
+async function loadMySettings() {
+  try {
+    const data = await apiGet(API.mySettings);
+    currentSettings = data;
+    // Check custom template permission in parallel
+    await checkCustomTemplatePermission();
+    renderPresetCards();
+  } catch (err) {
+    toast('Failed to load settings: ' + err.message, false);
+  }
+}
+
+function renderPresetCards() {
+  const container = document.getElementById('presetCards');
+  container.innerHTML = '';
+  for (const preset of ['compact', 'classic', 'extended', 'custom']) {
+    const card = document.createElement('button');
+    card.className = 'preset-card' + (currentSettings.embed_preset === preset ? ' active' : '');
+    card.dataset.preset = preset;
+
+    // Checkmark
+    const check = document.createElement('div');
+    check.className = 'preset-check';
+    check.innerHTML = '<svg viewBox="0 0 16 16"><path d="M4 8.5L6.5 11L12 5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    card.appendChild(check);
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'preset-card-name';
+    nameEl.textContent = preset.charAt(0).toUpperCase() + preset.slice(1);
+    card.appendChild(nameEl);
+
+    const descEl = document.createElement('div');
+    descEl.className = 'preset-card-desc';
+    descEl.textContent = PRESET_DESCRIPTIONS[preset] || '';
+    card.appendChild(descEl);
+
+    // Add edit icon for custom preset
+    if (preset === 'custom') {
+      const editIcon = document.createElement('div');
+      editIcon.className = 'preset-edit-icon';
+      editIcon.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-9.793 9.793a.5.5 0 0 1-.168.11l-4 1.5a.5.5 0 0 1-.638-.638l1.5-4a.5.5 0 0 1 .11-.168L12.146.854zM11.207 2.5L13.5 4.793l1.146-1.146L12.354 1.354 11.207 2.5zm.793 2.5L9.707 2.707 3.707 8.707l2.586 2.586 6-6zM2.707 9.707l-.06.06-.94 2.507 2.507-.94.06-.06L2.707 9.707z"/></svg>';
+      editIcon.title = 'Edit template';
+      card.appendChild(editIcon);
+    }
+
+    card.addEventListener('click', () => savePresetChoice(preset));
+    container.appendChild(card);
+  }
+
+  // Show/hide custom template editor based on current preset
+  updateCustomEditorVisibility();
+}
+
+async function savePresetChoice(preset) {
+  if (currentSettings.embed_preset === preset) return;
+  try {
+    await apiPost(API.mySettings, { embed_preset: preset });
+    currentSettings.embed_preset = preset;
+    renderPresetCards();
+
+    const saved = document.getElementById('settingsSaved');
+    saved.classList.add('visible');
+    setTimeout(() => saved.classList.remove('visible'), 1500);
+  } catch (err) {
+    toast('Failed to save: ' + err.message, false);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CUSTOM TEMPLATE EDITOR
+// ═══════════════════════════════════════════════════════════════
+
+let currentCustomCommand = 'rs';
+let customTemplateData = null;
+let customPlaceholders = [];
+let customSaveTimeout = null;
+let canEditCustomTemplates = false;
+
+async function checkCustomTemplatePermission() {
+  try {
+    const data = await apiGet(API.myTemplates);
+    canEditCustomTemplates = data.can_edit === true;
+  } catch (err) {
+    canEditCustomTemplates = false;
+  }
+}
+
+function updateCustomEditorVisibility() {
+  const editor = document.getElementById('customEditorGroup');
+  const noPermMsg = document.getElementById('customNoPermission');
+
+  if (currentSettings.embed_preset === 'custom') {
+    if (canEditCustomTemplates) {
+      editor.classList.remove('hidden');
+      if (noPermMsg) noPermMsg.classList.add('hidden');
+      loadCustomTemplate(currentCustomCommand);
+    } else {
+      editor.classList.add('hidden');
+      if (noPermMsg) noPermMsg.classList.remove('hidden');
+    }
+  } else {
+    editor.classList.add('hidden');
+    if (noPermMsg) noPermMsg.classList.add('hidden');
+  }
+}
+
+async function loadCustomTemplate(command) {
+  currentCustomCommand = command;
+  const container = document.getElementById('customFieldsContainer');
+  const placeholdersList = document.getElementById('customPlaceholdersList');
+  const validationEl = document.getElementById('customValidation');
+
+  container.innerHTML = '<div class="empty"><span class="spinner"></span> Loading...</div>';
+  validationEl.innerHTML = '';
+
+  try {
+    const data = await apiGet(`${API.myTemplates}/${command}`);
+    customTemplateData = data.template || {};
+    customPlaceholders = data.placeholders || [];
+
+    renderCustomFields();
+    renderCustomPlaceholders();
+  } catch (err) {
+    container.innerHTML = `<div class="empty" style="color:var(--red)">Failed to load: ${esc(err.message)}</div>`;
+  }
+}
+
+function renderCustomFields() {
+  const container = document.getElementById('customFieldsContainer');
+  container.innerHTML = '';
+
+  // Default field structure for rs command
+  const fieldNames = getFieldNamesForCommand(currentCustomCommand);
+
+  for (const fieldName of fieldNames) {
+    const group = document.createElement('div');
+    group.className = 'custom-field-group';
+
+    const label = document.createElement('label');
+    label.className = 'custom-field-label';
+    label.textContent = snakeToTitle(fieldName);
+    group.appendChild(label);
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'custom-field-input';
+    textarea.dataset.field = fieldName;
+    textarea.value = customTemplateData[fieldName] || '';
+    textarea.placeholder = `Enter ${fieldName} template...`;
+    textarea.rows = fieldName === 'description' ? 4 : 2;
+
+    textarea.addEventListener('input', () => {
+      customTemplateData[fieldName] = textarea.value;
+      debouncedValidateCustom();
+    });
+
+    group.appendChild(textarea);
+    container.appendChild(group);
+  }
+}
+
+function getFieldNamesForCommand(command) {
+  const fieldMap = {
+    rs: ['content', 'title', 'description', 'beatmap_info', 'footer', 'footer_icon', 'color'],
+    compare: ['color', 'title', 'header', 'field_name', 'field_value', 'footer'],
+    map: ['title', 'description', 'pp_field_name', 'pp_field', 'difficulty_field_name', 'difficulty_field', 'map_info_field_name', 'map_info_field', 'download_field_name', 'download_field', 'media_field_name', 'media_field'],
+    lb: ['color', 'field_name', 'field_value', 'footer'],
+    top: ['color', 'field_name', 'field_value', 'footer'],
+    profile: ['description', 'footer'],
+    osc: ['title', 'description'],
+    sim: ['body']
+  };
+  return fieldMap[command] || ['content', 'title', 'description', 'footer'];
+}
+
+function renderCustomPlaceholders() {
+  const container = document.getElementById('customPlaceholdersList');
+  container.innerHTML = '';
+
+  for (const placeholder of customPlaceholders) {
+    const chip = document.createElement('span');
+    chip.className = 'placeholder-chip';
+    chip.textContent = `{${placeholder}}`;
+    chip.title = `Click to copy {${placeholder}}`;
+    chip.addEventListener('click', () => {
+      navigator.clipboard.writeText(`{${placeholder}}`).then(() => {
+        chip.style.background = 'var(--green-soft)';
+        chip.style.borderColor = 'var(--green)';
+        chip.style.color = 'var(--green)';
+        setTimeout(() => {
+          chip.style.background = '';
+          chip.style.borderColor = '';
+          chip.style.color = '';
+        }, 500);
+      });
+    });
+    container.appendChild(chip);
+  }
+}
+
+function debouncedValidateCustom() {
+  clearTimeout(customSaveTimeout);
+  customSaveTimeout = setTimeout(validateCustomTemplate, 300);
+}
+
+async function validateCustomTemplate() {
+  const validationEl = document.getElementById('customValidation');
+  // Client-side basic validation
+  validationEl.innerHTML = '';
+
+  // Check for dangerous patterns
+  const dangerousPatterns = [/@everyone/i, /@here/i, /<@[!&]?\d+>/, /discord\.gg\//i, /discord\.com\/invite\//i];
+  let hasError = false;
+
+  for (const [field, value] of Object.entries(customTemplateData)) {
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(value)) {
+        validationEl.innerHTML += `<div class="validation-error">⚠ Field "${snakeToTitle(field)}" contains potentially dangerous content</div>`;
+        hasError = true;
+        break;
+      }
+    }
+  }
+
+  if (!hasError) {
+    // Check for unknown placeholders
+    const placeholderRegex = /\{([a-z_]+)\}/g;
+    for (const [field, value] of Object.entries(customTemplateData)) {
+      let match;
+      while ((match = placeholderRegex.exec(value)) !== null) {
+        const placeholder = match[1];
+        // Skip conditional syntax
+        if (placeholder.startsWith('?') || placeholder.startsWith('!') || placeholder.startsWith('#') || placeholder.startsWith(':') || placeholder.startsWith('/')) continue;
+        if (!customPlaceholders.includes(placeholder)) {
+          validationEl.innerHTML += `<div class="validation-warning">⚠ Unknown placeholder: {${esc(placeholder)}} in ${snakeToTitle(field)}</div>`;
+        }
+      }
+    }
+  }
+}
+
+async function saveCustomTemplate() {
+  const btn = document.getElementById('btnSaveCustom');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const result = await apiPost(`${API.myTemplates}/${currentCustomCommand}`, {
+      template: customTemplateData
+    });
+
+    if (result.ok) {
+      const saved = document.getElementById('customSaved');
+      saved.classList.add('visible');
+      setTimeout(() => saved.classList.remove('visible'), 1500);
+      toast('Template saved');
+    } else {
+      const validationEl = document.getElementById('customValidation');
+      validationEl.innerHTML = '';
+      for (const err of (result.errors || [])) {
+        validationEl.innerHTML += `<div class="validation-error">✕ ${esc(err)}</div>`;
+      }
+      for (const warn of (result.warnings || [])) {
+        validationEl.innerHTML += `<div class="validation-warning">⚠ ${esc(warn)}</div>`;
+      }
+    }
+  } catch (err) {
+    toast('Failed to save: ' + err.message, false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Template';
+  }
+}
+
+async function resetCustomTemplate() {
+  if (!confirm('Reset this template to the classic preset? Your custom changes will be lost.')) return;
+
+  try {
+    await fetch(`${API.myTemplates}/${currentCustomCommand}`, { method: 'DELETE' });
+    await apiPost(`${API.myTemplates}/${currentCustomCommand}/init`, { from_preset: 'classic' });
+    await loadCustomTemplate(currentCustomCommand);
+    toast('Template reset to classic');
+  } catch (err) {
+    toast('Failed to reset: ' + err.message, false);
+  }
+}
+
+// Initialize custom template editor event listeners
+document.addEventListener('DOMContentLoaded', () => {
+  const cmdSelect = document.getElementById('customCmdSelect');
+  if (cmdSelect) {
+    cmdSelect.addEventListener('change', (e) => {
+      loadCustomTemplate(e.target.value);
+    });
+  }
+
+  const saveBtn = document.getElementById('btnSaveCustom');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', saveCustomTemplate);
+  }
+
+  const resetBtn = document.getElementById('btnResetCustom');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', resetCustomTemplate);
+  }
+});
+
+function toast(msg, ok = true) {
+  const el = document.createElement('div');
+  el.className = `toast ${ok ? 'ok' : 'err'}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 2800);
+}
+
+async function apiGet(url) {
+  const r = await fetch(url);
+  if (r.status === 401) { location.reload(); throw new Error('Session expired'); }
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+async function apiPost(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (r.status === 401) { location.reload(); throw new Error('Session expired'); }
+  if (!r.ok) {
+    const t = await r.text();
+    const err = new Error(t || `HTTP ${r.status}`);
+    err.responseBody = t;
+    err.status = r.status;
+    throw err;
+  }
+  return r.json();
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function snakeToTitle(s) {
+  return s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ---- Color preview resolver ----
+const COLOR_PALETTE = {
+  // osu! colors
+  osu_pink: '#ff66aa',
+  osu_purple: '#cc5288',
+  // Star rating colors
+  star_easy: '#4290f5',
+  star_normal: '#4fc0ff',
+  star_hard: '#ffb641',
+  star_insane: '#ff6682',
+  star_expert: '#c967e5',
+  star_expert_plus: '#000000',
+  // Discord brand
+  blurple: '#5865f2',
+  discord_green: '#57f287',
+  discord_yellow: '#fee75c',
+  discord_fuchsia: '#eb459e',
+  discord_red: '#ed4245',
+  discord_black: '#23272a',
+  discord_dark: '#2c2f33',
+  // Material colors
+  viola_purple: '#7c4dff',
+  red: '#f44336',
+  pink: '#e91e63',
+  purple: '#9c27b0',
+  deep_purple: '#673ab7',
+  indigo: '#3f51b5',
+  blue: '#2196f3',
+  light_blue: '#03a9f4',
+  cyan: '#00bcd4',
+  teal: '#009688',
+  green: '#4caf50',
+  light_green: '#8bc34a',
+  lime: '#cddc39',
+  yellow: '#ffeb3b',
+  amber: '#ffc107',
+  orange: '#ff9800',
+  deep_orange: '#ff5722',
+  brown: '#795548',
+  grey: '#9e9e9e',
+  blue_grey: '#607d8b',
+  white: '#ffffff',
+  black: '#000000',
+  // Status colors
+  error: '#ff4444',
+  success: '#2ecc71',
+  warning: '#f1c40f',
+  info: '#3498db',
+  // Default
+  default: '#7c4dff'
+};
+
+function resolveColorPreview(val) {
+  if (!val) return '#7c4dff';
+  val = val.trim().toLowerCase();
+  // Named color
+  if (COLOR_PALETTE[val]) return COLOR_PALETTE[val];
+  // Hex with #
+  if (/^#[0-9a-f]{6}$/i.test(val)) return val;
+  // Hex without #
+  if (/^[0-9a-f]{6}$/i.test(val)) return '#' + val;
+  // 0x prefix
+  if (/^0x[0-9a-f]{6}$/i.test(val)) return '#' + val.slice(2);
+  // Default
+  return '#7c4dff';
+}
+
+// ---- Template validator ----
+function debounce(fn, ms) {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+function extractKeyFromCondition(s) {
+  for (const op of ['!=','>=','<=','=','>','<']) {
+    const i = s.indexOf(op);
+    if (i > 0) return s.substring(0, i);
+  }
+  return s;
+}
+
+function validateTemplate(text, knownNames, fieldName) {
+  const errors = [], warnings = [];
+  if (!text || !text.trim()) return { errors, warnings };
+
+  // 1. Length
+  if (text.length > 4000) {
+    errors.push({ field: fieldName, message: `Exceeds 4000 char limit (${text.length})`, position: 4000 });
+  }
+
+  // 2. Security: @everyone, @here
+  let m;
+  const mentionChecks = [
+    { re: /@everyone/gi, msg: 'Contains @everyone — ping abuse' },
+    { re: /@here/gi, msg: 'Contains @here — ping abuse' },
+    { re: /<@[&!]?\d+>/g, msg: 'Contains Discord mention <@...>' }
+  ];
+  for (const { re, msg } of mentionChecks) {
+    re.lastIndex = 0;
+    while ((m = re.exec(text)) !== null) {
+      errors.push({ field: fieldName, message: msg, position: m.index });
+    }
+  }
+
+  // 3. Empty keys
+  const emptyRe = /\{([?!/:]?)\}/g;
+  while ((m = emptyRe.exec(text)) !== null) {
+    errors.push({ field: fieldName, message: `Empty key: {${m[1]}}`, position: m.index });
+  }
+
+  // 4. Block matching (stack) - supports conditionals {?}/{!} and loops {#}
+  const stack = [];
+  const tagRe = /\{([?!#/:])([^}]*)\}/g;
+  while ((m = tagRe.exec(text)) !== null) {
+    const type = m[1], body = m[2], pos = m.index;
+    if (type === '?' || type === '!') {
+      if (body) stack.push({ key: extractKeyFromCondition(body), pos, tag: m[0], type: 'cond' });
+    } else if (type === '#') {
+      // Loop opening {#array} or loop variable {#index}/{#position}
+      if (body === 'index' || body === 'position') {
+        // These are loop variables, not block openers - skip
+      } else if (body) {
+        stack.push({ key: body, pos, tag: m[0], type: 'loop' });
+      }
+    } else if (type === ':') {
+      if (body) {
+        if (!stack.length) {
+          errors.push({ field: fieldName, message: `{:${body}} without opening block`, position: pos });
+        } else if (stack[stack.length - 1].key !== body) {
+          errors.push({ field: fieldName, message: `Mismatched else: expected {:${stack[stack.length - 1].key}}, got {:${body}}`, position: pos });
+        }
+      }
+    } else if (type === '/') {
+      if (body) {
+        if (!stack.length) {
+          errors.push({ field: fieldName, message: `{/${body}} without opening block`, position: pos });
+        } else if (stack[stack.length - 1].key !== body) {
+          errors.push({ field: fieldName, message: `Mismatched close: expected {/${stack[stack.length - 1].key}}, got {/${body}}`, position: pos });
+        } else {
+          stack.pop();
+        }
+      }
+    }
+  }
+  for (const e of stack) {
+    errors.push({ field: fieldName, message: `Unclosed block: ${e.tag} without {/${e.key}}`, position: e.pos });
+  }
+
+  // 5. Unknown placeholders (skip loop fields {.xxx} and loop vars {#index}/{#position})
+  const phRe = /\{([^?!/:#\s}][^}]*)\}/g;
+  while ((m = phRe.exec(text)) !== null) {
+    const name = m[1];
+    // Skip loop field references like {.field}
+    if (name.startsWith('.')) continue;
+    if (!knownNames.includes(name)) {
+      warnings.push({ field: fieldName, message: `Unknown placeholder: {${name}}`, position: m.index });
+    }
+  }
+
+  return { errors, warnings };
+}
+
+let fieldValidationState = {};
+
+function updateFieldValidation(field, textarea, msgEl, result) {
+  fieldValidationState[field] = result;
+  textarea.classList.remove('valid', 'has-warnings', 'has-errors');
+  msgEl.innerHTML = '';
+
+  if (result.errors.length) {
+    textarea.classList.add('has-errors');
+    for (const e of result.errors) {
+      const d = document.createElement('div');
+      d.className = 'validation-msg error';
+      d.innerHTML = `<span class="validation-icon">\u2716</span> ${esc(e.message)}`;
+      msgEl.appendChild(d);
+    }
+  }
+  if (result.warnings.length) {
+    if (!result.errors.length) textarea.classList.add('has-warnings');
+    for (const w of result.warnings) {
+      const d = document.createElement('div');
+      d.className = 'validation-msg warning';
+      d.innerHTML = `<span class="validation-icon">\u26A0</span> ${esc(w.message)}`;
+      msgEl.appendChild(d);
+    }
+  }
+  if (!result.errors.length && !result.warnings.length && textarea.value.trim()) {
+    textarea.classList.add('valid');
+  }
+
+  updateSaveButton();
+}
+
+function updateSaveButton() {
+  const btn = document.getElementById('btnSave');
+  const errs = Object.values(fieldValidationState).reduce((s, r) => s + r.errors.length, 0);
+  const warns = Object.values(fieldValidationState).reduce((s, r) => s + r.warnings.length, 0);
+
+  btn.disabled = errs > 0;
+  if (errs > 0) {
+    btn.innerHTML = `Save <span class="btn-badge error">${errs}</span>`;
+  } else if (warns > 0) {
+    btn.innerHTML = `Save <span class="btn-badge warning">${warns}</span>`;
+  } else {
+    btn.textContent = 'Save';
+  }
+}
+
+// ---- State ----
+let commands = [];
+let activeCmd = '';
+let activePreset = '';
+let localEdits = {};
+
+function getKey() {
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd) return activeCmd;
+  return cmd.has_presets ? `${activeCmd}:${activePreset}` : activeCmd;
+}
+
+function getTemplateData(key) {
+  if (localEdits[key]) return { ...localEdits[key] };
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd) return {};
+  const presetKey = cmd.has_presets ? activePreset : 'default';
+  return cmd.templates[presetKey] ? { ...cmd.templates[presetKey] } : {};
+}
+
+function saveTextareasToLocal() {
+  const key = getKey();
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd) return;
+  const data = {};
+  for (const field of cmd.fields) {
+    const el = document.getElementById('field_' + field);
+    if (el) data[field] = el.value;
+  }
+  localEdits[key] = data;
+}
+
+// ---- Render ----
+function renderCommandSelect() {
+  const select = document.getElementById('cmdSelect');
+  select.innerHTML = '';
+  for (const cmd of commands) {
+    const opt = document.createElement('option');
+    opt.value = cmd.id;
+    opt.textContent = cmd.label;
+    if (cmd.id === activeCmd) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+function renderPresetTabs() {
+  const bar = document.getElementById('tabBar');
+  const cmd = commands.find(c => c.id === activeCmd);
+
+  if (!cmd || !cmd.has_presets) {
+    bar.classList.add('hidden');
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  const presets = Object.keys(cmd.templates);
+  bar.innerHTML = '';
+  for (const p of presets) {
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn' + (p === activePreset ? ' active' : '');
+    btn.dataset.tab = p;
+    btn.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+    bar.appendChild(btn);
+  }
+}
+
+function renderFields() {
+  const container = document.getElementById('fieldsContainer');
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd) {
+    container.innerHTML = '<div class="empty">Select a command</div>';
+    return;
+  }
+
+  fieldValidationState = {};
+
+  const key = getKey();
+  const data = getTemplateData(key);
+  const knownNames = (cmd.placeholders || []).map(p => p.name);
+
+  container.innerHTML = '';
+  for (const field of cmd.fields) {
+    const div = document.createElement('div');
+    div.className = 'tmpl-field';
+
+    const label = document.createElement('div');
+    label.className = 'tmpl-label';
+    label.textContent = snakeToTitle(field);
+    div.appendChild(label);
+
+    // Special handling for color field
+    if (field === 'color') {
+      const colorRow = document.createElement('div');
+      colorRow.className = 'color-field-row';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tmpl-input color-input';
+      input.id = 'field_' + field;
+      input.value = data[field] || 'viola_purple';
+      input.setAttribute('list', 'colorOptions');
+      input.placeholder = '#rrggbb or named color';
+
+      const preview = document.createElement('div');
+      preview.className = 'color-preview';
+      preview.id = 'color_preview';
+
+      const updatePreview = () => {
+        const val = input.value.trim();
+        const hex = resolveColorPreview(val);
+        preview.style.backgroundColor = hex;
+      };
+
+      input.addEventListener('input', updatePreview);
+      colorRow.appendChild(input);
+      colorRow.appendChild(preview);
+      div.appendChild(colorRow);
+
+      // Datalist for autocomplete
+      if (!document.getElementById('colorOptions')) {
+        const datalist = document.createElement('datalist');
+        datalist.id = 'colorOptions';
+        // All named colors from COLOR_PALETTE
+        for (const name of Object.keys(COLOR_PALETTE)) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          datalist.appendChild(opt);
+        }
+        document.body.appendChild(datalist);
+      }
+
+      container.appendChild(div);
+      updatePreview();
+      continue;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'tmpl-textarea';
+    textarea.id = 'field_' + field;
+    textarea.value = data[field] || '';
+    const lines = (data[field] || '').split('\n').length;
+    textarea.rows = Math.max(2, Math.min(lines + 1, 14));
+    div.appendChild(textarea);
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'validation-messages';
+    msgEl.id = 'validation_' + field;
+    div.appendChild(msgEl);
+
+    // Real-time validation
+    const runValidation = () => {
+      const result = validateTemplate(textarea.value, knownNames, field);
+      updateFieldValidation(field, textarea, msgEl, result);
+    };
+    textarea.addEventListener('input', debounce(runValidation, 300));
+
+    container.appendChild(div);
+
+    // Initial validation for existing content
+    if (textarea.value.trim()) {
+      const result = validateTemplate(textarea.value, knownNames, field);
+      updateFieldValidation(field, textarea, msgEl, result);
+    }
+  }
+
+  updateSaveButton();
+}
+
+function renderPlaceholders() {
+  const table = document.getElementById('phTable');
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd || !cmd.placeholders || !cmd.placeholders.length) {
+    table.innerHTML = '<div class="empty">No placeholders</div>';
+    return;
+  }
+  table.innerHTML = cmd.placeholders.map(ph =>
+    `<div class="ph-row"><div class="ph-name">{${esc(ph.name)}}</div><div class="ph-desc">${esc(ph.description)}</div></div>`
+  ).join('');
+}
+
+function renderAll() {
+  renderCommandSelect();
+  renderPresetTabs();
+  renderFields();
+  renderPlaceholders();
+}
+
+// ---- Audit Log ----
+let auditEntries = [];
+let auditPage = 0;
+const auditPageSize = 20;
+let auditCommandFilter = '';
+
+async function loadAuditLog() {
+  const tableEl = document.getElementById('auditTable');
+  const emptyEl = document.getElementById('auditEmpty');
+  const paginationEl = document.getElementById('auditPagination');
+
+  // Show loading
+  emptyEl.textContent = 'Loading...';
+  emptyEl.classList.remove('hidden');
+
+  try {
+    let url = `${API.templateAudit}?limit=${auditPageSize}&offset=${auditPage * auditPageSize}`;
+    if (auditCommandFilter) {
+      url += `&command=${encodeURIComponent(auditCommandFilter)}`;
+    }
+    const data = await apiGet(url);
+    auditEntries = data.entries || [];
+
+    renderAuditTable();
+    renderAuditPagination();
+
+    // Populate command filter if not done
+    populateAuditCommandFilter();
+  } catch (err) {
+    emptyEl.textContent = 'Failed to load audit log: ' + err.message;
+    paginationEl.classList.add('hidden');
+  }
+}
+
+function populateAuditCommandFilter() {
+  const select = document.getElementById('auditCmdFilter');
+  if (select.options.length > 1) return; // Already populated
+
+  // Use commands from templates if available
+  if (commands && commands.length > 0) {
+    commands.forEach(cmd => {
+      const opt = document.createElement('option');
+      opt.value = cmd.id;
+      opt.textContent = cmd.label;
+      select.appendChild(opt);
+    });
+  }
+}
+
+function renderAuditTable() {
+  const tableEl = document.getElementById('auditTable');
+  const emptyEl = document.getElementById('auditEmpty');
+
+  // Remove old rows (keep header)
+  const oldRows = tableEl.querySelectorAll('.audit-row:not(.audit-row-header)');
+  oldRows.forEach(r => r.remove());
+
+  if (auditEntries.length === 0) {
+    emptyEl.textContent = 'No audit entries found.';
+    emptyEl.classList.remove('hidden');
+    return;
+  }
+
+  emptyEl.classList.add('hidden');
+
+  auditEntries.forEach(entry => {
+    const row = document.createElement('div');
+    row.className = 'audit-row';
+
+    const time = formatAuditTime(entry.created_at);
+    const presetStr = entry.preset ? `:${entry.preset}` : '';
+
+    row.innerHTML = `
+      <div class="audit-cell time" data-label="Time">${time}</div>
+      <div class="audit-cell user" data-label="User">${escapeHtml(entry.discord_username || 'Unknown')}</div>
+      <div class="audit-cell action" data-label="Action">
+        <span class="audit-action-badge ${entry.action}">${entry.action}</span>
+      </div>
+      <div class="audit-cell command" data-label="Command">${entry.command_id}${presetStr}</div>
+      <div class="audit-cell details" data-label="Details">
+        <button class="audit-diff-btn" data-id="${entry.id}">View Changes</button>
+      </div>
+    `;
+
+    // Store entry data for diff modal
+    row.querySelector('.audit-diff-btn').addEventListener('click', () => {
+      showDiffModal(entry);
+    });
+
+    tableEl.appendChild(row);
+  });
+}
+
+function formatAuditTime(isoString) {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diff = now - date;
+
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+}
+
+function renderAuditPagination() {
+  const prevBtn = document.getElementById('auditPrevBtn');
+  const nextBtn = document.getElementById('auditNextBtn');
+  const pageInfo = document.getElementById('auditPageInfo');
+
+  prevBtn.disabled = auditPage === 0;
+  nextBtn.disabled = auditEntries.length < auditPageSize;
+  pageInfo.textContent = `Page ${auditPage + 1}`;
+
+  document.getElementById('auditPagination').classList.remove('hidden');
+}
+
+let currentDiffEntryId = null;
+
+function showDiffModal(entry) {
+  const overlay = document.getElementById('diffOverlay');
+  const title = document.getElementById('diffTitle');
+  const statsEl = document.getElementById('diffStats');
+  const linesEl = document.getElementById('diffLines');
+  const revertBtn = document.getElementById('diffRevertBtn');
+
+  currentDiffEntryId = entry.id;
+
+  const presetStr = entry.preset ? `:${entry.preset}` : '';
+  title.textContent = `${entry.command_id}${presetStr} — ${entry.action} by ${entry.discord_username}`;
+
+  if (canRevert && entry.old_fields && entry.old_fields !== '{}') {
+    revertBtn.classList.remove('hidden');
+    revertBtn.disabled = false;
+    revertBtn.textContent = 'Revert to this';
+  } else {
+    revertBtn.classList.add('hidden');
+  }
+
+  // Parse JSON to formatted strings
+  let oldLines = [];
+  let newLines = [];
+
+  try {
+    if (entry.old_fields) {
+      const obj = JSON.parse(entry.old_fields);
+      oldLines = JSON.stringify(obj, null, 2).split('\n');
+    }
+  } catch (e) {
+    oldLines = (entry.old_fields || '').split('\n');
+  }
+
+  try {
+    if (entry.new_fields) {
+      const obj = JSON.parse(entry.new_fields);
+      newLines = JSON.stringify(obj, null, 2).split('\n');
+    }
+  } catch (e) {
+    newLines = (entry.new_fields || '').split('\n');
+  }
+
+  // Compute diff using LCS-based algorithm
+  const diff = computeDiff(oldLines, newLines);
+
+  // Render stats
+  const additions = diff.filter(d => d.type === 'add').length;
+  const deletions = diff.filter(d => d.type === 'del').length;
+  const unchanged = diff.filter(d => d.type === 'ctx').length;
+
+  statsEl.innerHTML = `
+    <span class="diff-stat additions">+${additions} additions</span>
+    <span class="diff-stat deletions">-${deletions} deletions</span>
+    <span class="diff-stat unchanged">${unchanged} unchanged</span>
+  `;
+
+  // Render diff lines
+  if (diff.length === 0) {
+    linesEl.innerHTML = '<div class="diff-empty">No changes</div>';
+  } else {
+    linesEl.innerHTML = diff.map(line => {
+      const typeClass = line.type === 'add' ? 'addition' : line.type === 'del' ? 'deletion' : 'context';
+      const sign = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+      const oldNum = line.oldNum || '';
+      const newNum = line.newNum || '';
+      return `
+        <div class="diff-line ${typeClass}">
+          <span class="diff-line-num old">${oldNum}</span>
+          <span class="diff-line-num new">${newNum}</span>
+          <span class="diff-line-sign">${sign}</span>
+          <span class="diff-line-text">${escapeHtml(line.text)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  overlay.classList.add('open');
+}
+
+// LCS-based diff algorithm
+function computeDiff(oldLines, newLines) {
+  const m = oldLines.length;
+  const n = newLines.length;
+
+  // Build LCS table
+  const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to find diff
+  const result = [];
+  let i = m, j = n;
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.unshift({ type: 'ctx', text: oldLines[i - 1], oldNum: i, newNum: j });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ type: 'add', text: newLines[j - 1], newNum: j });
+      j--;
+    } else {
+      result.unshift({ type: 'del', text: oldLines[i - 1], oldNum: i });
+      i--;
+    }
+  }
+
+  return result;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Audit event listeners
+document.getElementById('auditCmdFilter').addEventListener('change', (e) => {
+  auditCommandFilter = e.target.value;
+  auditPage = 0;
+  loadAuditLog();
+});
+
+document.getElementById('auditRefreshBtn').addEventListener('click', () => {
+  loadAuditLog();
+});
+
+document.getElementById('auditPrevBtn').addEventListener('click', () => {
+  if (auditPage > 0) {
+    auditPage--;
+    loadAuditLog();
+  }
+});
+
+document.getElementById('auditNextBtn').addEventListener('click', () => {
+  auditPage++;
+  loadAuditLog();
+});
+
+// Diff modal close
+{
+  const overlay = document.getElementById('diffOverlay');
+  const closeBtn = document.getElementById('diffClose');
+  const closeDiff = () => overlay.classList.remove('open');
+  closeBtn.addEventListener('click', closeDiff);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDiff(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.classList.contains('open')) closeDiff(); });
+}
+
+document.getElementById('diffRevertBtn').addEventListener('click', async () => {
+  if (!canRevert || !currentDiffEntryId) return;
+
+  const btn = document.getElementById('diffRevertBtn');
+  btn.disabled = true;
+  btn.textContent = 'Reverting...';
+
+  try {
+    const result = await apiPost(`/osu/api/templates/audit/${currentDiffEntryId}/revert`, {});
+    if (result.ok) {
+      toast(`Reverted ${result.command}${result.preset ? ':' + result.preset : ''} successfully`);
+      document.getElementById('diffOverlay').classList.remove('open');
+      // Reload templates and audit log
+      await loadTemplates();
+      await loadAuditLog();
+    } else {
+      toast('Failed to revert: ' + (result.error || 'Unknown error'), false);
+    }
+  } catch (err) {
+    toast('Failed to revert: ' + err.message, false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Revert to this';
+  }
+});
+
+// ---- Page tab events ----
+document.getElementById('pageTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.page-tab');
+  if (!tab || tab.dataset.page === activePage) return;
+  switchPage(tab.dataset.page);
+});
+
+// ---- Syntax guide modal ----
+{
+  const overlay = document.getElementById('sgOverlay');
+  const openBtn = document.getElementById('syntaxGuideBtn');
+  const closeBtn = document.getElementById('sgClose');
+  const closeSg = () => overlay.classList.remove('open');
+  openBtn.addEventListener('click', () => overlay.classList.add('open'));
+  closeBtn.addEventListener('click', closeSg);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSg(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.classList.contains('open')) closeSg(); });
+}
+
+// ---- Events ----
+document.getElementById('cmdSelect').addEventListener('change', (e) => {
+  const newCmd = e.target.value;
+  if (newCmd === activeCmd) return;
+  saveTextareasToLocal();
+  activeCmd = newCmd;
+  const cmd = commands.find(c => c.id === activeCmd);
+  activePreset = cmd && cmd.has_presets ? 'classic' : 'default';
+  renderPresetTabs();
+  renderFields();
+  renderPlaceholders();
+});
+
+document.getElementById('tabBar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn || btn.dataset.tab === activePreset) return;
+  saveTextareasToLocal();
+  activePreset = btn.dataset.tab;
+  renderPresetTabs();
+  renderFields();
+});
+
+document.getElementById('btnSave').addEventListener('click', async () => {
+  const btn = document.getElementById('btnSave');
+  saveTextareasToLocal();
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd) return;
+
+  const key = getKey();
+  const data = localEdits[key] || getTemplateData(key);
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    const body = {
+      command: activeCmd,
+      fields: data
+    };
+    if (cmd.has_presets) {
+      body.preset = activePreset;
+    }
+    const result = await apiPost(API.templates, body);
+
+    // Show server warnings as toasts
+    if (result.warnings && result.warnings.length) {
+      for (const w of result.warnings) {
+        toast(`${snakeToTitle(w.field)}: ${w.message}`, true);
+      }
+    }
+
+    const presetKey = cmd.has_presets ? activePreset : 'default';
+    cmd.templates[presetKey] = { ...data };
+    delete localEdits[key];
+
+    btn.textContent = 'Saved \u2713';
+    btn.classList.add('saved');
+    toast(`${cmd.label} ${cmd.has_presets ? activePreset : ''} saved`.trim());
+    setTimeout(() => { btn.textContent = 'Save'; btn.classList.remove('saved'); btn.disabled = false; updateSaveButton(); }, 1500);
+  } catch (err) {
+    // Try to parse structured validation errors from server
+    if (err.responseBody) {
+      try {
+        const resp = JSON.parse(err.responseBody);
+        if (resp.errors && resp.errors.length) {
+          for (const e of resp.errors) {
+            const ta = document.getElementById('field_' + e.field);
+            const mc = document.getElementById('validation_' + e.field);
+            if (ta && mc) {
+              ta.classList.add('has-errors');
+              const d = document.createElement('div');
+              d.className = 'validation-msg error';
+              d.innerHTML = `<span class="validation-icon">\u2716</span> ${esc(e.message)}`;
+              mc.appendChild(d);
+            }
+          }
+          toast(`Validation failed: ${resp.errors.length} error(s)`, false);
+          btn.textContent = 'Save';
+          btn.disabled = false;
+          return;
+        }
+      } catch (_) {}
+    }
+    toast(err.message, false);
+    btn.textContent = 'Save';
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('btnReset').addEventListener('click', async () => {
+  const cmd = commands.find(c => c.id === activeCmd);
+  if (!cmd) return;
+  const label = cmd.has_presets ? `${cmd.label} / ${activePreset}` : cmd.label;
+  if (!confirm(`Reset "${label}" to default?`)) return;
+
+  try {
+    const body = { command: activeCmd };
+    if (cmd.has_presets) {
+      body.preset = activePreset;
+    }
+    await apiPost(API.resetTemplate, body);
+    toast(`${label} reset`);
+
+    // Clear only the reset key's local edits, preserve others
+    const resetKey = getKey();
+    delete localEdits[resetKey];
+
+    // Reload template data from API (without clearing other local edits)
+    const data = await apiGet(API.templates);
+    commands = data.commands || [];
+    renderAll();
+  } catch (err) { toast(err.message, false); }
+});
+
+// ---- Init ----
+async function loadTemplates() {
+  try {
+    const data = await apiGet(API.templates);
+    commands = data.commands || [];
+    localEdits = {};
+  } catch (err) {
+    document.getElementById('fieldsContainer').innerHTML =
+      `<div class="empty" style="color:var(--red)">Failed to load: ${esc(err.message)}</div>`;
+    document.getElementById('phTable').innerHTML = '';
+  }
+}
+
+async function init() {
+  await loadTemplates();
+  if (commands.length > 0) {
+    activeCmd = commands[0].id;
+    const cmd = commands[0];
+    activePreset = cmd.has_presets ? 'classic' : 'default';
+  }
+  renderAll();
+}
+</script>
+</body>
+</html>

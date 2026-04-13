@@ -4,10 +4,100 @@ name = "bot"
 cmake-before = """
 set(DPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+
+# gRPC settings
+set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
+set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "" FORCE)
+set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+"""
+cmake-after = """
+# Setup gRPC proto generation
+if(USE_ROSU_PP_SERVICE)
+    set(PP_PROTO_PATH "${CMAKE_SOURCE_DIR}/proto")
+    set(PP_PROTO_FILE "${PP_PROTO_PATH}/pp.proto")
+    set(PP_PROTO_GEN_DIR "${CMAKE_BINARY_DIR}/proto_gen")
+    file(MAKE_DIRECTORY ${PP_PROTO_GEN_DIR})
+
+    # Get paths to protoc and grpc_cpp_plugin
+    set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
+    set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+
+    # Generated files
+    set(PP_PROTO_SRCS "${PP_PROTO_GEN_DIR}/pp.pb.cc")
+    set(PP_PROTO_HDRS "${PP_PROTO_GEN_DIR}/pp.pb.h")
+    set(PP_GRPC_SRCS "${PP_PROTO_GEN_DIR}/pp.grpc.pb.cc")
+    set(PP_GRPC_HDRS "${PP_PROTO_GEN_DIR}/pp.grpc.pb.h")
+
+    # Custom command to generate proto files
+    add_custom_command(
+        OUTPUT "${PP_PROTO_SRCS}" "${PP_PROTO_HDRS}" "${PP_GRPC_SRCS}" "${PP_GRPC_HDRS}"
+        COMMAND ${_PROTOBUF_PROTOC}
+        ARGS --grpc_out "${PP_PROTO_GEN_DIR}"
+             --cpp_out "${PP_PROTO_GEN_DIR}"
+             -I "${PP_PROTO_PATH}"
+             --plugin=protoc-gen-grpc="${_GRPC_CPP_PLUGIN_EXECUTABLE}"
+             "${PP_PROTO_FILE}"
+        DEPENDS "${PP_PROTO_FILE}"
+        COMMENT "Generating gRPC C++ files from pp.proto"
+    )
+
+    # Create library target for generated proto files
+    add_library(pp_proto STATIC ${PP_PROTO_SRCS} ${PP_GRPC_SRCS})
+    target_link_libraries(pp_proto PUBLIC grpc++ protobuf::libprotobuf)
+    target_include_directories(pp_proto PUBLIC ${PP_PROTO_GEN_DIR})
+    set_target_properties(pp_proto PROPERTIES CXX_STANDARD 17)
+endif()
+
+# Setup Python lemmatizer service if enabled
+if(ENABLE_LEMMATIZER)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        set(LEMMATIZER_VENV_DIR "${CMAKE_SOURCE_DIR}/scripts/venv")
+        set(LEMMATIZER_VENV_PYTHON "${LEMMATIZER_VENV_DIR}/bin/python3")
+
+        # Create venv and install pymorphy2 if not exists
+        if(NOT EXISTS "${LEMMATIZER_VENV_PYTHON}")
+            message(STATUS "Creating Python venv for lemmatizer...")
+            execute_process(
+                COMMAND ${Python3_EXECUTABLE} -m venv "${LEMMATIZER_VENV_DIR}"
+                RESULT_VARIABLE VENV_RESULT
+            )
+            if(VENV_RESULT EQUAL 0)
+                message(STATUS "Installing pymorphy3...")
+                execute_process(
+                    COMMAND "${LEMMATIZER_VENV_DIR}/bin/pip" install pymorphy3
+                    RESULT_VARIABLE PIP_RESULT
+                )
+                if(PIP_RESULT EQUAL 0)
+                    message(STATUS "Lemmatizer setup complete: ${LEMMATIZER_VENV_DIR}")
+                else()
+                    message(WARNING "Failed to install pymorphy3. Lemmatizer will not work.")
+                endif()
+            else()
+                message(WARNING "Failed to create Python venv. Lemmatizer will not work.")
+            endif()
+        else()
+            message(STATUS "Lemmatizer venv already exists: ${LEMMATIZER_VENV_DIR}")
+        endif()
+    else()
+        message(WARNING "Python3 not found. Lemmatizer will not be available.")
+    endif()
+endif()
 """
 
 [options]
 CMAKE_EXPORT_COMPILE_COMMANDS = true
+ENABLE_LEMMATIZER = true
+USE_ROSU_PP_SERVICE = true
 
 [variables]
 CMAKE_BUILD_TYPE = "Release"
@@ -17,17 +107,27 @@ fmt = { git = "https://github.com/fmtlib/fmt.git", tag = "11.0.2" }
 spdlog = { git = "https://github.com/gabime/spdlog.git", tag = "v1.14.0" }
 dpp = { git = "https://github.com/brainboxdotcc/DPP.git", tag = "v10.0.35" }
 cpr = { git = "https://github.com/libcpr/cpr.git", tag = "3b15fa82ea74739b574d705fea44959b58142eb8" }
+crow = { git = "https://github.com/CrowCpp/Crow.git", tag = "v1.2.0" }
+pqxx = { git = "https://github.com/jtv/libpqxx.git", tag = "7.9.2" }
+grpc = { git = "https://github.com/grpc/grpc.git", tag = "v1.68.0" }
 
 [find-package.Threads]
 required = true
 [find-package.OpenSSL]
 required = true
+[find-package.libzip]
+required = true
+[find-package.PkgConfig]
+required = true
 
 [target.discord-bot]
 type = "executable"
-sources = ["src/*.cpp"]
+sources = ["src/*.cpp", "src/services/*.cpp", "src/commands/*.cpp", "src/handlers/*.cpp"]
 include-directories = ["include"]
 compile-features = ["cxx_std_23"]
+cmake-before = """
+pkg_check_modules(LIBMEMCACHED REQUIRED libmemcached)
+"""
 link-libraries = [
   "fmt::fmt",
   "spdlog::spdlog",
@@ -37,4 +137,18 @@ link-libraries = [
   "cpr::cpr",
   "dpp",
   "tbb",
+  "Crow::Crow",
+  "libzip::zip",
+  "pqxx",
 ]
+cmake-after = """
+target_link_libraries(discord-bot PRIVATE ${LIBMEMCACHED_LIBRARIES})
+target_include_directories(discord-bot PRIVATE ${LIBMEMCACHED_INCLUDE_DIRS})
+target_compile_options(discord-bot PRIVATE ${LIBMEMCACHED_CFLAGS_OTHER})
+
+# Link gRPC proto library if enabled
+if(USE_ROSU_PP_SERVICE)
+    target_link_libraries(discord-bot PRIVATE pp_proto)
+    target_compile_definitions(discord-bot PRIVATE USE_ROSU_PP_SERVICE=1)
+endif()
+"""
