@@ -258,6 +258,7 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   // Register text commands
   command_router.set_services(service_container.get());
+  command_router.set_prefix(config.command_prefix);
   register_commands();
 
   // Connect services to HTTP server

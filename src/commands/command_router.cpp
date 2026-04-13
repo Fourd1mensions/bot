@@ -27,7 +27,8 @@ bool CommandRouter::route(const dpp::message_create_t& event) {
         .content = content,
         .content_lower = content_lower,
         .args = "",
-        .services = services_
+        .services = services_,
+        .prefix = prefix_
     };
 
     // Find matching command
@@ -74,7 +75,8 @@ bool CommandRouter::route_slash(const dpp::slashcommand_t& event) {
         .event = event,
         .command_name = cmd_name,
         .args = args,
-        .services = services_
+        .services = services_,
+        .prefix = prefix_
     };
 
     // Execute in separate thread

@@ -23,47 +23,45 @@ using json = nlohmann::json;
 namespace commands {
 
 std::vector<std::string> RsCommand::get_aliases() const {
-    return {"!rs", "!rb", "!кы"};
+    return {"rs", "rb", "кы"};
 }
 
 bool RsCommand::matches(const CommandContext& ctx) const {
-    auto check_boundary = [](const std::string& str, size_t prefix_len) {
-        if (str.length() == prefix_len) return true;  // Exact match
-        char next = str[prefix_len];
+    auto check_boundary = [](const std::string& str, size_t len) {
+        if (str.length() == len) return true;
+        char next = str[len];
         return next == ' ' || next == ':' || next == '\t';
     };
 
-    // Check ASCII aliases in lowercase content
-    if (ctx.content_lower.find("!rs") == 0 && check_boundary(ctx.content_lower, 3)) return true;
-    if (ctx.content_lower.find("!rb") == 0 && check_boundary(ctx.content_lower, 3)) return true;
-    // Check Cyrillic aliases in original content (tolower doesn't work with UTF-8)
-    // Support both lowercase and uppercase variants
-    // Note: "!кы" is 5 bytes in UTF-8 (1 + 2 + 2)
-    if ((ctx.content.find("!кы") == 0 || ctx.content.find("!КЫ") == 0) && check_boundary(ctx.content, 5)) return true;
+    std::string p = ctx.prefix;
+    if (ctx.content_lower.find(p + "rs") == 0 && check_boundary(ctx.content_lower, p.size() + 2)) return true;
+    if (ctx.content_lower.find(p + "rb") == 0 && check_boundary(ctx.content_lower, p.size() + 2)) return true;
+    // Cyrillic: tolower doesn't work with UTF-8, check both cases
+    std::string cyr_lo = p + "кы", cyr_up = p + "КЫ";
+    if ((ctx.content.find(cyr_lo) == 0 || ctx.content.find(cyr_up) == 0) && check_boundary(ctx.content, cyr_lo.size())) return true;
     return false;
 }
 
-RsCommand::ParsedParams RsCommand::parse(const std::string& content) const {
+RsCommand::ParsedParams RsCommand::parse(const std::string& content, const std::string& prefix) const {
     ParsedParams result;
 
     // Find command end by looking for space or end of string
-    // This works correctly with UTF-8 regardless of byte length
     size_t cmd_end = content.find(' ');
     if (cmd_end == std::string::npos) {
         cmd_end = content.length();
     }
 
     // Lowercase prefix for case-insensitive matching (ASCII only)
-    std::string content_lower = content.substr(0, std::min(cmd_end, size_t(10)));
+    std::string content_lower = content.substr(0, std::min(cmd_end, size_t(20)));
     std::transform(content_lower.begin(), content_lower.end(), content_lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
-    // Check if this is a known command prefix (case-insensitive for ASCII)
-    bool is_rb = content_lower.find("!rb") == 0;
-    bool is_command = content_lower.find("!rs") == 0 ||
+    // Check if this is a known command prefix
+    bool is_rb = content_lower.find(prefix + "rb") == 0;
+    bool is_command = content_lower.find(prefix + "rs") == 0 ||
                       is_rb ||
-                      content.find("!кы") == 0 ||
-                      content.find("!КЫ") == 0 ||  // Support uppercase Cyrillic
+                      content.find(prefix + "кы") == 0 ||
+                      content.find(prefix + "КЫ") == 0 ||
                       content_lower.find("/rs") == 0;
 
     if (!is_command) {
@@ -145,7 +143,7 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
         }
     } else {
         // Parse text command
-        auto parsed = parse(ctx.content);
+        auto parsed = parse(ctx.content, ctx.prefix);
         if (!parsed.valid) {
             ctx.reply(parsed.error_message);
             return;
@@ -280,7 +278,7 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
         if (!scores_json.is_array() || scores_json.empty()) {
             dpp::message err_msg = s->message_presenter.build_error_message(error_messages::NO_RECENT_SCORES);
             if (suggest_oauth_link) {
-                err_msg.content = "-# Link your osu! account with `!link` or `/link` for a better experience";
+                err_msg.content = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
             }
             ctx.reply(err_msg);
             return;
@@ -301,7 +299,7 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
     } catch (const json::exception& e) {
         dpp::message err_msg = s->message_presenter.build_error_message(error_messages::PARSE_SCORES_FAILED);
         if (suggest_oauth_link) {
-            err_msg.content = "-# Link your osu! account with `!link` or `/link` for a better experience";
+            err_msg.content = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
         }
         ctx.reply(err_msg);
         spdlog::error("Failed to parse scores: {}", e.what());
@@ -313,7 +311,7 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
         dpp::message err_msg = s->message_presenter.build_error_message(
             fmt::format(error_messages::SCORE_INDEX_OUT_OF_RANGE_FORMAT, cmd_params.score_index + 1, scores.size()));
         if (suggest_oauth_link) {
-            err_msg.content = "-# Link your osu! account with `!link` or `/link` for a better experience";
+            err_msg.content = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
         }
         ctx.reply(err_msg);
         return;
@@ -329,7 +327,7 @@ void RsCommand::execute_unified(const UnifiedContext& ctx) {
 
     // Add OAuth link suggestion if user is not OAuth linked
     if (suggest_oauth_link) {
-        std::string hint = "-# Link your osu! account with `!link` or `/link` for a better experience";
+        std::string hint = fmt::format("-# Link your osu! account with `{}link` or `/link` for a better experience", ctx.prefix);
         if (msg.content.empty()) {
             msg.content = hint;
         } else {

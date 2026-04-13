@@ -18,7 +18,7 @@
 namespace commands {
 
 std::vector<std::string> OscCommand::get_aliases() const {
-    return {"!osc"};
+    return {"osc"};
 }
 
 void OscCommand::execute_unified(const UnifiedContext& ctx) {

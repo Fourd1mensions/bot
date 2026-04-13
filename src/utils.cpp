@@ -108,6 +108,9 @@ bool utils::load_config(Config& config) {
       };
     }
 
+    // Load command prefix (default: "!")
+    config.command_prefix = j.value("COMMAND_PREFIX", "!");
+
     // Load music allowed users
     if (j.contains("MUSIC_ALLOWED_USERS") && j["MUSIC_ALLOWED_USERS"].is_array()) {
       config.music_allowed_users = j["MUSIC_ALLOWED_USERS"].get<std::vector<std::string>>();

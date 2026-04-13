@@ -12,7 +12,7 @@
 namespace commands {
 
 std::vector<std::string> AdminUnsetCommand::get_aliases() const {
-    return {"!adminunset", "!aunset", "!adminremove", "!aremove"};
+    return {"adminunset", "aunset", "adminremove", "aremove"};
 }
 
 void AdminUnsetCommand::execute_unified(const UnifiedContext& ctx) {
@@ -38,7 +38,7 @@ void AdminUnsetCommand::execute_unified(const UnifiedContext& ctx) {
     // Parse arguments: !adminunset <discord_id_or_mention>
     std::string args = utils::extract_args(ctx.content);
     if (args.empty()) {
-        ctx.reply(":x: Usage: `!adminunset <discord_id_or_mention>`");
+        ctx.reply(fmt::format(":x: Usage: `{}adminunset <discord_id_or_mention>`", ctx.prefix));
         return;
     }
 
@@ -46,7 +46,7 @@ void AdminUnsetCommand::execute_unified(const UnifiedContext& ctx) {
     size_t start = args.find_first_not_of(" \t");
     size_t end = args.find_last_not_of(" \t");
     if (start == std::string::npos) {
-        ctx.reply(":x: Usage: `!adminunset <discord_id_or_mention>`");
+        ctx.reply(fmt::format(":x: Usage: `{}adminunset <discord_id_or_mention>`", ctx.prefix));
         return;
     }
     std::string discord_arg = args.substr(start, end - start + 1);
