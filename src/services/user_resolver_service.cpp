@@ -120,8 +120,24 @@ std::string UserResolverService::get_username_cached(int64_t user_id) {
     // Cache miss - fetch from API
     spdlog::debug("[CACHE] Username MISS for user {}, fetching from API", user_id);
     std::string usr_j = request_.get_user(fmt::format("{}", user_id), true);
-    json usr = json::parse(usr_j);
-    std::string username = usr.at("username");
+    if (usr_j.empty()) {
+        spdlog::warn("[CACHE] Empty API response for user {}", user_id);
+        return fmt::format("User {}", user_id);
+    }
+
+    std::string username;
+    try {
+        json usr = json::parse(usr_j);
+        username = usr.value("username", "");
+    } catch (const std::exception& e) {
+        spdlog::warn("[CACHE] Failed to parse user API response for {}: {}", user_id, e.what());
+        return fmt::format("User {}", user_id);
+    }
+
+    if (username.empty()) {
+        spdlog::warn("[CACHE] No username field in API response for user {}", user_id);
+        return fmt::format("User {}", user_id);
+    }
     spdlog::debug("[CACHE] Fetched username from API: {} -> {}", user_id, username);
 
     // Cache in both layers

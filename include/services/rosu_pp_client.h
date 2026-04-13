@@ -75,12 +75,14 @@ struct RosuScoreParams {
  * Difficulty settings (mods, custom values).
  */
 struct RosuDifficultySettings {
-    uint32_t mods = 0;                 // Mod bitflags
+    uint32_t mods = 0;                 // Mod bitflags (legacy)
+    std::string mods_str;              // Acronym-based mods (e.g., "HDDT", "NFCL") - preferred
     std::optional<double> clock_rate;
     std::optional<float> ar;
     std::optional<float> cs;
     std::optional<float> od;
     std::optional<float> hp;
+    std::optional<uint32_t> passed_objects;  // For failed scores: number of objects played
     bool lazer = false;
 };
 
@@ -174,6 +176,34 @@ public:
         std::optional<RosuGameMode> mode,
         const RosuDifficultySettings& settings,
         const std::vector<RosuScoreParams>& scores
+    );
+
+    /**
+     * Generate a strain graph PNG for a beatmap.
+     * @param osu_file_path Path to .osu file
+     * @param mode Game mode (nullopt = use beatmap's mode)
+     * @param settings Difficulty settings (mods, etc.)
+     * @param width Graph width in pixels (0 = default 900)
+     * @param height Graph height in pixels (0 = default 250)
+     * @return PNG image bytes or nullopt on failure
+     */
+    [[nodiscard]] std::optional<std::vector<uint8_t>> get_strain_graph(
+        const std::string& osu_file_path,
+        std::optional<RosuGameMode> mode = std::nullopt,
+        const RosuDifficultySettings& settings = {},
+        uint32_t width = 0,
+        uint32_t height = 0
+    );
+
+    /**
+     * Generate a strain graph PNG from beatmap bytes.
+     */
+    [[nodiscard]] std::optional<std::vector<uint8_t>> get_strain_graph_bytes(
+        const std::vector<uint8_t>& content,
+        std::optional<RosuGameMode> mode = std::nullopt,
+        const RosuDifficultySettings& settings = {},
+        uint32_t width = 0,
+        uint32_t height = 0
     );
 
     /**

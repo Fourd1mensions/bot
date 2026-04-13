@@ -17,7 +17,8 @@ class MessageHandler {
 public:
     MessageHandler(
         commands::CommandRouter& command_router,
-        services::ChatContextService& chat_context_service
+        services::ChatContextService& chat_context_service,
+        dpp::cluster& bot
     );
 
     /**
@@ -35,6 +36,7 @@ public:
 private:
     commands::CommandRouter& command_router_;
     services::ChatContextService& chat_context_service_;
+    dpp::cluster& bot_;
     std::mutex mutex_;
 };
 

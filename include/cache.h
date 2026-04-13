@@ -54,6 +54,11 @@ public:
     std::optional<UsersState> get_users(const std::string& state_id);
     bool delete_users(const std::string& state_id);
 
+    // TopState operations (5 min TTL)
+    bool cache_top(const std::string& state_id, const TopState& state);
+    std::optional<TopState> get_top(const std::string& state_id);
+    bool delete_top(const std::string& state_id);
+
     // OAuth token operations (custom TTL based on expires_at)
     bool cache_oauth_tokens(const std::string& access_token, const std::string& refresh_token,
                            std::chrono::seconds expires_in);
@@ -91,6 +96,8 @@ private:
     std::optional<CompareState> deserialize_compare(const std::string& data);
     std::string serialize_users(const UsersState& state);
     std::optional<UsersState> deserialize_users(const std::string& data);
+    std::string serialize_top(const TopState& state);
+    std::optional<TopState> deserialize_top(const std::string& data);
 };
 
 } // namespace cache

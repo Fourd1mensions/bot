@@ -11,10 +11,13 @@
 #include <zlib.h>
 
 #include <chrono>
+#include <fcntl.h>
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -31,7 +34,8 @@ BeatmapDownloader::BeatmapDownloader()
     : data_dir_(".data"),
       osz_dir_(data_dir_ / "osz"),
       osu_files_dir_(data_dir_ / "osu"),
-      extracts_dir_(data_dir_ / "extracts") {
+      extracts_dir_(data_dir_ / "extracts"),
+      music_audio_dir_(data_dir_ / "music_audio") {
   // Default mirrors (chimu.moe is dead - NXDOMAIN)
   mirrors_ = {
     "https://api.nerinyan.moe/d",
@@ -45,6 +49,7 @@ BeatmapDownloader::BeatmapDownloader(const std::vector<std::string>& mirrors)
       osz_dir_(data_dir_ / "osz"),
       osu_files_dir_(data_dir_ / "osu"),
       extracts_dir_(data_dir_ / "extracts"),
+      music_audio_dir_(data_dir_ / "music_audio"),
       mirrors_(mirrors) {
   ensure_directories();
 }
@@ -66,6 +71,7 @@ void BeatmapDownloader::ensure_directories() {
     fs::create_directories(osz_dir_);
     fs::create_directories(osu_files_dir_);
     fs::create_directories(extracts_dir_);
+    fs::create_directories(music_audio_dir_);
   } catch (const fs::filesystem_error& e) {
     spdlog::error("Failed to create directories: {}", e.what());
   }
@@ -185,7 +191,7 @@ bool BeatmapDownloader::try_download_from_mirror(const std::string& mirror_url,
 }
 
 void BeatmapDownloader::demote_mirror(size_t index) {
-  if (index >= mirrors_.size() - 1) return;  // Already at end or invalid
+  if (mirrors_.size() <= 1 || index >= mirrors_.size() - 1) return;  // Already at end, invalid, or no mirrors
 
   std::string failed_mirror = mirrors_[index];
   mirrors_.erase(mirrors_.begin() + index);
@@ -831,6 +837,265 @@ std::optional<std::string> BeatmapDownloader::find_background_in_extract(const f
   }
 
   return std::nullopt;
+}
+
+// ============================================================================
+// Music audio extraction from .osz
+// ============================================================================
+
+std::optional<OsuAudioInfo> BeatmapDownloader::get_or_extract_audio(uint32_t beatmapset_id) {
+  try {
+    fs::path audio_dir = music_audio_dir_ / std::to_string(beatmapset_id);
+
+    // Check if already extracted — find any audio file in the dir
+    if (fs::exists(audio_dir) && fs::is_directory(audio_dir)) {
+      for (const auto& entry : fs::directory_iterator(audio_dir)) {
+        if (entry.is_regular_file()) {
+          auto ext = entry.path().extension().string();
+          std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+          if (ext == ".mp3" || ext == ".ogg" || ext == ".wav") {
+            // Read cached metadata
+            OsuAudioInfo info;
+            info.audio_path = fs::absolute(entry.path()).string();
+            info.beatmapset_id = beatmapset_id;
+            info.thumbnail = fmt::format("https://b.ppy.sh/thumb/{}l.jpg", beatmapset_id);
+
+            // Read title from .meta file if exists
+            fs::path meta_file = audio_dir / ".meta";
+            if (fs::exists(meta_file)) {
+              std::ifstream mf(meta_file);
+              std::string line;
+              while (std::getline(mf, line)) {
+                if (line.starts_with("title=")) info.title = line.substr(6);
+                else if (line.starts_with("duration=")) {
+                  try { info.duration_seconds = std::stoi(line.substr(9)); } catch (...) {}
+                }
+              }
+            }
+            if (info.title.empty()) info.title = "osu! Beatmap #" + std::to_string(beatmapset_id);
+
+            spdlog::info("[MUSIC_AUDIO] Using cached audio for beatmapset {}: {}", beatmapset_id, info.audio_path);
+            return info;
+          }
+        }
+      }
+    }
+
+    // Download .osz if not cached
+    if (!beatmapset_exists(beatmapset_id)) {
+      spdlog::info("[MUSIC_AUDIO] Downloading .osz for beatmapset {}", beatmapset_id);
+      if (!download_osz(beatmapset_id)) {
+        spdlog::error("[MUSIC_AUDIO] Failed to download .osz for beatmapset {}", beatmapset_id);
+        return std::nullopt;
+      }
+    }
+
+    auto osz_path = get_osz_path(beatmapset_id);
+    if (!osz_path) {
+      spdlog::error("[MUSIC_AUDIO] .osz file not found after download for beatmapset {}", beatmapset_id);
+      return std::nullopt;
+    }
+
+    // Open .osz with libzip
+    int err = 0;
+    zip_t* archive = zip_open(osz_path->string().c_str(), ZIP_RDONLY, &err);
+    if (!archive) {
+      spdlog::error("[MUSIC_AUDIO] Failed to open .osz as zip for beatmapset {}", beatmapset_id);
+      return std::nullopt;
+    }
+
+    // Parse first .osu file for metadata (AudioFilename, Title, Artist)
+    std::string audio_filename;
+    std::string title, artist;
+    zip_int64_t num_entries = zip_get_num_entries(archive, 0);
+
+    for (zip_int64_t i = 0; i < num_entries; i++) {
+      const char* name = zip_get_name(archive, i, 0);
+      if (!name) continue;
+
+      std::string fname(name);
+      if (fname.size() < 4) continue;
+      std::string ext = fname.substr(fname.size() - 4);
+      std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+      if (ext != ".osu") continue;
+
+      // Read the .osu file content
+      zip_file_t* zf = zip_fopen_index(archive, i, 0);
+      if (!zf) continue;
+
+      std::string content;
+      content.resize(64 * 1024);  // 64KB should be enough for .osu header
+      zip_int64_t bytes_read = zip_fread(zf, content.data(), content.size());
+      zip_fclose(zf);
+      if (bytes_read <= 0) continue;
+      content.resize(bytes_read);
+
+      // Parse sections
+      std::istringstream iss(content);
+      std::string line;
+      std::string section;
+
+      while (std::getline(iss, line)) {
+        // Remove trailing \r
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+
+        if (line.starts_with("[")) {
+          section = line;
+          continue;
+        }
+
+        if (section == "[General]") {
+          if (line.starts_with("AudioFilename:")) {
+            audio_filename = line.substr(14);
+            // Trim leading whitespace
+            while (!audio_filename.empty() && audio_filename[0] == ' ')
+              audio_filename.erase(0, 1);
+          }
+        } else if (section == "[Metadata]") {
+          if (line.starts_with("Title:")) {
+            title = line.substr(6);
+            while (!title.empty() && title[0] == ' ') title.erase(0, 1);
+          } else if (line.starts_with("Artist:")) {
+            artist = line.substr(7);
+            while (!artist.empty() && artist[0] == ' ') artist.erase(0, 1);
+          }
+        }
+
+        // Stop parsing after [Metadata] (we have what we need)
+        if (!audio_filename.empty() && !title.empty() && !artist.empty()) break;
+      }
+
+      if (!audio_filename.empty()) break;  // found what we need
+    }
+
+    if (audio_filename.empty()) {
+      zip_close(archive);
+      spdlog::error("[MUSIC_AUDIO] No AudioFilename found in .osu files for beatmapset {}", beatmapset_id);
+      return std::nullopt;
+    }
+
+    // Find and extract the audio file from the zip
+    zip_int64_t audio_index = -1;
+    for (zip_int64_t i = 0; i < num_entries; i++) {
+      const char* name = zip_get_name(archive, i, 0);
+      if (!name) continue;
+      if (std::string(name) == audio_filename) {
+        audio_index = i;
+        break;
+      }
+    }
+
+    if (audio_index < 0) {
+      zip_close(archive);
+      spdlog::error("[MUSIC_AUDIO] Audio file '{}' not found in .osz for beatmapset {}",
+                     audio_filename, beatmapset_id);
+      return std::nullopt;
+    }
+
+    // Extract audio file
+    fs::create_directories(audio_dir);
+    fs::path dest_path = audio_dir / audio_filename;
+
+    zip_file_t* zf = zip_fopen_index(archive, audio_index, 0);
+    if (!zf) {
+      zip_close(archive);
+      spdlog::error("[MUSIC_AUDIO] Failed to open audio entry in zip for beatmapset {}", beatmapset_id);
+      return std::nullopt;
+    }
+
+    std::ofstream out(dest_path, std::ios::binary);
+    if (!out) {
+      zip_fclose(zf);
+      zip_close(archive);
+      spdlog::error("[MUSIC_AUDIO] Failed to create output file: {}", dest_path.string());
+      return std::nullopt;
+    }
+
+    char buf[8192];
+    zip_int64_t n;
+    while ((n = zip_fread(zf, buf, sizeof(buf))) > 0) {
+      out.write(buf, n);
+    }
+    out.close();
+    zip_fclose(zf);
+    zip_close(archive);
+
+    if (!fs::exists(dest_path) || fs::file_size(dest_path) == 0) {
+      spdlog::error("[MUSIC_AUDIO] Extracted audio file is empty for beatmapset {}", beatmapset_id);
+      return std::nullopt;
+    }
+
+    // Get duration via ffprobe
+    int duration = 0;
+    {
+      int pipefd[2];
+      if (pipe(pipefd) == 0) {
+        pid_t pid = fork();
+        if (pid == 0) {
+          close(pipefd[0]);
+          dup2(pipefd[1], STDOUT_FILENO);
+          close(pipefd[1]);
+          int devnull = open("/dev/null", O_WRONLY);
+          if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+
+          execlp("ffprobe", "ffprobe", "-v", "quiet",
+                 "-show_entries", "format=duration",
+                 "-of", "csv=p=0",
+                 dest_path.string().c_str(), nullptr);
+          _exit(1);
+        } else if (pid > 0) {
+          close(pipefd[1]);
+          std::string output;
+          char rbuf[256];
+          ssize_t r;
+          while ((r = read(pipefd[0], rbuf, sizeof(rbuf) - 1)) > 0) {
+            rbuf[r] = '\0';
+            output += rbuf;
+          }
+          close(pipefd[0]);
+          int status;
+          waitpid(pid, &status, 0);
+          try { duration = static_cast<int>(std::stof(output)); } catch (...) {}
+        } else {
+          close(pipefd[0]);
+          close(pipefd[1]);
+        }
+      }
+    }
+
+    // Build display title
+    std::string display_title;
+    if (!artist.empty() && !title.empty()) {
+      display_title = artist + " - " + title;
+    } else if (!title.empty()) {
+      display_title = title;
+    } else {
+      display_title = "osu! Beatmap #" + std::to_string(beatmapset_id);
+    }
+
+    // Save metadata cache
+    {
+      std::ofstream meta(audio_dir / ".meta");
+      meta << "title=" << display_title << "\n";
+      meta << "duration=" << duration << "\n";
+    }
+
+    OsuAudioInfo info;
+    info.audio_path = fs::absolute(dest_path).string();
+    info.title = display_title;
+    info.thumbnail = fmt::format("https://b.ppy.sh/thumb/{}l.jpg", beatmapset_id);
+    info.duration_seconds = duration;
+    info.beatmapset_id = beatmapset_id;
+
+    spdlog::info("[MUSIC_AUDIO] Extracted audio for beatmapset {}: '{}' ({}s) -> {}",
+                 beatmapset_id, display_title, duration, info.audio_path);
+    return info;
+
+  } catch (const std::exception& e) {
+    spdlog::error("[MUSIC_AUDIO] Error extracting audio for beatmapset {}: {}", beatmapset_id, e.what());
+    return std::nullopt;
+  }
 }
 
 // ============================================================================

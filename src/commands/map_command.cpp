@@ -67,6 +67,11 @@ void MapCommand::execute_unified(const UnifiedContext& ctx) {
         }
     }
 
+    // Show typing indicator (only for text commands)
+    if (!ctx.is_slash()) {
+        s->bot.channel_typing(ctx.channel_id());
+    }
+
     // Log warnings
     if (!warnings.empty()) {
         for (const auto& w : warnings) {
@@ -148,7 +153,16 @@ void MapCommand::execute_unified(const UnifiedContext& ctx) {
     float modded_bpm = utils::apply_speed_mods_to_bpm(beatmap.get_bpm(), mods_filter);
     uint32_t modded_length = utils::apply_speed_mods_to_length(beatmap.get_total_length(), mods_filter);
 
+    // Generate strain graph
+    auto strain_graph = s->performance_service.get_strain_graph(
+        beatmap_id,
+        mods_filter,
+        900,  // width
+        250   // height
+    );
+
     // Build message using presenter service
+    auto user_preset = s->user_settings_service.get_preset(ctx.author_id());
     dpp::message msg = s->message_presenter.build_map_info(
         beatmap,
         difficulty_info,
@@ -156,8 +170,22 @@ void MapCommand::execute_unified(const UnifiedContext& ctx) {
         mods_filter,
         beatmapset_id,
         modded_bpm,
-        modded_length
+        modded_length,
+        user_preset,
+        ctx.author_id()
     );
+
+    // Attach strain graph if available
+    if (strain_graph && !strain_graph->empty()) {
+        std::string filename = fmt::format("strains_{}.png", beatmap_id);
+        msg.add_file(filename, std::string(strain_graph->begin(), strain_graph->end()));
+
+        // Update embed to use the attached image
+        if (!msg.embeds.empty()) {
+            msg.embeds[0].set_image("attachment://" + filename);
+        }
+    }
+
     ctx.reply(msg);
 }
 

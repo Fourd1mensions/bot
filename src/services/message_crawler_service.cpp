@@ -1767,6 +1767,10 @@ void MessageCrawlerService::start_lemmatizer_service() {
             close(null_fd);
         }
 
+        // Close all inherited fds (except stdin/stdout/stderr) to avoid
+        // holding the Crow listening socket after parent restarts
+        for (int fd = 3; fd < 1024; ++fd) close(fd);
+
         // Create new session to detach from terminal
         setsid();
 

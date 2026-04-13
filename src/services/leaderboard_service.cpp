@@ -52,17 +52,15 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
     size_t start = state.current_page * SCORES_PER_PAGE;
     size_t end = std::min(start + SCORES_PER_PAGE, state.scores.size());
 
-    // Use mods_filter from state if available, otherwise use parameter
     const std::string& active_mods = state.mods_filter.empty() ? mods_filter : state.mods_filter;
 
-    // Parse .osu file once for PP calculation (in case of Loved maps)
+    // PP calculation for Loved maps (API returns 0)
     float approach_rate = 9.0f;
     float overall_difficulty = 9.0f;
     bool has_beatmap_data = false;
     uint32_t beatmap_id = state.beatmap.get_beatmap_id();
     uint32_t beatmapset_id = state.beatmap.get_beatmapset_id();
 
-    // Get .osu file path and difficulty using performance service
     auto osu_file_path_opt = performance_service_.get_osu_file_path(beatmapset_id, beatmap_id);
     if (osu_file_path_opt) {
         auto diff_opt = performance_service_.get_difficulty(beatmapset_id, beatmap_id, active_mods);
@@ -79,8 +77,7 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
         title += fmt::format(" +{}", active_mods);
     }
 
-    // Find caller's rank if they have a score
-    std::string caller_rank_text;
+    std::string caller_rank_num;
     if (state.caller_discord_id != 0) {
         try {
             auto& db = db::Database::instance();
@@ -89,10 +86,9 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
             if (osu_user_id_opt) {
                 int64_t osu_user_id = *osu_user_id_opt;
 
-                // Find user's position in leaderboard
                 for (size_t i = 0; i < state.scores.size(); ++i) {
                     if (state.scores[i].get_user_id() == static_cast<size_t>(osu_user_id)) {
-                        caller_rank_text = fmt::format(" • your rank: #{}", i + 1);
+                        caller_rank_num = std::to_string(i + 1);
                         break;
                     }
                 }
@@ -102,57 +98,46 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
         }
     }
 
-    // Build footer text based on number of pages
-    std::string sort_text = (state.sort_method != LbSortMethod::PP)
-        ? fmt::format(" • sorted by {}", sort_method_to_string(state.sort_method))
-        : "";
+    std::string sort_method_str = sort_method_to_string(state.sort_method);
 
-    std::string footer_text;
-    if (state.total_pages == 1) {
-        // Simplified footer for single page
-        footer_text = fmt::format("{} {} shown{}{}{}",
-            state.scores.size(),
-            state.scores.size() == 1 ? "score" : "scores",
-            active_mods.empty() ? "" : fmt::format(" • Filter: +{}", active_mods),
-            sort_text,
-            caller_rank_text);
-    } else {
-        // Full footer for multiple pages
-        footer_text = fmt::format("Page {}/{} • {}/{} {} shown{}{}{}",
-            state.current_page + 1,
-            state.total_pages,
-            end,
-            state.scores.size(),
-            end == 1 ? "score" : "scores",
-            active_mods.empty() ? "" : fmt::format(" • Filter: +{}", active_mods),
-            sort_text,
-            caller_rank_text);
-    }
+    std::unordered_map<std::string, std::string> footer_values;
+    footer_values["page"] = std::to_string(state.current_page + 1);
+    footer_values["total_pages"] = std::to_string(state.total_pages);
+    footer_values["shown"] = std::to_string(end - start);
+    footer_values["total_scores"] = std::to_string(state.scores.size());
+    // Composite (with " • " prefix and label) — for convenience
+    footer_values["filter"] = active_mods.empty() ? "" : fmt::format(" \xe2\x80\xa2 Filter: +{}", active_mods);
+    footer_values["sort"] = (state.sort_method != LbSortMethod::PP)
+        ? fmt::format(" \xe2\x80\xa2 sorted by {}", sort_method_str) : "";
+    footer_values["caller_rank"] = caller_rank_num.empty() ? "" : fmt::format(" \xe2\x80\xa2 your rank: #{}", caller_rank_num);
+    // Atomic (raw values) — for custom formatting
+    footer_values["filter_mods"] = active_mods;
+    footer_values["sort_method"] = sort_method_str;
+    footer_values["caller_rank_num"] = caller_rank_num;
 
-    // Build score presentations for the current page
     std::vector<ScorePresentation> scores_on_page;
     for (size_t i = start; i < end; i++) {
         const auto& score = state.scores[i];
 
-        // Calculate PP if API returns 0 (for Loved maps)
         double display_pp = score.get_pp();
         if (display_pp <= 0.01 && osu_file_path_opt.has_value() && score.get_mode() == "osu") {
             SimulateParams params;
             params.accuracy = score.get_accuracy();
             params.mods = score.get_mods();
+            params.lazer = score.get_set_on_lazer();
             params.combo = score.get_max_combo();
             params.misses = score.get_count_miss();
+            params.count_300 = score.get_count_300();
             params.count_100 = score.get_count_100();
             params.count_50 = score.get_count_50();
 
             auto perf_opt = performance_service_.calculate_pp(beatmapset_id, beatmap_id, "osu", params);
             if (perf_opt.has_value()) {
                 display_pp = perf_opt->pp;
-                spdlog::info("[LB] PP calc for {}: {:.2f}pp", score.get_user_id(), display_pp);
+                spdlog::info("[LB] PP calc for {}: {:.2f}pp (lazer={})", score.get_user_id(), display_pp, params.lazer);
             }
         }
 
-        // Build header with calculated PP if needed
         std::string header;
         if (display_pp != score.get_pp()) {
             header = fmt::format("{} `{:.0f}pp` +{}", score.get_username(), display_pp, score.get_mods());
@@ -166,18 +151,29 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state, const
             .body = score.get_body(state.beatmap.get_max_combo()),
             .display_pp = display_pp,
             .username = score.get_username(),
-            .user_id = score.get_user_id()
+            .user_id = score.get_user_id(),
+            .mods = score.get_mods(),
+            .accuracy = score.get_accuracy(),
+            .combo = static_cast<int>(score.get_max_combo()),
+            .max_combo = static_cast<int>(state.beatmap.get_max_combo()),
+            .count_300 = static_cast<int>(score.get_count_300()),
+            .count_100 = static_cast<int>(score.get_count_100()),
+            .count_50 = static_cast<int>(score.get_count_50()),
+            .count_miss = static_cast<int>(score.get_count_miss()),
+            .total_score = score.get_total_score(),
+            .rank_letter = score.get_rank(),
+            .date = fmt::format("<t:{}:R>", utils::ISO8601_to_UNIX(score.get_created_at()))
         });
     }
 
-    // Use presenter service to build the message
     return message_presenter_.build_leaderboard_page(
         state.beatmap,
         scores_on_page,
-        footer_text,
+        footer_values,
         active_mods,
         state.total_pages,
-        state.current_page
+        state.current_page,
+        state.caller_discord_id
     );
 }
 
@@ -231,8 +227,8 @@ void LeaderboardService::create_leaderboard(
         beatmap_downloader_.download_osz(beatmapset_id);
     }).detach();
 
-    // Fetch mod-adjusted beatmap attributes if mods filter is present
-    if (!mods_filter.empty()) {
+    // Fetch mod-adjusted beatmap attributes if mods filter is present (skip NM — no adjustment needed)
+    if (!mods_filter.empty() && mods_filter != "NM") {
         uint32_t mods_bitset = utils::mods_string_to_bitset(mods_filter);
         std::string attributes_response = request_.get_beatmap_attributes(beatmap_id, mods_bitset);
         if (!attributes_response.empty()) {
@@ -283,7 +279,11 @@ void LeaderboardService::create_leaderboard(
                         std::string score_mods_str;
                         if (score_json.contains("mods") && score_json["mods"].is_array()) {
                             for (const auto& mod : score_json["mods"]) {
-                                score_mods_str += mod.get<std::string>();
+                                if (mod.is_string()) {
+                                    score_mods_str += mod.get<std::string>();
+                                } else if (mod.is_object() && mod.contains("acronym")) {
+                                    score_mods_str += mod.at("acronym").get<std::string>();
+                                }
                             }
                         }
                         if (score_mods_str.empty()) score_mods_str = "NM";
@@ -321,7 +321,7 @@ void LeaderboardService::create_leaderboard(
     // Remove empty scores
     for (auto it = scores.begin(); it != scores.end();) {
         if (!it->is_empty) ++it;
-        else scores.erase(it);
+        else it = scores.erase(it);
     }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -351,9 +351,12 @@ void LeaderboardService::create_leaderboard(
             if (score.get_pp() <= 0.01 && score.get_mode() == "osu") {
                 SimulateParams params;
                 params.accuracy = score.get_accuracy();
+                // Use mods directly from API (includes CL for stable scores)
                 params.mods = score.get_mods();
+                params.lazer = score.get_set_on_lazer();
                 params.combo = score.get_max_combo();
                 params.misses = score.get_count_miss();
+                params.count_300 = score.get_count_300();
                 params.count_100 = score.get_count_100();
                 params.count_50 = score.get_count_50();
 
@@ -503,8 +506,8 @@ void LeaderboardService::create_leaderboard(
         beatmap_downloader_.download_osz(beatmapset_id);
     }).detach();
 
-    // Fetch mod-adjusted beatmap attributes if mods filter is present
-    if (!mods_filter.empty()) {
+    // Fetch mod-adjusted beatmap attributes if mods filter is present (skip NM — no adjustment needed)
+    if (!mods_filter.empty() && mods_filter != "NM") {
         uint32_t mods_bitset = utils::mods_string_to_bitset(mods_filter);
         std::string attributes_response = request_.get_beatmap_attributes(beatmap_id, mods_bitset);
         if (!attributes_response.empty()) {
@@ -555,7 +558,11 @@ void LeaderboardService::create_leaderboard(
                         std::string score_mods_str;
                         if (score_json.contains("mods") && score_json["mods"].is_array()) {
                             for (const auto& mod : score_json["mods"]) {
-                                score_mods_str += mod.get<std::string>();
+                                if (mod.is_string()) {
+                                    score_mods_str += mod.get<std::string>();
+                                } else if (mod.is_object() && mod.contains("acronym")) {
+                                    score_mods_str += mod.at("acronym").get<std::string>();
+                                }
                             }
                         }
                         if (score_mods_str.empty()) score_mods_str = "NM";
@@ -593,7 +600,7 @@ void LeaderboardService::create_leaderboard(
     // Remove empty scores
     for (auto it = scores.begin(); it != scores.end();) {
         if (!it->is_empty) ++it;
-        else scores.erase(it);
+        else it = scores.erase(it);
     }
 
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -623,9 +630,12 @@ void LeaderboardService::create_leaderboard(
             if (score.get_pp() <= 0.01 && score.get_mode() == "osu") {
                 SimulateParams params;
                 params.accuracy = score.get_accuracy();
+                // Use mods directly from API (includes CL for stable scores)
                 params.mods = score.get_mods();
+                params.lazer = score.get_set_on_lazer();
                 params.combo = score.get_max_combo();
                 params.misses = score.get_count_miss();
+                params.count_300 = score.get_count_300();
                 params.count_100 = score.get_count_100();
                 params.count_50 = score.get_count_50();
 

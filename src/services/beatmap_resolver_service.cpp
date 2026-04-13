@@ -29,28 +29,35 @@ BeatmapResolveResult BeatmapResolverService::resolve(const std::string& stored_i
         return result;
     }
 
-    constexpr std::string_view set_prefix = "set:";
-    if (stored_id.starts_with(set_prefix)) {
-        // Extract beatmapset_id from stored value
-        result.beatmapset_id = std::stoul(stored_id.substr(set_prefix.size()));
+    try {
+        constexpr std::string_view set_prefix = "set:";
+        if (stored_id.starts_with(set_prefix)) {
+            // Extract beatmapset_id from stored value
+            result.beatmapset_id = std::stoul(stored_id.substr(set_prefix.size()));
 
-        // Get beatmap_id from API
-        std::string beatmap_id_str = request_.get_beatmap_id_from_set(
-            std::to_string(result.beatmapset_id));
+            // Get beatmap_id from API
+            std::string beatmap_id_str = request_.get_beatmap_id_from_set(
+                std::to_string(result.beatmapset_id));
 
-        if (beatmap_id_str.empty()) {
-            result.error_message = "Failed to resolve beatmap ID.";
-            result.beatmapset_id = 0;
-            return result;
+            if (beatmap_id_str.empty()) {
+                result.error_message = "Failed to resolve beatmap ID.";
+                result.beatmapset_id = 0;
+                return result;
+            }
+
+            result.beatmap_id = std::stoul(beatmap_id_str);
+            spdlog::debug("[BeatmapResolver] Resolved set:{} -> beatmap:{}",
+                result.beatmapset_id, result.beatmap_id);
+        } else {
+            // Direct beatmap_id
+            result.beatmap_id = std::stoul(stored_id);
+            // beatmapset_id will be fetched later if needed
         }
-
-        result.beatmap_id = std::stoul(beatmap_id_str);
-        spdlog::debug("[BeatmapResolver] Resolved set:{} -> beatmap:{}",
-            result.beatmapset_id, result.beatmap_id);
-    } else {
-        // Direct beatmap_id
-        result.beatmap_id = std::stoul(stored_id);
-        // beatmapset_id will be fetched later if needed
+    } catch (const std::exception& e) {
+        spdlog::error("[BeatmapResolver] Failed to parse stored ID '{}': {}", stored_id, e.what());
+        result.error_message = "Invalid beatmap ID format.";
+        result.beatmap_id = 0;
+        result.beatmapset_id = 0;
     }
 
     return result;

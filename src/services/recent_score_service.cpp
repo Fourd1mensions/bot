@@ -1,6 +1,7 @@
 #include "services/recent_score_service.h"
 #include "services/beatmap_performance_service.h"
 #include "services/message_presenter_service.h"
+#include "services/user_settings_service.h"
 #include <requests.h>
 #include <osu.h>
 #include <utils.h>
@@ -44,15 +45,19 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
             json cached_data = json::parse(cache_it->second);
 
             MessagePresenterService::RecentScoreCacheData cache_data{
-                .title = cached_data["title"].get<std::string>(),
-                .url = cached_data["url"].get<std::string>(),
-                .description = cached_data["description"].get<std::string>(),
-                .thumbnail = cached_data["thumbnail"].get<std::string>(),
-                .beatmap_info = cached_data["beatmap_info"].get<std::string>(),
-                .footer = cached_data["footer"].get<std::string>(),
-                .timestamp = cached_data["timestamp"].get<time_t>(),
+                .content = cached_data.value("content", ""),
+                .title = cached_data.value("title", ""),
+                .url = cached_data.value("url", ""),
+                .description = cached_data.value("description", ""),
+                .thumbnail = cached_data.value("thumbnail", ""),
+                .beatmap_info = cached_data.value("beatmap_info", ""),
+                .footer = cached_data.value("footer", ""),
+                .footer_icon = cached_data.value("footer_icon", ""),
+                .timestamp = cached_data.value("timestamp", static_cast<time_t>(0)),
                 .username = cached_data.value("username", ""),
-                .user_id = cached_data.value("user_id", static_cast<uint64_t>(0))
+                .user_id = cached_data.value("user_id", static_cast<uint64_t>(0)),
+                .preset = services::embed_preset_from_string(cached_data.value("preset", "classic")),
+                .color = cached_data.value("color", static_cast<uint32_t>(0x7c4dff))
             };
 
             // Skip cache if missing user info (old cache format)
@@ -149,10 +154,9 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     int hits_made = score.get_count_300() + score.get_count_100() + score.get_count_50() + score.get_count_miss();
     float completion_percent = (total_objects > 0) ? (static_cast<float>(hits_made) / total_objects) * 100.0f : 100.0f;
 
-    // Use calculator PP if API returns 0 (e.g., for Loved maps)
     double current_pp = score.get_pp();
+    double current_aim_pp = 0.0, current_speed_pp = 0.0, current_accuracy_pp = 0.0;
 
-    // Simple structure for FC performance
     struct {
         double total_pp = 0.0;
         double aim_pp = 0.0;
@@ -160,47 +164,89 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
         double accuracy_pp = 0.0;
     } fc_perf;
 
-    // Use full beatmap parsing if .osu file is available (osu!standard only)
     spdlog::debug("[PP] osu_file_path has_value={}, mode={}, current_pp={:.2f}",
         osu_file_path_opt.has_value(), score.get_mode(), current_pp);
 
     if (osu_file_path_opt.has_value() && score.get_mode() == "osu") {
-        if (current_pp <= 0.01) {
-            spdlog::info("[RS] API pp=0, calculating via rosu-pp for beatmap {}", beatmap_id);
-            // Use performance service for accurate PP calculation
+        // Calculate PP breakdown for current score (for extended preset)
+        {
             SimulateParams params;
             params.accuracy = score.get_accuracy();
+            // Use mods directly from API (includes CL for stable scores)
             params.mods = score.get_mods();
+            // Set lazer flag based on where score was set
+            params.lazer = score.get_set_on_lazer();
+            // Always pass all hit counts (like Bathbot)
             params.combo = score.get_max_combo();
             params.misses = score.get_count_miss();
+            params.count_300 = score.get_count_300();
             params.count_100 = score.get_count_100();
             params.count_50 = score.get_count_50();
+            // For failed scores: set passed_objects = total hits (like Bathbot)
+            if (!score.get_passed()) {
+                params.passed_objects = score.get_count_300() + score.get_count_100() +
+                                       score.get_count_50() + score.get_count_miss();
+                spdlog::debug("[PP] Failed score: passed_objects={}", params.passed_objects);
+            }
 
-            auto calculated_perf_opt = performance_service_.calculate_pp(
+            spdlog::debug("[PP] Current: mods='{}' lazer={}", params.mods, params.lazer);
+
+            auto perf_opt = performance_service_.calculate_pp(
                 beatmapset_id, beatmap_id, "osu", params);
 
-            if (calculated_perf_opt.has_value()) {
-                current_pp = calculated_perf_opt->pp;
-                spdlog::info("[PP] Calculated: {:.2f}pp (aim: {:.2f}, speed: {:.2f}, acc: {:.2f})",
-                    current_pp, calculated_perf_opt->aim_pp, calculated_perf_opt->speed_pp, calculated_perf_opt->accuracy_pp);
+            if (perf_opt.has_value()) {
+                current_aim_pp = perf_opt->aim_pp;
+                current_speed_pp = perf_opt->speed_pp;
+                current_accuracy_pp = perf_opt->accuracy_pp;
+                if (current_pp <= 0.01) {
+                    current_pp = perf_opt->pp;
+                    spdlog::info("[PP] Calculated: {:.2f}pp (aim: {:.2f}, speed: {:.2f}, acc: {:.2f})",
+                        current_pp, current_aim_pp, current_speed_pp, current_accuracy_pp);
+                }
             }
         }
 
-        // Calculate FC PP (converting misses to 300s for accuracy)
-        if (score.get_count_miss() > 0) {
-            int fc_total_objects = score.get_count_300() + score.get_count_100() + score.get_count_50() + score.get_count_miss();
-            double fc_accuracy = ((score.get_count_300() + score.get_count_miss()) * 300.0 + score.get_count_100() * 100.0 + score.get_count_50() * 50.0) / (fc_total_objects * 300.0);
+        // Calculate FC PP (Bathbot algorithm)
+        if ((score.get_count_miss() > 0 || !score.get_passed()) && total_objects > 0) {
+            // Bathbot IfFc algorithm:
+            // 1. Remaining objects (not played) are counted as 300s
+            // 2. Misses are distributed between 300s and 100s based on ratio
+            int passed_objects = score.get_count_300() + score.get_count_100() +
+                                score.get_count_50() + score.get_count_miss();
+            int remaining = total_objects - passed_objects;
+            if (remaining < 0) remaining = 0;
 
-            spdlog::info("[PP] FC calc: 300={} 100={} 50={} miss=0 (was {}) acc={:.4f}",
-                score.get_count_300() + score.get_count_miss(), score.get_count_100(), score.get_count_50(), score.get_count_miss(), fc_accuracy);
+            // Start with: remaining objects as 300s
+            int fc_n300 = score.get_count_300() + remaining;
+
+            // Calculate ratio of non-300s
+            int count_hits = total_objects - score.get_count_miss();
+            double ratio = (count_hits > 0) ? 1.0 - (static_cast<double>(fc_n300) / count_hits) : 0.0;
+
+            // Distribute misses: some become 100s based on ratio
+            int new100s = static_cast<int>(std::ceil(ratio * score.get_count_miss()));
+            int misses_as_300s = score.get_count_miss() - new100s;
+            if (misses_as_300s < 0) misses_as_300s = 0;
+
+            fc_n300 += misses_as_300s;
+            int fc_n100 = score.get_count_100() + new100s;
+            int fc_n50 = score.get_count_50();
+
+            spdlog::debug("[PP] FC calc: total={} passed={} remaining={} n300={} n100={} n50={}",
+                total_objects, passed_objects, remaining, fc_n300, fc_n100, fc_n50);
 
             SimulateParams fc_params;
-            fc_params.accuracy = fc_accuracy;
+            // Use mods directly from API (includes CL for stable scores)
             fc_params.mods = score.get_mods();
-            fc_params.combo = 0;  // 0 = use beatmap max
-            fc_params.misses = 0;  // FC
-            fc_params.count_100 = score.get_count_100();
-            fc_params.count_50 = score.get_count_50();
+            fc_params.lazer = score.get_set_on_lazer();
+            fc_params.combo = 0;  // max combo
+            fc_params.misses = 0;
+            fc_params.count_300 = fc_n300;
+            fc_params.count_100 = fc_n100;
+            fc_params.count_50 = fc_n50;
+            // No passed_objects for FC - calculate on full map
+
+            spdlog::debug("[PP] FC: mods='{}' lazer={}", fc_params.mods, fc_params.lazer);
 
             auto fc_perf_opt = performance_service_.calculate_pp(
                 beatmapset_id, beatmap_id, "osu", fc_params);
@@ -210,27 +256,36 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
                 fc_perf.aim_pp = fc_perf_opt->aim_pp;
                 fc_perf.speed_pp = fc_perf_opt->speed_pp;
                 fc_perf.accuracy_pp = fc_perf_opt->accuracy_pp;
-
-                spdlog::info("[PP] FC OK: {:.2f}pp (was: {:.2f}pp, {} misses -> 0)",
-                    fc_perf.total_pp, current_pp, score.get_count_miss());
-            } else {
-                spdlog::warn("[PP] FC calculation failed");
             }
         }
     }
 
-    // Prepare PP info for presenter
     PPInfo pp_info{
         .current_pp = current_pp,
         .fc_pp = fc_perf.total_pp,
         .fc_accuracy = 0.0,
-        .has_fc_pp = false
+        .has_fc_pp = false,
+        .aim_pp = current_aim_pp,
+        .speed_pp = current_speed_pp,
+        .accuracy_pp = current_accuracy_pp
     };
 
-    // Calculate FC accuracy if applicable
-    if (score.get_mode() == "osu" && score.get_count_miss() > 0 && fc_perf.total_pp > current_pp) {
-        int fc_total_hits = score.get_count_300() + score.get_count_100() + score.get_count_50() + score.get_count_miss();
-        pp_info.fc_accuracy = ((score.get_count_300() + score.get_count_miss()) * 300.0 + score.get_count_100() * 100.0 + score.get_count_50() * 50.0) / (fc_total_hits * 300.0) * 100.0;
+    if (score.get_mode() == "osu" && (score.get_count_miss() > 0 || !score.get_passed()) && fc_perf.total_pp > current_pp && total_objects > 0) {
+        // Recalculate FC hit counts using Bathbot algorithm
+        int passed_objects = score.get_count_300() + score.get_count_100() +
+                            score.get_count_50() + score.get_count_miss();
+        int remaining = (total_objects > passed_objects) ? (total_objects - passed_objects) : 0;
+        int fc_n300 = score.get_count_300() + remaining;
+        int count_hits = total_objects - score.get_count_miss();
+        double ratio = (count_hits > 0) ? 1.0 - (static_cast<double>(fc_n300) / count_hits) : 0.0;
+        int new100s = static_cast<int>(std::ceil(ratio * score.get_count_miss()));
+        int misses_as_300s = (score.get_count_miss() > new100s) ? (score.get_count_miss() - new100s) : 0;
+        fc_n300 += misses_as_300s;
+        int fc_n100 = score.get_count_100() + new100s;
+        int fc_n50 = score.get_count_50();
+
+        // Calculate FC accuracy from these hit counts
+        pp_info.fc_accuracy = (fc_n300 * 300.0 + fc_n100 * 100.0 + fc_n50 * 50.0) / (total_objects * 300.0) * 100.0;
         pp_info.has_fc_pp = true;
     }
 
@@ -254,25 +309,59 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     float modded_bpm = utils::apply_speed_mods_to_bpm(beatmap.get_bpm(), score.get_mods());
     uint32_t modded_length = utils::apply_speed_mods_to_length(beatmap.get_total_length(), score.get_mods());
 
-    // Build message using presenter service
-    std::string score_type = state.use_best_scores ? "best" : "recent";
+    // Calculate consecutive try number (only for recent scores)
+    int try_number = 0;
+    if (!state.use_best_scores) {
+        uint32_t current_beatmap_id = score.get_beatmap_id();
+        int count = 1;
+        for (size_t i = state.current_index + 1; i < state.scores.size(); ++i) {
+            if (state.scores[i].get_beatmap_id() == current_beatmap_id) {
+                count++;
+            } else {
+                break;
+            }
+        }
+        try_number = count;
+    }
+
+    // Fetch user's map position and personal best
+    // Only fetch map_rank for passed scores - failed scores don't have a leaderboard position
+    MapPositionInfo map_position;
+    if (score.get_passed()) {
+        try {
+            std::string map_score_response = request_.get_user_beatmap_score(
+                std::to_string(score.get_beatmap_id()),
+                std::to_string(score.get_user_id()),
+                false);
+            if (!map_score_response.empty()) {
+                json map_j = json::parse(map_score_response);
+                if (map_j.contains("position")) {
+                    map_position.position = map_j["position"].get<int>();
+                }
+                if (map_j.contains("score") && map_j["score"].contains("pp") && !map_j["score"]["pp"].is_null()) {
+                    map_position.best_pp = map_j["score"]["pp"].get<double>();
+                }
+                spdlog::debug("[RS] Map position: #{}, PB: {:.2f}pp", map_position.position, map_position.best_pp);
+            }
+        } catch (const std::exception& e) {
+            spdlog::debug("[RS] Failed to fetch map position: {}", e.what());
+        }
+    } else {
+        spdlog::debug("[RS] Skipping map position fetch for failed score");
+    }
+
+    std::string score_type = state.use_best_scores ? "Recent Best" : "Recent";
     dpp::message msg = message_presenter_.build_recent_score_page(
-        score,
-        beatmap,
-        difficulty_info,
-        pp_info,
-        pagination,
-        score_type,
-        completion_percent,
-        modded_bpm,
-        modded_length
+        score, beatmap, difficulty_info, pp_info, pagination,
+        score_type, completion_percent, modded_bpm, modded_length, state.preset, try_number,
+        map_position, state.caller_discord_id
     );
 
-    // Cache the page content for fast navigation using presenter's cache data builder
     try {
         auto cache_data = message_presenter_.build_recent_score_cache_data(
             score, beatmap, difficulty_info, pp_info, pagination,
-            score_type, completion_percent, modded_bpm, modded_length
+            score_type, completion_percent, modded_bpm, modded_length, state.preset, try_number,
+            map_position, state.caller_discord_id
         );
 
         json page_data;
@@ -282,9 +371,13 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
         page_data["thumbnail"] = cache_data.thumbnail;
         page_data["beatmap_info"] = cache_data.beatmap_info;
         page_data["footer"] = cache_data.footer;
+        page_data["footer_icon"] = cache_data.footer_icon;
         page_data["timestamp"] = cache_data.timestamp;
         page_data["username"] = cache_data.username;
         page_data["user_id"] = cache_data.user_id;
+        page_data["preset"] = services::embed_preset_to_string(cache_data.preset);
+        page_data["content"] = cache_data.content;
+        page_data["color"] = cache_data.color;
 
         state.page_content_cache[state.current_index] = page_data.dump();
         spdlog::debug("[RS] Cached page data for index {}", state.current_index);

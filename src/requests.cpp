@@ -1,5 +1,6 @@
 #include <requests.h>
 #include <cache.h>
+#include <debug_settings.h>
 
 #include <chrono>
 #include <string_view>
@@ -84,21 +85,25 @@ bool Request::update_token() {
 }
 
 std::string Request::get_userid_v1(const std::string_view username) {
-  std::string url = fmt::format("http://osu.ppy.sh/api/get_user?u={}", username);
+  std::string url = fmt::format("https://osu.ppy.sh/api/get_user?u={}", username);
   log_request("GET", url);
 
-  cpr::Response r      = cpr::Get(cpr::Url{"http://osu.ppy.sh/api/get_user"},
+  cpr::Response r      = cpr::Get(cpr::Url{"https://osu.ppy.sh/api/get_user"},
                                   cpr::Parameters{{"k", config.api_v1_key}, {"u", username.data()}});
 
   log_response(r);
 
-  const size_t        pos    = r.text.find_first_of("0123456789");
-  const size_t        endpos = r.text.find_first_not_of("0123456789", pos);
+  const size_t pos = r.text.find_first_of("0123456789");
+  if (pos == std::string::npos) {
+    spdlog::warn("[API] get_userid_v1: no numeric ID found in response for '{}'", username);
+    return "";
+  }
+  const size_t endpos = r.text.find_first_not_of("0123456789", pos);
   return std::string(r.text.substr(pos, endpos - pos));
 }
 
 // user = username by default
-std::string Request::get_user(const std::string_view user, const bool by_id) {
+std::string Request::get_user(const std::string_view user, const bool by_id, const std::string& mode) {
    if (!update_token()) {
     spdlog::error("[API] Can't send requests, token is dead");
     return "";
@@ -108,7 +113,9 @@ std::string Request::get_user(const std::string_view user, const bool by_id) {
 
   // URL-encode username if not using ID
   std::string encoded_user = by_id ? std::string(user) : cpr::util::urlEncode(std::string(user));
-  std::string url = fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/osu", by_id ? "" : "@", encoded_user);
+  // Mode: "osu", "taiko", "fruits", "mania"
+  std::string api_mode = mode.empty() ? "osu" : mode;
+  std::string url = fmt::format("https://osu.ppy.sh/api/v2/users/{}{}/{}", by_id ? "" : "@", encoded_user, api_mode);
 
   log_request("GET", url);
 
@@ -124,10 +131,10 @@ std::string Request::get_user(const std::string_view user, const bool by_id) {
     std::chrono::steady_clock::now() - start).count();
 
   if (r.status_code == 200) {
-    spdlog::info("[API] get_user success user={} duration={}ms", user, duration);
+    spdlog::info("[API] get_user success user={} mode={} duration={}ms", user, api_mode, duration);
     return r.text;
   }
-  spdlog::warn("[API] get_user failed user={} status={} duration={}ms", user, r.status_code, duration);
+  spdlog::warn("[API] get_user failed user={} mode={} status={} duration={}ms", user, api_mode, r.status_code, duration);
   return "";
 }
 // if all=false returns single score that peppy wants, else - all user scores on map
@@ -156,15 +163,21 @@ std::string Request::get_user_beatmap_score(const std::string_view beatmap,
 
   const auto status_code = r.status_code;
   switch (status_code) {
-    case 200:
+    case 200: {
       spdlog::info("[API] get_user_beatmap_score success user={} beatmap={} all={} duration={}ms",
         user, beatmap, all, duration);
+      auto& dbg = debug::Settings::instance();
+      if (dbg.verbose_osu_api.load()) {
+        spdlog::info("[API] get_user_beatmap_score response: {}",
+          debug::Settings::truncate(r.text, dbg.max_response_log_length.load()));
+      }
       if (r.text != "{\"scores\":[]}")
         return r.text;
       else {
         spdlog::info("[API] No scores found for user={} on beatmap={}", user, beatmap);
         return {};
       }
+    }
     case 404:
       spdlog::info("[API] get_user_beatmap_score not found user={} beatmap={} duration={}ms",
         user, beatmap, duration);
@@ -200,6 +213,11 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
 
   if (r.status_code == 200) {
     spdlog::info("[API] get_beatmap success beatmap={} duration={}ms", beatmap, duration);
+    auto& dbg = debug::Settings::instance();
+    if (dbg.verbose_osu_api.load()) {
+      spdlog::info("[API] get_beatmap response: {}",
+        debug::Settings::truncate(r.text, dbg.max_response_log_length.load()));
+    }
     return r.text;
   }
   spdlog::warn("[API] get_beatmap failed beatmap={} status={} duration={}ms",
@@ -397,6 +415,60 @@ std::string Request::get_beatmap_id_from_set(const std::string_view beatmapset_i
   return "";
 }
 
+Request::OsuStatsCounts Request::get_osustats_counts(const std::string& username, int gamemode) {
+  OsuStatsCounts counts;
+  // Note: top1 should be fetched from user profile (scores_first_count) - more accurate than osustats
+  // osustats only updates once per day
+  const std::vector<std::pair<int, size_t*>> tiers = {
+      {8, &counts.top8}, {15, &counts.top15},
+      {25, &counts.top25}, {50, &counts.top50}, {100, &counts.top100}
+  };
+
+  auto start = std::chrono::steady_clock::now();
+  spdlog::info("[API] get_osustats_counts starting for user={} mode={}", username, gamemode);
+
+  for (auto& [rank_max, count_ptr] : tiers) {
+    // Use /api/getScores endpoint - response format: [scores_array, total_count, bool, bool]
+    cpr::Response r = cpr::Post(
+        cpr::Url{"https://osustats.ppy.sh/api/getScores"},
+        cpr::Payload{
+            {"u1", username},
+            {"rankMin", "1"},
+            {"rankMax", std::to_string(rank_max)},
+            {"gamemode", std::to_string(gamemode)},
+            {"page", "1"}
+        },
+        cpr::Timeout{15000}
+    );
+
+    if (r.status_code != 200) {
+      spdlog::warn("[API] osustats request failed: status={} rank_max={}", r.status_code, rank_max);
+      continue;
+    }
+
+    try {
+      auto arr = json::parse(r.text);
+      // Response is [scores_array, total_count, has_more, unknown_bool]
+      if (arr.is_array() && arr.size() >= 2 && arr[1].is_number()) {
+        *count_ptr = arr[1].get<size_t>();
+      }
+    } catch (const json::exception& e) {
+      spdlog::error("[API] osustats JSON parse error: {}", e.what());
+    }
+  }
+
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start).count();
+
+  spdlog::info("[API] get_osustats_counts done user={} mode={} duration={}ms "
+               "top1={} top8={} top15={} top25={} top50={} top100={}",
+               username, gamemode, duration,
+               counts.top1, counts.top8, counts.top15,
+               counts.top25, counts.top50, counts.top100);
+
+  return counts;
+}
+
 std::string Request::get_weather(const std::string_view city) {
   const std::string& key = config.weather_api_key;
   if (key.empty()) {
@@ -407,7 +479,7 @@ std::string Request::get_weather(const std::string_view city) {
   std::string city_ = city.data();
   auto start = std::chrono::steady_clock::now();
   auto response = cpr::Get(
-    cpr::Url{"http://api.openweathermap.org/data/2.5/weather"},
+    cpr::Url{"https://api.openweathermap.org/data/2.5/weather"},
     cpr::Parameters{cpr::Parameter{"q", city_},
                     cpr::Parameter{"appid", key},
                     cpr::Parameter{"units", "metric"},

@@ -2,7 +2,6 @@
 #include "services/beatmap_cache_service.h"
 #include "beatmap_downloader.h"
 #include "osu_parser.h"
-#include "osu_tools.h"
 #include "utils.h"
 
 #ifdef USE_ROSU_PP_SERVICE
@@ -126,14 +125,24 @@ std::optional<BeatmapDifficultyAttrs> BeatmapPerformanceService::get_difficulty(
     result.hp_drain_rate = modded.hp_drain_rate;
     result.total_objects = modded.total_objects;
 
-    // Get star rating from osu-tools
-    auto diff_result = osu_tools::calculate_difficulty(*osu_path, mods);
-    if (diff_result) {
-        result.star_rating = diff_result->star_rating;
-        result.aim_difficulty = diff_result->aim_difficulty;
-        result.speed_difficulty = diff_result->speed_difficulty;
-        result.max_combo = diff_result->max_combo;
+#ifdef USE_ROSU_PP_SERVICE
+    if (rosu_pp_client_ && rosu_pp_client_->is_connected()) {
+        RosuDifficultySettings settings;
+        settings.mods_str = mods;
+
+        auto diff_result = rosu_pp_client_->calculate_difficulty(*osu_path, std::nullopt, settings);
+        if (diff_result) {
+            result.star_rating = diff_result->stars;
+            result.aim_difficulty = diff_result->aim;
+            result.speed_difficulty = diff_result->speed;
+            result.max_combo = diff_result->max_combo;
+        }
+    } else {
+        spdlog::warn("[PerfService] rosu-pp unavailable for difficulty calculation");
     }
+#else
+    spdlog::warn("[PerfService] No PP service available for star rating");
+#endif
 
     return result;
 }
@@ -157,36 +166,13 @@ std::optional<PerformanceAttrs> BeatmapPerformanceService::calculate_pp(
     if (rosu_pp_client_ && rosu_pp_client_->is_connected()) {
         spdlog::info("[PerfService] -> rosu-pp for beatmap {}", beatmap_id);
         return calculate_pp_rosu(*osu_path, mode, params);
-    } else {
-        spdlog::warn("[PerfService] rosu-pp unavailable, fallback to osu-tools");
     }
+    spdlog::warn("[PerfService] rosu-pp-service unavailable for PP calculation");
+    return std::nullopt;
+#else
+    spdlog::warn("[PerfService] No PP service available (USE_ROSU_PP_SERVICE not compiled in)");
+    return std::nullopt;
 #endif
-
-    // Fallback to osu-tools
-    spdlog::info("[PerfService] -> osu-tools for beatmap {}", beatmap_id);
-    auto result = osu_tools::simulate_performance(
-        *osu_path,
-        params.accuracy,
-        mode,
-        params.mods,
-        params.combo,
-        params.misses,
-        params.count_100,
-        params.count_50
-    );
-
-    if (!result) {
-        spdlog::warn("[PerfService] osu-tools PP calculation failed for beatmap {}", beatmap_id);
-        return std::nullopt;
-    }
-
-    spdlog::info("[PerfService] osu-tools OK: pp={:.2f}", result->pp);
-    return PerformanceAttrs{
-        .pp = result->pp,
-        .aim_pp = result->aim_pp,
-        .speed_pp = result->speed_pp,
-        .accuracy_pp = result->accuracy_pp
-    };
 }
 
 std::vector<double> BeatmapPerformanceService::calculate_pp_at_accuracies(
@@ -209,61 +195,13 @@ std::vector<double> BeatmapPerformanceService::calculate_pp_at_accuracies(
     if (rosu_pp_client_ && rosu_pp_client_->is_connected()) {
         spdlog::info("[PerfService] -> rosu-pp batch for {} levels", accuracy_levels.size());
         return calculate_pp_at_accuracies_rosu(*osu_path, mode, mods, accuracy_levels, out_difficulty);
-    } else {
-        spdlog::warn("[PerfService] rosu-pp unavailable for batch, using osu-tools");
     }
+    spdlog::warn("[PerfService] rosu-pp-service unavailable for batch PP calculation");
+    return {};
+#else
+    spdlog::warn("[PerfService] No PP service available (USE_ROSU_PP_SERVICE not compiled in)");
+    return {};
 #endif
-
-    // Fallback to osu-tools
-    std::vector<double> pp_values;
-    pp_values.reserve(accuracy_levels.size());
-
-    bool first = true;
-    for (double acc : accuracy_levels) {
-        auto result = osu_tools::simulate_performance(
-            *osu_path,
-            acc,
-            mode,
-            mods.empty() ? "NM" : mods
-        );
-
-        if (result) {
-            pp_values.push_back(result->pp);
-
-            // Capture difficulty info from first calculation
-            if (first && out_difficulty) {
-                out_difficulty->star_rating = result->difficulty.star_rating;
-                out_difficulty->aim_difficulty = result->difficulty.aim_difficulty;
-                out_difficulty->speed_difficulty = result->difficulty.speed_difficulty;
-                out_difficulty->max_combo = result->difficulty.max_combo;
-                first = false;
-            }
-        } else {
-            pp_values.push_back(0.0);
-        }
-    }
-
-    // Also parse .osu file for AR/OD/CS/HP if difficulty output requested
-    if (out_difficulty && !pp_values.empty()) {
-        auto beatmap_opt = osu_parser::parse_osu_file(*osu_path);
-        if (beatmap_opt) {
-            auto mod_flags = utils::parse_mod_flags(mods);
-            auto modded = osu_parser::apply_mods(
-                *beatmap_opt,
-                mod_flags.has_ez,
-                mod_flags.has_hr,
-                mod_flags.has_dt,
-                mod_flags.has_ht
-            );
-            out_difficulty->approach_rate = modded.approach_rate;
-            out_difficulty->overall_difficulty = modded.overall_difficulty;
-            out_difficulty->circle_size = modded.circle_size;
-            out_difficulty->hp_drain_rate = modded.hp_drain_rate;
-            out_difficulty->total_objects = modded.total_objects;
-        }
-    }
-
-    return pp_values;
 }
 
 std::optional<BeatmapDifficultyAttrs> BeatmapPerformanceService::get_difficulty_direct(
@@ -301,7 +239,7 @@ std::optional<BeatmapDifficultyAttrs> BeatmapPerformanceService::get_difficulty_
     // Use rosu-pp-service for star rating if available
     if (rosu_pp_client_ && rosu_pp_client_->is_connected()) {
         RosuDifficultySettings settings;
-        settings.mods = RosuPpClient::parse_mods(mods);
+        settings.mods_str = mods;
 
         auto diff_result = rosu_pp_client_->calculate_difficulty(*osu_path, std::nullopt, settings);
         if (diff_result) {
@@ -314,16 +252,37 @@ std::optional<BeatmapDifficultyAttrs> BeatmapPerformanceService::get_difficulty_
     }
 #endif
 
-    // Fallback to osu-tools
-    auto diff_result = osu_tools::calculate_difficulty(*osu_path, mods);
-    if (diff_result) {
-        result.star_rating = diff_result->star_rating;
-        result.aim_difficulty = diff_result->aim_difficulty;
-        result.speed_difficulty = diff_result->speed_difficulty;
-        result.max_combo = diff_result->max_combo;
+    return result;
+}
+
+std::optional<std::vector<uint8_t>> BeatmapPerformanceService::get_strain_graph(
+    uint32_t beatmap_id,
+    const std::string& mods,
+    uint32_t width,
+    uint32_t height
+) {
+    spdlog::info("[PerfService] Getting strain graph for beatmap {} with mods '{}'", beatmap_id, mods);
+
+#ifdef USE_ROSU_PP_SERVICE
+    if (!rosu_pp_client_ || !rosu_pp_client_->is_connected()) {
+        spdlog::warn("[PerfService] rosu-pp-service unavailable for strain graph");
+        return std::nullopt;
     }
 
-    return result;
+    auto osu_path = get_osu_file_direct(beatmap_id);
+    if (!osu_path) {
+        spdlog::warn("[PerfService] Failed to get .osu file for beatmap {}", beatmap_id);
+        return std::nullopt;
+    }
+
+    RosuDifficultySettings settings;
+    settings.mods_str = mods;
+
+    return rosu_pp_client_->get_strain_graph(*osu_path, std::nullopt, settings, width, height);
+#else
+    spdlog::warn("[PerfService] Strain graph requires USE_ROSU_PP_SERVICE");
+    return std::nullopt;
+#endif
 }
 
 #ifdef USE_ROSU_PP_SERVICE
@@ -334,7 +293,13 @@ std::optional<PerformanceAttrs> BeatmapPerformanceService::calculate_pp_rosu(
     const SimulateParams& params
 ) {
     RosuDifficultySettings settings;
-    settings.mods = RosuPpClient::parse_mods(params.mods);
+    // Use mods_str for acronym-based mods (supports lazer mods like CL)
+    settings.mods_str = params.mods;
+    settings.lazer = params.lazer;
+    // For failed scores, set passed_objects to calculate PP for partial play
+    if (params.passed_objects > 0) {
+        settings.passed_objects = static_cast<uint32_t>(params.passed_objects);
+    }
 
     RosuScoreParams score;
     score.accuracy = params.accuracy * 100.0;  // Convert 0-1 to 0-100
@@ -343,6 +308,9 @@ std::optional<PerformanceAttrs> BeatmapPerformanceService::calculate_pp_rosu(
     }
     if (params.misses > 0) {
         score.misses = params.misses;
+    }
+    if (params.count_300 >= 0) {
+        score.n300 = params.count_300;
     }
     if (params.count_100 >= 0) {
         score.n100 = params.count_100;
@@ -375,7 +343,8 @@ std::vector<double> BeatmapPerformanceService::calculate_pp_at_accuracies_rosu(
     BeatmapDifficultyAttrs* out_difficulty
 ) {
     RosuDifficultySettings settings;
-    settings.mods = RosuPpClient::parse_mods(mods);
+    // Use mods_str for acronym-based mods (supports lazer mods like CL)
+    settings.mods_str = mods;
 
     // Build score params for each accuracy level
     std::vector<RosuScoreParams> scores;

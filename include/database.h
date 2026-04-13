@@ -142,6 +142,19 @@ struct GuildInfo {
     size_t member_count{0};
 };
 
+// Structure for template audit log entry
+struct TemplateAuditEntry {
+    int64_t id{0};
+    dpp::snowflake discord_id;
+    std::string discord_username;
+    std::string action;               // "update" or "reset"
+    std::string command_id;           // "rs", "compare", "map", etc.
+    std::string preset;               // "compact", "classic", "extended", or empty
+    std::string old_fields_json;      // Previous template fields as JSON
+    std::string new_fields_json;      // New template fields as JSON
+    std::chrono::system_clock::time_point created_at;
+};
+
 // Connection pool for PostgreSQL
 class ConnectionPool {
 public:
@@ -178,10 +191,11 @@ public:
     Database& operator=(const Database&) = delete;
 
     // Users table operations
-    void set_user_mapping(dpp::snowflake discord_id, int64_t osu_user_id);
+    void set_user_mapping(dpp::snowflake discord_id, int64_t osu_user_id, bool is_oauth = false);
     std::optional<int64_t> get_osu_user_id(dpp::snowflake discord_id);
     bool remove_user_mapping(dpp::snowflake discord_id);
     std::vector<std::pair<dpp::snowflake, int64_t>> get_all_user_mappings();
+    bool is_user_oauth_linked(dpp::snowflake discord_id);
 
     // Chat map table operations
     void set_chat_context(dpp::snowflake channel_id, dpp::snowflake message_id,
@@ -234,6 +248,58 @@ public:
 
     // Health check
     bool is_connected();
+
+    // ============================================================================
+    // User settings operations
+    // ============================================================================
+
+    void set_embed_preset(dpp::snowflake discord_id, const std::string& preset);
+    void delete_embed_preset(dpp::snowflake discord_id);
+    std::string get_embed_preset(dpp::snowflake discord_id);
+    std::unordered_map<uint64_t, std::string> get_all_embed_presets();
+
+    // ============================================================================
+    // User custom template operations
+    // ============================================================================
+
+    /// Get all custom templates for a user
+    std::unordered_map<std::string, std::string> get_user_custom_templates(dpp::snowflake discord_id);
+
+    /// Get a specific custom template for a user and command
+    std::optional<std::string> get_user_custom_template(dpp::snowflake discord_id, const std::string& command_id);
+
+    /// Set/update a user's custom template for a command
+    void set_user_custom_template(dpp::snowflake discord_id, const std::string& command_id, const std::string& json_config);
+
+    /// Delete a user's custom template for a command
+    void delete_user_custom_template(dpp::snowflake discord_id, const std::string& command_id);
+
+    /// Delete all custom templates for a user
+    void delete_all_user_custom_templates(dpp::snowflake discord_id);
+
+    // ============================================================================
+    // Embed preset template operations (legacy field-based)
+    // ============================================================================
+
+    std::vector<std::tuple<std::string, std::string, std::string>> get_all_preset_templates();
+    void set_preset_template(const std::string& preset_name, const std::string& field_name, const std::string& template_text);
+    void delete_preset_templates(const std::string& preset_name);
+
+    // ============================================================================
+    // JSON embed template operations (full embed config)
+    // ============================================================================
+
+    /// Get all JSON templates as key->json pairs
+    std::vector<std::pair<std::string, std::string>> get_all_json_templates();
+
+    /// Get a specific JSON template by key
+    std::optional<std::string> get_json_template(const std::string& key);
+
+    /// Set/update a JSON template
+    void set_json_template(const std::string& key, const std::string& json_config);
+
+    /// Delete a JSON template
+    void delete_json_template(const std::string& key);
 
     // ============================================================================
     // Discord users cache operations
@@ -494,6 +560,42 @@ public:
 
     // Remove word from blacklist
     void remove_word_from_blacklist(const std::string& word);
+
+    // ============================================================================
+    // Template audit log operations
+    // ============================================================================
+
+    // Log a template change by an admin
+    void log_template_change(
+        dpp::snowflake admin_id,
+        const std::string& admin_username,
+        const std::string& action,           // "update" or "reset"
+        const std::string& command_id,
+        const std::string& preset,           // empty for single-preset commands
+        const std::string& old_fields_json,  // previous template (empty for reset)
+        const std::string& new_fields_json   // new template (empty for reset to default)
+    );
+
+    // Get recent template audit log entries
+    std::vector<TemplateAuditEntry> get_template_audit_log(
+        size_t limit = 50,
+        size_t offset = 0
+    );
+
+    // Get audit log entries for a specific admin
+    std::vector<TemplateAuditEntry> get_template_audit_log_by_admin(
+        dpp::snowflake admin_id,
+        size_t limit = 50
+    );
+
+    // Get audit log entries for a specific command
+    std::vector<TemplateAuditEntry> get_template_audit_log_by_command(
+        const std::string& command_id,
+        size_t limit = 50
+    );
+
+    // Get a specific audit entry by ID
+    std::optional<TemplateAuditEntry> get_template_audit_entry(int64_t id);
 
     // Raw SQL execution (for migrations)
     template<typename Func>

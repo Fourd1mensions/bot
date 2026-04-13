@@ -26,6 +26,14 @@ struct MirrorAttemptResult {
   int64_t bytes_downloaded = 0;
 };
 
+struct OsuAudioInfo {
+  std::string audio_path;    // absolute path to extracted audio file
+  std::string title;         // "Artist - Title"
+  std::string thumbnail;     // osu cover URL
+  int duration_seconds = 0;  // from ffprobe
+  uint32_t beatmapset_id = 0;
+};
+
 class BeatmapDownloader {
 public:
   BeatmapDownloader();
@@ -34,6 +42,10 @@ public:
   // Downloads .osz file for a given beatmapset_id
   // Returns true if successful, false otherwise
   bool download_osz(uint32_t beatmapset_id);
+
+  // Extract audio from beatmap for music player
+  // Downloads .osz if needed, extracts audio to permanent .data/music_audio/ dir
+  std::optional<OsuAudioInfo> get_or_extract_audio(uint32_t beatmapset_id);
 
   /**
    * Download with detailed attempt information for error reporting.
@@ -108,6 +120,7 @@ private:
   fs::path osz_dir_;
   fs::path osu_files_dir_;
   fs::path extracts_dir_;
+  fs::path music_audio_dir_;
   std::vector<std::string> mirrors_;
   std::string last_used_mirror_;
   std::mutex download_mutex_;  // Protects concurrent downloads

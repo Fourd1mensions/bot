@@ -73,11 +73,19 @@ void UsersCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
         spdlog::error("[users] ServiceContainer is null");
+        ctx.reply(dpp::message(":x: Internal service error."));
         return;
     }
 
     // Get all user mappings from database
-    auto mappings = db::Database::instance().get_all_user_mappings();
+    std::vector<std::pair<dpp::snowflake, int64_t>> mappings;
+    try {
+        mappings = db::Database::instance().get_all_user_mappings();
+    } catch (const std::exception& e) {
+        spdlog::error("[users] Database error: {}", e.what());
+        ctx.reply(dpp::message(":x: Failed to retrieve users from database."));
+        return;
+    }
 
     if (mappings.empty()) {
         dpp::embed embed;

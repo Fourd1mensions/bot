@@ -81,7 +81,7 @@ void BeatmapCacheService::queue_download_by_beatmap_id(uint32_t beatmap_id) {
         // Cache the mapping in database
         try {
           auto& db = db::Database::instance();
-          db.cache_beatmap_id(beatmapset_id, beatmap_id);
+          db.cache_beatmap_id(beatmap_id, beatmapset_id);
         } catch (...) {}
 
         queue_download(beatmapset_id);
@@ -255,7 +255,7 @@ void BeatmapCacheService::cleanup_old_timestamps() const {
   auto now = std::chrono::steady_clock::now();
   auto cutoff_24h = now - std::chrono::hours(24);
   while (!download_timestamps_.empty() && download_timestamps_.front() < cutoff_24h) {
-    const_cast<std::deque<std::chrono::steady_clock::time_point>&>(download_timestamps_).pop_front();
+    download_timestamps_.pop_front();
   }
 
   // Also cleanup database periodically

@@ -1,18 +1,30 @@
 #include <http_server.h>
 #include <beatmap_downloader.h>
+#include <cache.h>
 #include <database.h>
 #include <utils.h>
 #include <debug_settings.h>
 #include <services/message_crawler_service.h>
+#include <services/user_settings_service.h>
+#include <services/embed_template_service.h>
+#include <services/music_player_service.h>
 
 #include <crow.h>
+#include <cpr/cpr.h>
+#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <random>
+#include <regex>
+#include <set>
 #include <sstream>
+#include <unordered_set>
 #include <string>
 #include <unistd.h>
+#include <openssl/rand.h>
 
 namespace {
 
@@ -127,6 +139,195 @@ SystemMetrics get_system_metrics() {
   return metrics;
 }
 
+using json = nlohmann::json;
+
+std::string extract_cookie(const std::string& cookie_header, const std::string& name) {
+  std::string prefix = name + "=";
+  size_t pos = 0;
+  while ((pos = cookie_header.find(prefix, pos)) != std::string::npos) {
+    if (pos == 0 || cookie_header[pos - 1] == ' ' || cookie_header[pos - 1] == ';') {
+      size_t start = pos + prefix.size();
+      size_t end = cookie_header.find(';', start);
+      return cookie_header.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    }
+    pos += 1;
+  }
+  return "";
+}
+
+// Generate cryptographically secure random token (32 bytes = 256 bits)
+std::string generate_secure_token() {
+  unsigned char buffer[32];
+  if (RAND_bytes(buffer, sizeof(buffer)) != 1) {
+    // Fallback to /dev/urandom if OpenSSL fails
+    std::ifstream urandom("/dev/urandom", std::ios::binary);
+    if (urandom.is_open()) {
+      urandom.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
+    } else {
+      throw std::runtime_error("Failed to generate secure random token");
+    }
+  }
+  std::string result;
+  result.reserve(64);
+  for (size_t i = 0; i < sizeof(buffer); ++i) {
+    result += fmt::format("{:02x}", buffer[i]);
+  }
+  return result;
+}
+
+std::string generate_session_token() {
+  return generate_secure_token();
+}
+
+struct SessionInfo {
+  std::string discord_id;
+  std::string role;       // "admin" or "member"
+  std::string username;
+  std::string avatar;
+  std::string access_token;  // Discord OAuth access token (for API calls)
+};
+
+// Returns SessionInfo if session is valid, nullopt otherwise.
+std::optional<SessionInfo> get_session(const crow::request& req) {
+  auto cookie_header = req.get_header_value("Cookie");
+  auto token = extract_cookie(cookie_header, "session");
+  if (token.empty()) return std::nullopt;
+
+  auto& mc = cache::MemcachedCache::instance();
+  auto session_data = mc.get("web_session:" + token);
+  if (!session_data) return std::nullopt;
+
+  auto j = json::parse(*session_data, nullptr, false);
+  if (j.is_discarded()) return std::nullopt;
+
+  SessionInfo info;
+  info.discord_id = j.value("discord_id", "");
+  if (info.discord_id.empty()) return std::nullopt;
+
+  info.role = j.value("role", "");
+  info.username = j.value("username", "");
+  info.avatar = j.value("avatar", "");
+  info.access_token = j.value("access_token", "");
+
+  if (info.role.empty()) return std::nullopt;
+  return info;
+}
+
+// Constants for custom template role checking
+constexpr uint64_t CUSTOM_TEMPLATE_REQUIRED_ROLE = 1233831412088438876ULL;
+constexpr uint64_t CUSTOM_TEMPLATE_GUILD_ID = 1030424871173361704ULL;
+
+// Super admin who can revert template changes
+constexpr uint64_t SUPER_ADMIN_ID = 249958340690575360ULL;
+
+// Check if user is super admin (can revert template changes)
+bool is_super_admin(const std::string& discord_id) {
+  try {
+    return std::stoull(discord_id) == SUPER_ADMIN_ID;
+  } catch (...) {
+    return false;
+  }
+}
+
+// Check if user has permission to edit custom templates
+// Returns true if user has the required role or higher
+// Results are cached for 5 minutes to avoid hitting Discord API rate limits
+bool can_edit_custom_templates(const std::string& discord_id, const std::string& bot_token) {
+  if (bot_token.empty()) {
+    spdlog::warn("[CustomTemplate] Bot token not available for role check");
+    return false;
+  }
+
+  // Check cache first
+  auto& mc = cache::MemcachedCache::instance();
+  std::string cache_key = "custom_tmpl_perm:" + discord_id;
+  auto cached = mc.get(cache_key);
+  if (cached) {
+    return *cached == "1";
+  }
+
+  // Get member roles from Discord API
+  auto response = cpr::Get(
+    cpr::Url{fmt::format("https://discord.com/api/v10/guilds/{}/members/{}",
+                         CUSTOM_TEMPLATE_GUILD_ID, discord_id)},
+    cpr::Header{{"Authorization", "Bot " + bot_token}},
+    cpr::Timeout{10000}
+  );
+
+  if (response.status_code != 200) {
+    spdlog::warn("[CustomTemplate] Failed to fetch member {} roles: HTTP {}", discord_id, response.status_code);
+    // Cache negative result for 1 minute on API failure
+    mc.set(cache_key, "0", std::chrono::seconds(60));
+    return false;
+  }
+
+  try {
+    auto member = json::parse(response.text);
+    if (!member.contains("roles") || !member["roles"].is_array()) {
+      mc.set(cache_key, "0", std::chrono::seconds(300));
+      return false;
+    }
+
+    // Get guild roles to check positions
+    auto roles_response = cpr::Get(
+      cpr::Url{fmt::format("https://discord.com/api/v10/guilds/{}/roles", CUSTOM_TEMPLATE_GUILD_ID)},
+      cpr::Header{{"Authorization", "Bot " + bot_token}},
+      cpr::Timeout{10000}
+    );
+
+    if (roles_response.status_code != 200) {
+      spdlog::warn("[CustomTemplate] Failed to fetch guild roles: HTTP {}", roles_response.status_code);
+      mc.set(cache_key, "0", std::chrono::seconds(60));
+      return false;
+    }
+
+    auto guild_roles = json::parse(roles_response.text);
+    if (!guild_roles.is_array()) {
+      mc.set(cache_key, "0", std::chrono::seconds(300));
+      return false;
+    }
+
+    // Find the position of the required role
+    int required_role_position = -1;
+    std::unordered_map<std::string, int> role_positions;
+
+    for (const auto& role : guild_roles) {
+      std::string role_id = role.value("id", "");
+      int position = role.value("position", 0);
+      role_positions[role_id] = position;
+
+      if (role_id == std::to_string(CUSTOM_TEMPLATE_REQUIRED_ROLE)) {
+        required_role_position = position;
+      }
+    }
+
+    if (required_role_position < 0) {
+      spdlog::warn("[CustomTemplate] Required role {} not found in guild", CUSTOM_TEMPLATE_REQUIRED_ROLE);
+      mc.set(cache_key, "0", std::chrono::seconds(300));
+      return false;
+    }
+
+    // Check if user has the required role or any role with higher position
+    for (const auto& user_role : member["roles"]) {
+      std::string role_id = user_role.get<std::string>();
+      auto it = role_positions.find(role_id);
+      if (it != role_positions.end() && it->second >= required_role_position) {
+        // Cache positive result for 5 minutes
+        mc.set(cache_key, "1", std::chrono::seconds(300));
+        return true;
+      }
+    }
+
+    // Cache negative result for 5 minutes
+    mc.set(cache_key, "0", std::chrono::seconds(300));
+    return false;
+  } catch (const std::exception& e) {
+    spdlog::error("[CustomTemplate] Error parsing role response: {}", e.what());
+    mc.set(cache_key, "0", std::chrono::seconds(60));
+    return false;
+  }
+}
+
 } // namespace
 
 // RateLimiter implementation
@@ -177,10 +378,99 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     : host_(host), port_(port), app_(std::make_unique<crow::SimpleApp>()),
       downloader_(mirrors.empty() ? std::make_unique<BeatmapDownloader>()
                                    : std::make_unique<BeatmapDownloader>(mirrors)),
-      download_limiter_(std::make_unique<RateLimiter>(5, std::chrono::seconds(60))) {
+      download_limiter_(std::make_unique<RateLimiter>(5, std::chrono::seconds(60))),
+      template_save_limiter_(std::make_unique<RateLimiter>(10, std::chrono::seconds(60))),
+      music_search_limiter_(std::make_unique<RateLimiter>(5, std::chrono::seconds(10))),
+      music_play_limiter_(std::make_unique<RateLimiter>(3, std::chrono::seconds(10))) {
 
   auto& app = *app_;
   app.signal_clear(); // avoid Crow overriding our SIGINT/SIGTERM handlers
+
+  // Mustache templates compiled once, reused for all requests
+  static const auto page_tmpl = crow::mustache::compile(R"({{^session}}<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{title}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:#050507;color:#e2e0e7;font-family:'IBM Plex Sans',sans-serif}
+.card{text-align:center;max-width:420px;padding:2.5rem;
+  border-radius:16px;background:rgba(255,255,255,.03);
+  border:1px solid rgba(167,139,250,.15)}
+h1{font-family:'Outfit',sans-serif;font-size:1.5rem;margin-bottom:.75rem;color:#a78bfa}
+p{font-size:.95rem;line-height:1.5;opacity:.7;margin-bottom:1rem}
+a.inv{color:#a78bfa;font-weight:500}
+a.btn{display:inline-block;margin-top:.5rem;padding:.75rem 2rem;border-radius:8px;
+  background:#a78bfa;color:#050507;font-weight:600;text-decoration:none;
+  transition:background .2s}
+a.btn:hover{background:#c4b5fd}
+</style></head><body>
+<div class="card">
+<h1>Server Membership Required</h1>
+<p>You need to be a member of the Discord server to access this page.</p>
+<a class="btn" href="https://discord.gg/MV8uVdubeN" target="_blank">Join Server</a>
+<p style="margin-top:1.5rem;font-size:.85rem">Already joined? <a class="inv" href="/osu/settings">Log in</a></p>
+</div></body></html>{{/session}}{{#session}}{{{content}}}{{/session}})");
+
+  // Helper: serve a protected page with server-side session injection
+  // Unauthorized → invite page; authorized → page content with __session injected
+  auto serve_page = [](const crow::request& req,
+                       const std::vector<std::filesystem::path>& paths,
+                       const std::string& title) -> crow::response {
+    crow::json::wvalue ctx;
+    ctx["title"] = title;
+
+    auto session = get_session(req);
+    if (!session) {
+      ctx["session"] = false;
+      auto body = page_tmpl.render(ctx);
+      crow::response res(403);
+      res.body = body.dump();
+      res.set_header("Content-Type", "text/html; charset=utf-8");
+      return res;
+    }
+
+    // Find the static file
+    std::filesystem::path static_file;
+    for (const auto& p : paths) {
+      if (std::filesystem::exists(p)) { static_file = p; break; }
+    }
+    if (static_file.empty()) return crow::response(404, "Page not found");
+
+    std::ifstream file(static_file);
+    if (!file) return crow::response(500, "Failed to read page");
+
+    std::stringstream buf;
+    buf << file.rdbuf();
+    std::string html = buf.str();
+
+    // Inject session data as <script> right after <head> so JS has it immediately
+    // Use nlohmann::json for proper escaping (prevents XSS via username etc.)
+    json session_json;
+    session_json["discord_id"] = session->discord_id;
+    session_json["username"] = session->username;
+    session_json["avatar"] = session->avatar;
+    session_json["role"] = session->role;
+    std::string session_script = "<script>window.__session=" + session_json.dump() + ";</script>";
+
+    auto head_pos = html.find("<head>");
+    if (head_pos == std::string::npos) head_pos = html.find("<HEAD>");
+    if (head_pos != std::string::npos) {
+      html.insert(head_pos + 6, "\n" + session_script);
+    }
+
+    ctx["session"] = true;
+    ctx["content"] = html;
+    auto body = page_tmpl.render(ctx);
+    crow::response res(200);
+    res.body = body.dump();
+    res.set_header("Content-Type", "text/html; charset=utf-8");
+    return res;
+  };
 
   CROW_ROUTE(app, "/status")
   ([this]() {
@@ -231,9 +521,13 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     return crow::response(200, response);
   });
 
-  // Debug settings - GET current state
-  CROW_ROUTE(app, "/debug")
-  ([]() {
+  // Debug settings - GET current state (admin only)
+  CROW_ROUTE(app, "/osu/api/debug")
+  ([](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, "Unauthorized");
+    if (session->role != "admin") return crow::response(403, "Admin access required");
+
     auto& settings = debug::Settings::instance();
 
     crow::json::wvalue response;
@@ -244,9 +538,13 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     return crow::response(200, response);
   });
 
-  // Debug settings - POST to toggle
-  CROW_ROUTE(app, "/debug").methods("POST"_method)
+  // Debug settings - POST to toggle (admin only)
+  CROW_ROUTE(app, "/osu/api/debug").methods("POST"_method)
   ([](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, "Unauthorized");
+    if (session->role != "admin") return crow::response(403, "Admin access required");
+
     auto& settings = debug::Settings::instance();
 
     try {
@@ -281,7 +579,8 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
 
       return crow::response(200, response);
     } catch (const std::exception& e) {
-      return crow::response(400, std::string(R"({"error": ")") + e.what() + "\"}");
+      spdlog::warn("[DEBUG] Invalid request: {}", e.what());
+      return crow::response(400, R"({"error": "Invalid request"})");
     }
   });
 
@@ -668,9 +967,9 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       return crow::response(200, response);
 
     } catch (const std::exception& e) {
+      spdlog::error("[API] file-inventory error: {}", e.what());
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve file inventory";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
@@ -739,7 +1038,8 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       return res;
 
     } catch (const std::exception& e) {
-      return crow::response(500, fmt::format("Error: {}", e.what()));
+      spdlog::error("[HTTP] bg error: {}", e.what());
+      return crow::response(500, "Internal server error");
     }
   });
 
@@ -805,7 +1105,8 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       return res;
 
     } catch (const std::exception& e) {
-      return crow::response(500, fmt::format("Error: {}", e.what()));
+      spdlog::error("[HTTP] audio error: {}", e.what());
+      return crow::response(500, "Internal server error");
     }
   });
 
@@ -884,9 +1185,15 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
   // Word statistics and crawl status endpoints (MUST be before generic routes)
   // ============================================================================
 
-  // GET /osu/api/guild - Guild info
+  // GET /osu/api/guild - Guild info (requires authentication)
   CROW_ROUTE(app, "/osu/api/guild")
-  ([]() {
+  ([](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
     try {
       // Get guild ID from config
       dpp::snowflake guild_id = utils::read_field("GUILD_ID", "config.json");
@@ -913,15 +1220,20 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       return crow::response(200, response);
     } catch (const std::exception& e) {
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve guild info";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // GET /osu/api/users - List of users with message counts
+  // GET /osu/api/users - List of users with message counts (requires authentication)
   CROW_ROUTE(app, "/osu/api/users")
-  ([this]() {
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
     try {
       if (!crawler_service_) {
         crow::json::wvalue error;
@@ -952,15 +1264,20 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       return crow::response(200, response);
     } catch (const std::exception& e) {
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve users";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // GET /osu/api/channels - List of channels with message counts
+  // GET /osu/api/channels - List of channels with message counts (requires authentication)
   CROW_ROUTE(app, "/osu/api/channels")
-  ([this]() {
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
     try {
       if (!crawler_service_) {
         crow::json::wvalue error;
@@ -989,15 +1306,20 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       return crow::response(200, response);
     } catch (const std::exception& e) {
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve channels";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // GET /osu/api/wordstats - JSON with top words
+  // GET /osu/api/wordstats - JSON with top words (requires authentication)
   CROW_ROUTE(app, "/osu/api/wordstats")
   ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
     try {
       auto limit_param = req.url_params.get("limit");
       auto lang_param = req.url_params.get("lang");
@@ -1073,14 +1395,14 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
 
       return crow::response(200, response);
     } catch (const std::exception& e) {
+      spdlog::error("[API] wordstats error: {}", e.what());
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve word statistics";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // GET /osu/api/phrasestats - JSON with top phrases
+  // GET /osu/api/phrasestats - JSON with top phrases (requires authentication)
   // Parameters:
   //   limit - number of results (default: 100, max: 1000)
   //   lang - language filter ("ru", "en", or empty for all)
@@ -1092,6 +1414,12 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
   //   filter - special filters ("new" for phrases appeared in last 7 days)
   CROW_ROUTE(app, "/osu/api/phrasestats")
   ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
     try {
       auto limit_param = req.url_params.get("limit");
       auto lang_param = req.url_params.get("lang");
@@ -1230,16 +1558,22 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
 
       return crow::response(200, response);
     } catch (const std::exception& e) {
+      spdlog::error("[API] phrasestats error: {}", e.what());
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve phrase statistics";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // GET /osu/api/crawl-status - Current crawl progress
+  // GET /osu/api/crawl-status - Current crawl progress (requires authentication)
   CROW_ROUTE(app, "/osu/api/crawl-status")
-  ([this]() {
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
     try {
       if (!crawler_service_) {
         crow::json::wvalue error;
@@ -1277,16 +1611,20 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
 
       return crow::response(200, response);
     } catch (const std::exception& e) {
+      spdlog::error("[API] crawl-status error: {}", e.what());
       crow::json::wvalue error;
-      error["error"] = "Failed to retrieve crawl status";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // POST /osu/api/refresh-stats - Trigger immediate stats recalculation
+  // POST /osu/api/refresh-stats - Trigger immediate stats recalculation (admin only)
   CROW_ROUTE(app, "/osu/api/refresh-stats").methods("POST"_method)
-  ([this]() {
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, "Unauthorized");
+    if (session->role != "admin") return crow::response(403, "Admin access required");
+
     try {
       if (!crawler_service_) {
         crow::json::wvalue error;
@@ -1301,57 +1639,543 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
       response["message"] = "Stats refresh triggered";
       return crow::response(200, response);
     } catch (const std::exception& e) {
+      spdlog::error("[API] refresh-stats error: {}", e.what());
       crow::json::wvalue error;
-      error["error"] = "Failed to trigger stats refresh";
-      error["details"] = e.what();
+      error["error"] = "Internal server error";
       return crow::response(500, error);
     }
   });
 
-  // GET /osu/wordstats - HTML page displaying stats
+  // GET /osu/wordstats - server-rendered HTML page
   CROW_ROUTE(app, "/osu/wordstats")
-  ([]() {
-    // Try multiple paths for static file
-    std::vector<std::filesystem::path> paths = {
-      "static/wordstats.html",
-      "../static/wordstats.html",
+  ([serve_page](const crow::request& req) {
+    return serve_page(req, {
+      "static/wordstats.html", "../static/wordstats.html",
       "/home/nisemonic/patchouli/bot/static/wordstats.html"
-    };
+    }, "Word Stats — Patchouli");
+  });
 
-    std::filesystem::path static_file;
-    for (const auto& p : paths) {
-      spdlog::debug("[HTTP] Checking path: {} exists={}", p.string(), std::filesystem::exists(p));
-      if (std::filesystem::exists(p)) {
-        static_file = p;
-        break;
-      }
+  // GET /osu/phrasestats - server-rendered HTML page
+  CROW_ROUTE(app, "/osu/phrasestats")
+  ([serve_page](const crow::request& req) {
+    return serve_page(req, {
+      "static/phrasestats.html", "../static/phrasestats.html",
+      "/home/nisemonic/patchouli/bot/static/phrasestats.html"
+    }, "Phrase Stats — Patchouli");
+  });
+
+  // Discord OAuth2: redirect to Discord authorize page
+  CROW_ROUTE(app, "/osu/auth/discord")
+  ([this]() {
+    if (!config_ || config_->discord_client_id.empty()) {
+      return crow::response(500, "Discord OAuth2 not configured");
     }
 
-    if (static_file.empty()) {
-      spdlog::warn("[HTTP] wordstats.html not found in any path");
-      return crow::response(404, "Page not found");
+    auto state = generate_session_token();
+    auto& mc = cache::MemcachedCache::instance();
+    if (!mc.set("oauth_state:" + state, "1", std::chrono::seconds(300))) {
+      spdlog::error("[AUTH] Failed to store OAuth state in cache");
+      return crow::response(503, "Service temporarily unavailable");
     }
 
-    std::ifstream file(static_file);
-    if (!file) {
-      return crow::response(500, "Failed to read page");
-    }
+    std::string redirect_uri = config_->public_url + "/osu/auth/discord/callback";
+    std::string url = fmt::format(
+      "https://discord.com/api/oauth2/authorize?client_id={}&redirect_uri={}&response_type=code&scope=identify%20guilds&state={}",
+      config_->discord_client_id, utils::url_encode(redirect_uri), state);
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-
-    crow::response res(200, buffer.str());
-    res.set_header("Content-Type", "text/html; charset=utf-8");
+    crow::response res(302);
+    res.set_header("Location", url);
     return res;
   });
 
-  // GET /osu/phrasestats - HTML page displaying phrase stats
-  CROW_ROUTE(app, "/osu/phrasestats")
+  // Discord OAuth2: callback after Discord authorization
+  CROW_ROUTE(app, "/osu/auth/discord/callback")
+  ([this](const crow::request& req) {
+    if (!config_) {
+      return crow::response(500, "Not configured");
+    }
+
+    auto code_param = req.url_params.get("code");
+    auto state_param = req.url_params.get("state");
+    auto error_param = req.url_params.get("error");
+
+    if (error_param) {
+      spdlog::info("[AUTH] Discord OAuth2 denied: {}", error_param);
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=access_denied");
+      return res;
+    }
+
+    if (!code_param || !state_param) {
+      return crow::response(400, "Missing code or state parameter");
+    }
+
+    std::string code = code_param;
+    std::string state = state_param;
+
+    // Verify CSRF state
+    auto& mc = cache::MemcachedCache::instance();
+    auto state_check = mc.get("oauth_state:" + state);
+    if (!state_check) {
+      return crow::response(400, "Invalid or expired state");
+    }
+    mc.del("oauth_state:" + state);
+
+    // Exchange code for token
+    std::string redirect_uri = config_->public_url + "/osu/auth/discord/callback";
+    auto token_response = cpr::Post(
+      cpr::Url{"https://discord.com/api/v10/oauth2/token"},
+      cpr::Header{{"Content-Type", "application/x-www-form-urlencoded"}},
+      cpr::Timeout{10000},
+      cpr::Payload{
+        {"client_id", config_->discord_client_id},
+        {"client_secret", config_->discord_client_secret},
+        {"grant_type", "authorization_code"},
+        {"code", code},
+        {"redirect_uri", redirect_uri}
+      });
+
+    if (token_response.status_code != 200) {
+      spdlog::error("[AUTH] Discord token exchange failed: {}", token_response.status_code);
+      return crow::response(500, "Failed to authenticate with Discord");
+    }
+
+    auto token_json = json::parse(token_response.text, nullptr, false);
+    if (token_json.is_discarded() || !token_json.contains("access_token")) {
+      spdlog::error("[AUTH] Invalid token response from Discord");
+      return crow::response(500, "Invalid response from Discord");
+    }
+
+    std::string access_token = token_json["access_token"].get<std::string>();
+
+    // Get user info
+    auto user_response = cpr::Get(
+      cpr::Url{"https://discord.com/api/v10/users/@me"},
+      cpr::Header{{"Authorization", "Bearer " + access_token}},
+      cpr::Timeout{10000});
+
+    if (user_response.status_code != 200) {
+      spdlog::error("[AUTH] Discord user info failed: {}", user_response.status_code);
+      return crow::response(500, "Failed to get user info from Discord");
+    }
+
+    auto user_json = json::parse(user_response.text, nullptr, false);
+    if (user_json.is_discarded() || !user_json.contains("id")) {
+      spdlog::error("[AUTH] Invalid user response from Discord");
+      return crow::response(500, "Invalid user response from Discord");
+    }
+
+    std::string discord_id = user_json["id"].get<std::string>();
+    std::string username = user_json.contains("username") && user_json["username"].is_string()
+                           ? user_json["username"].get<std::string>() : "";
+    std::string global_name = user_json.contains("global_name") && user_json["global_name"].is_string()
+                              ? user_json["global_name"].get<std::string>() : "";
+    std::string avatar = user_json.contains("avatar") && user_json["avatar"].is_string()
+                         ? user_json["avatar"].get<std::string>() : "";
+
+    // Determine role: admin > member > denied
+    bool is_admin = std::find(config_->admin_users.begin(), config_->admin_users.end(), discord_id)
+                    != config_->admin_users.end();
+
+    bool is_member = is_admin; // Admins are always considered members
+    if (!is_member && !config_->guild_id.empty()) {
+      // Check guild membership via Discord API
+      auto guilds_response = cpr::Get(
+        cpr::Url{"https://discord.com/api/v10/users/@me/guilds"},
+        cpr::Header{{"Authorization", "Bearer " + access_token}},
+        cpr::Timeout{10000});
+
+      if (guilds_response.status_code == 200) {
+        auto guilds_json = json::parse(guilds_response.text, nullptr, false);
+        if (!guilds_json.is_discarded() && guilds_json.is_array()) {
+          for (const auto& guild : guilds_json) {
+            if (guild.contains("id") && guild["id"].is_string() &&
+                guild["id"].get<std::string>() == config_->guild_id) {
+              is_member = true;
+              break;
+            }
+          }
+        }
+      } else {
+        spdlog::error("[AUTH] Failed to fetch guilds for {} ({}): {}", username, discord_id, guilds_response.status_code);
+        crow::response res(302);
+        res.set_header("Location", "/osu/settings?error=guild_check_failed");
+        return res;
+      }
+    }
+
+    if (!is_member) {
+      spdlog::info("[AUTH] Non-member login attempt: {} ({})", username, discord_id);
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=not_member");
+      return res;
+    }
+
+    std::string role = is_admin ? "admin" : "member";
+
+    // Create session
+    auto session_token = generate_session_token();
+    json session_data;
+    session_data["discord_id"] = discord_id;
+    session_data["username"] = global_name.empty() ? username : global_name;
+    session_data["avatar"] = avatar;
+    session_data["role"] = role;
+    session_data["access_token"] = access_token;
+
+    if (!mc.set("web_session:" + session_token, session_data.dump(), std::chrono::seconds(604800))) {
+      spdlog::error("[AUTH] Failed to store session in cache");
+      return crow::response(503, "Service temporarily unavailable");
+    }
+
+    spdlog::info("[AUTH] {} login: {} ({})", role, username, discord_id);
+
+    crow::response res(302);
+    res.set_header("Location", "/osu/settings");
+    res.set_header("Set-Cookie",
+      fmt::format("session={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800", session_token));
+    return res;
+  });
+
+  // Discord OAuth2: get current session user info
+  CROW_ROUTE(app, "/osu/auth/discord/me")
+  ([](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+
+    json resp;
+    resp["discord_id"] = session->discord_id;
+    resp["username"] = session->username;
+    resp["avatar"] = session->avatar;
+    resp["role"] = session->role;
+    // Super admin can revert template changes (don't expose the actual ID)
+    resp["can_revert"] = is_super_admin(session->discord_id);
+
+    crow::response res(200, resp.dump());
+    res.set_header("Content-Type", "application/json");
+    return res;
+  });
+
+  // Discord OAuth2: logout
+  CROW_ROUTE(app, "/osu/auth/discord/logout").methods("POST"_method)
+  ([](const crow::request& req) {
+    auto cookie_header = req.get_header_value("Cookie");
+    auto token = extract_cookie(cookie_header, "session");
+
+    if (!token.empty()) {
+      auto& mc = cache::MemcachedCache::instance();
+      mc.del("web_session:" + token);
+    }
+
+    crow::response res(200);
+    res.set_header("Set-Cookie", "session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
+    return res;
+  });
+
+  // ============================================================================
+  // osu! OAuth2 for account linking
+  // ============================================================================
+
+  // osu! OAuth2: redirect to osu! authorize page
+  CROW_ROUTE(app, "/osu/auth/osu")
+  ([this](const crow::request& req) {
+    // Require Discord session first
+    auto session = get_session(req);
+    if (!session) {
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=login_required");
+      return res;
+    }
+
+    if (!config_ || config_->osu_oauth_client_id.empty()) {
+      return crow::response(500, "osu! OAuth2 not configured");
+    }
+
+    auto state = generate_session_token();
+    auto& mc = cache::MemcachedCache::instance();
+
+    // Store state with discord_id so we know who to link
+    json state_data;
+    state_data["discord_id"] = session->discord_id;
+    if (!mc.set("osu_oauth_state:" + state, state_data.dump(), std::chrono::seconds(300))) {
+      spdlog::error("[AUTH] Failed to store osu OAuth state in cache");
+      return crow::response(503, "Service temporarily unavailable");
+    }
+
+    std::string redirect_uri = config_->public_url + "/osu/auth/osu/callback";
+    std::string url = fmt::format(
+      "https://osu.ppy.sh/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=identify&state={}",
+      config_->osu_oauth_client_id, utils::url_encode(redirect_uri), state);
+
+    crow::response res(302);
+    res.set_header("Location", url);
+    return res;
+  });
+
+  // osu! OAuth2: callback after osu! authorization
+  CROW_ROUTE(app, "/osu/auth/osu/callback")
+  ([this](const crow::request& req) {
+    if (!config_) {
+      return crow::response(500, "Not configured");
+    }
+
+    auto code_param = req.url_params.get("code");
+    auto state_param = req.url_params.get("state");
+    auto error_param = req.url_params.get("error");
+
+    if (error_param) {
+      spdlog::info("[AUTH] osu! OAuth2 denied: {}", error_param);
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=osu_access_denied");
+      return res;
+    }
+
+    if (!code_param || !state_param) {
+      return crow::response(400, "Missing code or state parameter");
+    }
+
+    std::string code = code_param;
+    std::string state = state_param;
+
+    // Verify CSRF state and get discord_id
+    auto& mc = cache::MemcachedCache::instance();
+    auto state_check = mc.get("osu_oauth_state:" + state);
+    if (!state_check) {
+      return crow::response(400, "Invalid or expired state");
+    }
+    mc.del("osu_oauth_state:" + state);
+
+    auto state_json = json::parse(*state_check, nullptr, false);
+    if (state_json.is_discarded() || !state_json.contains("discord_id")) {
+      return crow::response(400, "Invalid state data");
+    }
+    std::string discord_id = state_json["discord_id"].get<std::string>();
+    bool is_direct_link = state_json.contains("link_token");
+    std::string link_token = state_json.value("link_token", "");
+
+    // Exchange code for token
+    std::string redirect_uri = config_->public_url + "/osu/auth/osu/callback";
+    auto token_response = cpr::Post(
+      cpr::Url{"https://osu.ppy.sh/oauth/token"},
+      cpr::Header{{"Content-Type", "application/x-www-form-urlencoded"}},
+      cpr::Timeout{10000},
+      cpr::Payload{
+        {"client_id", config_->osu_oauth_client_id},
+        {"client_secret", config_->osu_oauth_client_secret},
+        {"grant_type", "authorization_code"},
+        {"code", code},
+        {"redirect_uri", redirect_uri}
+      });
+
+    if (token_response.status_code != 200) {
+      spdlog::error("[AUTH] osu! token exchange failed: {} - {}", token_response.status_code, token_response.text);
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=osu_token_failed");
+      return res;
+    }
+
+    auto token_json = json::parse(token_response.text, nullptr, false);
+    if (token_json.is_discarded() || !token_json.contains("access_token")) {
+      spdlog::error("[AUTH] Invalid token response from osu!");
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=osu_invalid_response");
+      return res;
+    }
+
+    std::string access_token = token_json["access_token"].get<std::string>();
+
+    // Get osu! user info
+    auto user_response = cpr::Get(
+      cpr::Url{"https://osu.ppy.sh/api/v2/me"},
+      cpr::Header{{"Authorization", "Bearer " + access_token}},
+      cpr::Timeout{10000});
+
+    if (user_response.status_code != 200) {
+      spdlog::error("[AUTH] osu! user info failed: {}", user_response.status_code);
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=osu_user_failed");
+      return res;
+    }
+
+    auto osu_user_json = json::parse(user_response.text, nullptr, false);
+    if (osu_user_json.is_discarded() || !osu_user_json.contains("id")) {
+      spdlog::error("[AUTH] Invalid user response from osu!");
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=osu_invalid_user");
+      return res;
+    }
+
+    int64_t osu_user_id = osu_user_json["id"].get<int64_t>();
+    std::string osu_username = osu_user_json.value("username", "");
+
+    // Save link to database and cache username (OAuth = true)
+    try {
+      auto& db = db::Database::instance();
+      db.set_user_mapping(dpp::snowflake(std::stoull(discord_id)), osu_user_id, true);
+
+      // Cache username for display (7 days)
+      if (!osu_username.empty()) {
+        mc.set("osu_username:" + std::to_string(osu_user_id), osu_username, std::chrono::seconds(604800));
+      }
+
+      // Delete link token if used
+      if (!link_token.empty()) {
+        mc.del("osu_link_token:" + link_token);
+      }
+
+      spdlog::info("[AUTH] Linked Discord {} to osu! {} ({})", discord_id, osu_user_id, osu_username);
+    } catch (const std::exception& e) {
+      spdlog::error("[AUTH] Failed to save osu! link: {}", e.what());
+      crow::response res(302);
+      res.set_header("Location", "/osu/settings?error=link_failed");
+      return res;
+    }
+
+    // For direct links, show a simple success page
+    if (is_direct_link) {
+      std::string html = R"(<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account Linked - Patchouli</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #09090b; color: #ececef; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+.box { text-align: center; padding: 3rem; }
+.icon { font-size: 4rem; margin-bottom: 1rem; }
+h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #4ade80; }
+p { color: #a0a0ab; margin-bottom: 2rem; }
+.user { color: #ff66aa; font-weight: 600; }
+</style>
+</head><body>
+<div class="box">
+<div class="icon">✓</div>
+<h1>Account Linked!</h1>
+<p>Your Discord is now linked to <span class="user">)" + utils::html_escape(osu_username) + R"(</span></p>
+<p>You can close this page and return to Discord.</p>
+</div>
+</body></html>)";
+      crow::response res(200, html);
+      res.set_header("Content-Type", "text/html; charset=utf-8");
+      return res;
+    }
+
+    crow::response res(302);
+    res.set_header("Location", "/osu/settings?osu_linked=1");
+    return res;
+  });
+
+  // GET /osu/api/me/osu - get current user's linked osu! account
+  CROW_ROUTE(app, "/osu/api/me/osu")
+  ([](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+
+    try {
+      auto& db = db::Database::instance();
+      auto osu_id = db.get_osu_user_id(dpp::snowflake(std::stoull(session->discord_id)));
+
+      crow::json::wvalue result;
+      if (osu_id) {
+        result["linked"] = true;
+        result["osu_user_id"] = *osu_id;
+
+        // Try to get cached username
+        auto& mc = cache::MemcachedCache::instance();
+        auto cached_name = mc.get("osu_username:" + std::to_string(*osu_id));
+        if (cached_name) {
+          result["osu_username"] = *cached_name;
+        }
+      } else {
+        result["linked"] = false;
+      }
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] me/osu error: {}", e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // DELETE /osu/api/me/osu - unlink osu! account
+  CROW_ROUTE(app, "/osu/api/me/osu").methods("DELETE"_method)
+  ([](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+
+    try {
+      auto& db = db::Database::instance();
+      bool removed = db.remove_user_mapping(dpp::snowflake(std::stoull(session->discord_id)));
+
+      crow::json::wvalue result;
+      result["ok"] = removed;
+
+      if (removed) {
+        spdlog::info("[AUTH] Discord {} unlinked osu! account", session->discord_id);
+      }
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] me/osu delete error: {}", e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // GET /osu/link/<token> - Direct osu! OAuth link (no Discord session required)
+  CROW_ROUTE(app, "/osu/link/<string>")
+  ([this](const std::string& token) {
+    if (!config_ || config_->osu_oauth_client_id.empty()) {
+      return crow::response(500, "osu! OAuth2 not configured");
+    }
+
+    // Verify token exists and get discord_id
+    auto& mc = cache::MemcachedCache::instance();
+    auto token_data = mc.get("osu_link_token:" + token);
+    if (!token_data) {
+      return crow::response(400, "Link expired or invalid. Please request a new link via /set command.");
+    }
+
+    auto token_json = json::parse(*token_data, nullptr, false);
+    if (token_json.is_discarded() || !token_json.contains("discord_id")) {
+      return crow::response(400, "Invalid token data");
+    }
+
+    // Generate OAuth state with token reference
+    auto state = generate_session_token();
+
+    json state_data;
+    state_data["discord_id"] = token_json["discord_id"];
+    state_data["link_token"] = token;  // Remember which token was used
+    if (!mc.set("osu_oauth_state:" + state, state_data.dump(), std::chrono::seconds(300))) {
+      spdlog::error("[AUTH] Failed to store osu OAuth state");
+      return crow::response(503, "Service temporarily unavailable");
+    }
+
+    std::string redirect_uri = config_->public_url + "/osu/auth/osu/callback";
+    std::string url = fmt::format(
+      "https://osu.ppy.sh/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=identify&state={}",
+      config_->osu_oauth_client_id, utils::url_encode(redirect_uri), state);
+
+    crow::response res(302);
+    res.set_header("Location", url);
+    return res;
+  });
+
+  // GET /osu/settings - HTML page for settings (replaces /osu/presets)
+  CROW_ROUTE(app, "/osu/settings")
   ([]() {
     std::vector<std::filesystem::path> paths = {
-      "static/phrasestats.html",
-      "../static/phrasestats.html",
-      "/home/nisemonic/patchouli/bot/static/phrasestats.html"
+      "static/presets.html",
+      "../static/presets.html",
+      "/home/nisemonic/patchouli/bot/static/presets.html"
     };
 
     std::filesystem::path static_file;
@@ -1363,7 +2187,6 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     }
 
     if (static_file.empty()) {
-      spdlog::warn("[HTTP] phrasestats.html not found in any path");
       return crow::response(404, "Page not found");
     }
 
@@ -1379,6 +2202,1952 @@ HttpServer::HttpServer(const std::string& host, uint16_t port,
     res.set_header("Content-Type", "text/html; charset=utf-8");
     return res;
   });
+
+  // Redirect old /osu/presets to /osu/settings
+  CROW_ROUTE(app, "/osu/presets")
+  ([]() {
+    crow::response res(301);
+    res.set_header("Location", "/osu/settings");
+    return res;
+  });
+
+  // GET /osu/api/presets - list all user presets
+  CROW_ROUTE(app, "/osu/api/presets")
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    if (!user_settings_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto& db = db::Database::instance();
+      auto presets = db.get_all_embed_presets();
+
+      crow::json::wvalue result;
+      crow::json::wvalue::list items;
+
+      for (const auto& [discord_id, preset_str] : presets) {
+        crow::json::wvalue item;
+        item["discord_id"] = std::to_string(discord_id);
+        item["preset"] = preset_str;
+
+        // Try to get username from discord_users cache
+        try {
+          auto user = db.get_discord_user(dpp::snowflake(discord_id));
+          if (user) {
+            item["username"] = user->global_name.empty() ? user->username : user->global_name;
+          } else {
+            item["username"] = "";
+          }
+        } catch (...) {
+          item["username"] = "";
+        }
+
+        items.push_back(std::move(item));
+      }
+
+      result["presets"] = std::move(items);
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/presets - update user preset (admin only)
+  CROW_ROUTE(app, "/osu/api/presets").methods("POST"_method)
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    if (!user_settings_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto body = crow::json::load(req.body);
+      if (!body) {
+        return crow::response(400, "Invalid JSON");
+      }
+
+      std::string discord_id_str = body["discord_id"].s();
+      std::string preset_str = body["preset"].s();
+
+      if (discord_id_str.empty() || preset_str.empty()) {
+        return crow::response(400, "Missing discord_id or preset");
+      }
+
+      if (preset_str != "compact" && preset_str != "classic" && preset_str != "extended" && preset_str != "custom") {
+        return crow::response(400, "Invalid preset. Must be: compact, classic, extended, custom");
+      }
+
+      uint64_t discord_id = std::stoull(discord_id_str);
+      auto preset = services::embed_preset_from_string(preset_str);
+      user_settings_service_->set_preset(dpp::snowflake(discord_id), preset);
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["discord_id"] = discord_id_str;
+      result["preset"] = preset_str;
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // DELETE /osu/api/presets - delete user preset (admin only)
+  CROW_ROUTE(app, "/osu/api/presets").methods("DELETE"_method)
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    if (!user_settings_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto body = crow::json::load(req.body);
+      if (!body) {
+        return crow::response(400, "Invalid JSON");
+      }
+
+      std::string discord_id_str = body["discord_id"].s();
+      if (discord_id_str.empty()) {
+        return crow::response(400, "Missing discord_id");
+      }
+
+      uint64_t discord_id = std::stoull(discord_id_str);
+      user_settings_service_->remove_preset(dpp::snowflake(discord_id));
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // GET /osu/api/templates - get all command templates with configs (admin only)
+  CROW_ROUTE(app, "/osu/api/templates")
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    if (!template_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto commands = services::EmbedTemplateService::get_all_commands();
+
+      crow::json::wvalue result;
+      crow::json::wvalue::list commands_list;
+
+      for (const auto& cmd : commands) {
+        crow::json::wvalue cmd_obj;
+        cmd_obj["id"] = cmd.command_id;
+        cmd_obj["label"] = cmd.label;
+        cmd_obj["has_presets"] = cmd.has_presets;
+
+        // Field names
+        crow::json::wvalue::list fields_list;
+        for (const auto& f : cmd.field_names) {
+          fields_list.push_back(f);
+        }
+        cmd_obj["fields"] = std::move(fields_list);
+
+        // Placeholders
+        crow::json::wvalue::list ph_list;
+        for (const auto& ph : cmd.placeholders) {
+          crow::json::wvalue ph_obj;
+          ph_obj["name"] = ph.name;
+          ph_obj["description"] = ph.description;
+          ph_list.push_back(std::move(ph_obj));
+        }
+        cmd_obj["placeholders"] = std::move(ph_list);
+
+        // Templates (current values from cache)
+        crow::json::wvalue templates_obj;
+        if (cmd.has_presets) {
+          for (const auto& preset : {"compact", "classic", "extended"}) {
+            std::string key = cmd.command_id + ":" + preset;
+            auto fields = template_service_->get_fields(key);
+            crow::json::wvalue t;
+            for (const auto& [field_name, tmpl_text] : fields) {
+              t[field_name] = tmpl_text;
+            }
+            templates_obj[preset] = std::move(t);
+          }
+        } else {
+          auto fields = template_service_->get_fields(cmd.command_id);
+          crow::json::wvalue t;
+          for (const auto& [field_name, tmpl_text] : fields) {
+            t[field_name] = tmpl_text;
+          }
+          templates_obj["default"] = std::move(t);
+        }
+        cmd_obj["templates"] = std::move(templates_obj);
+
+        commands_list.push_back(std::move(cmd_obj));
+      }
+
+      result["commands"] = std::move(commands_list);
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/templates - update a command template (admin only)
+  CROW_ROUTE(app, "/osu/api/templates").methods("POST"_method)
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    if (!template_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto body = crow::json::load(req.body);
+      if (!body) {
+        return crow::response(400, "Invalid JSON");
+      }
+
+      if (!body.has("command")) {
+        return crow::response(400, "Missing required field: command");
+      }
+      std::string command = body["command"].s();
+
+      // Validate command exists
+      auto commands = services::EmbedTemplateService::get_all_commands();
+      const services::CommandTemplateConfig* cmd_config = nullptr;
+      for (const auto& cmd : commands) {
+        if (cmd.command_id == command) {
+          cmd_config = &cmd;
+          break;
+        }
+      }
+      if (!cmd_config) {
+        return crow::response(400, "Unknown command: " + command);
+      }
+
+      // Get preset (required for preset commands, optional for single-template)
+      std::string preset = "default";
+      if (cmd_config->has_presets) {
+        if (!body.has("preset")) {
+          return crow::response(400, "Missing required field: preset");
+        }
+        preset = body["preset"].s();
+        if (preset != "compact" && preset != "classic" && preset != "extended") {
+          return crow::response(400, "Invalid preset name");
+        }
+      }
+
+      if (!body.has("fields")) {
+        return crow::response(400, "Missing required field: fields");
+      }
+
+      // Build fields map from request
+      services::TemplateFields fields;
+      auto fields_json = body["fields"];
+      for (const auto& field_name : cmd_config->field_names) {
+        if (fields_json.has(field_name)) {
+          std::string val = fields_json[field_name].s();
+          fields[field_name] = val;
+        }
+      }
+
+      // Validate templates
+      auto issues = services::EmbedTemplateService::validate_fields(command, preset, fields);
+
+      std::vector<services::ValidationIssue> errors, warnings;
+      for (const auto& issue : issues) {
+        if (issue.level == services::ValidationIssue::Level::Error)
+          errors.push_back(issue);
+        else
+          warnings.push_back(issue);
+      }
+
+      auto issues_to_json = [](const std::vector<services::ValidationIssue>& list) {
+        crow::json::wvalue::list arr;
+        for (const auto& item : list) {
+          crow::json::wvalue obj;
+          obj["field"] = item.field;
+          obj["message"] = item.message;
+          obj["position"] = static_cast<int64_t>(item.position);
+          arr.push_back(std::move(obj));
+        }
+        return arr;
+      };
+
+      // Block save if there are errors
+      if (!errors.empty()) {
+        crow::json::wvalue result;
+        result["ok"] = false;
+        result["errors"] = issues_to_json(errors);
+        result["warnings"] = issues_to_json(warnings);
+        crow::response res(400, result.dump());
+        res.set_header("Content-Type", "application/json");
+        return res;
+      }
+
+      std::string key = cmd_config->has_presets ? (command + ":" + preset) : command;
+
+      // Get old fields for audit log
+      auto old_fields = template_service_->get_fields(key);
+
+      // Update template
+      template_service_->set_fields(key, fields);
+
+      // Audit log
+      try {
+        auto& db = db::Database::instance();
+        nlohmann::json old_json, new_json;
+        for (const auto& [k, v] : old_fields) old_json[k] = v;
+        for (const auto& [k, v] : fields) new_json[k] = v;
+        db.log_template_change(
+            dpp::snowflake(std::stoull(session->discord_id)),
+            session->username,
+            "update",
+            command,
+            cmd_config->has_presets ? preset : "",
+            old_json.dump(),
+            new_json.dump()
+        );
+      } catch (const std::exception& e) {
+        spdlog::error("[API] Failed to log template change: {}", e.what());
+      }
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["command"] = command;
+      result["preset"] = preset;
+      if (!warnings.empty()) {
+        result["warnings"] = issues_to_json(warnings);
+      }
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/templates/reset - reset a command template to defaults
+  CROW_ROUTE(app, "/osu/api/templates/reset").methods("POST"_method)
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    if (!template_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto body = crow::json::load(req.body);
+      if (!body) {
+        return crow::response(400, "Invalid JSON");
+      }
+
+      if (!body.has("command")) {
+        return crow::response(400, "Missing required field: command");
+      }
+      std::string command = body["command"].s();
+
+      // Validate command
+      auto commands = services::EmbedTemplateService::get_all_commands();
+      const services::CommandTemplateConfig* cmd_config = nullptr;
+      for (const auto& cmd : commands) {
+        if (cmd.command_id == command) {
+          cmd_config = &cmd;
+          break;
+        }
+      }
+      if (!cmd_config) {
+        return crow::response(400, "Unknown command: " + command);
+      }
+
+      std::string preset = "default";
+      if (cmd_config->has_presets) {
+        if (!body.has("preset")) {
+          return crow::response(400, "Missing required field: preset");
+        }
+        preset = body["preset"].s();
+        if (preset != "compact" && preset != "classic" && preset != "extended") {
+          return crow::response(400, "Invalid preset name");
+        }
+      }
+
+      std::string key = cmd_config->has_presets ? (command + ":" + preset) : command;
+
+      // Get old fields for audit log
+      auto old_fields = template_service_->get_fields(key);
+
+      // Reset template
+      template_service_->reset_to_default(key);
+
+      // Audit log
+      try {
+        auto& db = db::Database::instance();
+        nlohmann::json old_json;
+        for (const auto& [k, v] : old_fields) old_json[k] = v;
+        db.log_template_change(
+            dpp::snowflake(std::stoull(session->discord_id)),
+            session->username,
+            "reset",
+            command,
+            cmd_config->has_presets ? preset : "",
+            old_json.dump(),
+            ""  // new_fields empty for reset
+        );
+      } catch (const std::exception& e) {
+        spdlog::error("[API] Failed to log template reset: {}", e.what());
+      }
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["command"] = command;
+      result["preset"] = preset;
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // GET /osu/api/templates/audit - get template audit log (admin only)
+  CROW_ROUTE(app, "/osu/api/templates/audit")
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+
+    try {
+      auto& db = db::Database::instance();
+
+      // Parse query params
+      size_t limit = 50;
+      size_t offset = 0;
+      std::string command_filter;
+
+      auto limit_param = req.url_params.get("limit");
+      if (limit_param) {
+        auto val = static_cast<size_t>(std::stoull(limit_param));
+        limit = std::min(size_t(100), std::max(size_t(1), val));
+      }
+      auto offset_param = req.url_params.get("offset");
+      if (offset_param) {
+        offset = static_cast<size_t>(std::stoull(offset_param));
+      }
+      auto command_param = req.url_params.get("command");
+      if (command_param) {
+        command_filter = command_param;
+      }
+
+      std::vector<db::TemplateAuditEntry> entries;
+      if (!command_filter.empty()) {
+        entries = db.get_template_audit_log_by_command(command_filter, limit);
+      } else {
+        entries = db.get_template_audit_log(limit, offset);
+      }
+
+      crow::json::wvalue::list entries_json;
+      for (const auto& entry : entries) {
+        crow::json::wvalue e;
+        e["id"] = entry.id;
+        e["discord_id"] = std::to_string(static_cast<uint64_t>(entry.discord_id));
+        e["discord_username"] = entry.discord_username;
+        e["action"] = entry.action;
+        e["command_id"] = entry.command_id;
+        e["preset"] = entry.preset;
+        e["old_fields"] = entry.old_fields_json;
+        e["new_fields"] = entry.new_fields_json;
+
+        auto time_t_val = std::chrono::system_clock::to_time_t(entry.created_at);
+        std::tm tm = *std::gmtime(&time_t_val);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+        e["created_at"] = std::string(buf);
+
+        entries_json.push_back(std::move(e));
+      }
+
+      crow::json::wvalue result;
+      result["entries"] = std::move(entries_json);
+      result["limit"] = static_cast<int64_t>(limit);
+      result["offset"] = static_cast<int64_t>(offset);
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] templates/audit error: {}", e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/templates/audit/:id/revert - revert to a specific audit entry (super admin only)
+  CROW_ROUTE(app, "/osu/api/templates/audit/<int>/revert").methods("POST"_method)
+  ([this](const crow::request& req, int64_t audit_id) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+
+    // Super admin check - must be admin AND super admin
+    if (session->role != "admin") {
+      return crow::response(403, "Admin access required");
+    }
+    if (!is_super_admin(session->discord_id)) {
+      spdlog::warn("[API] Non-super-admin {} attempted revert", session->discord_id);
+      return crow::response(403, "Insufficient permissions");
+    }
+
+    if (!template_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto& db = db::Database::instance();
+
+      // Get the audit entry
+      auto entry = db.get_template_audit_entry(audit_id);
+      if (!entry) {
+        return crow::response(404, "Audit entry not found");
+      }
+
+      // Parse the old_fields to revert to
+      if (entry->old_fields_json.empty()) {
+        return crow::response(400, "Cannot revert: no previous state available");
+      }
+
+      nlohmann::json old_fields_obj;
+      try {
+        old_fields_obj = nlohmann::json::parse(entry->old_fields_json);
+      } catch (const std::exception& e) {
+        spdlog::error("[API] Failed to parse old_fields_json: {}", e.what());
+        return crow::response(400, "Cannot revert: invalid old fields data");
+      }
+
+      // Convert JSON to TemplateFields
+      services::TemplateFields revert_fields;
+      for (auto& [key, value] : old_fields_obj.items()) {
+        if (value.is_string()) {
+          revert_fields[key] = value.get<std::string>();
+        }
+      }
+
+      // Build the key
+      std::string key = entry->command_id;
+      if (!entry->preset.empty()) {
+        key += ":" + entry->preset;
+      }
+
+      // Get current fields for audit log
+      auto current_fields = template_service_->get_fields(key);
+
+      // Apply the revert
+      template_service_->set_fields(key, revert_fields);
+
+      // Log the revert in audit
+      nlohmann::json current_json, revert_json;
+      for (const auto& [k, v] : current_fields) current_json[k] = v;
+      for (const auto& [k, v] : revert_fields) revert_json[k] = v;
+
+      db.log_template_change(
+          dpp::snowflake(std::stoull(session->discord_id)),
+          session->username,
+          "revert",
+          entry->command_id,
+          entry->preset,
+          current_json.dump(),
+          revert_json.dump()
+      );
+
+      spdlog::info("[API] Super admin {} reverted template {}:{} to audit entry {}",
+          session->username, entry->command_id, entry->preset, audit_id);
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["reverted_to"] = audit_id;
+      result["command"] = entry->command_id;
+      result["preset"] = entry->preset;
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] templates/audit/{}/revert error: {}", audit_id, e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // GET /osu/api/my-settings - get current user's personal settings
+  CROW_ROUTE(app, "/osu/api/my-settings")
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+
+    if (!user_settings_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto preset = user_settings_service_->get_preset(dpp::snowflake(std::stoull(session->discord_id)));
+      std::string preset_str = services::embed_preset_to_string(preset);
+
+      crow::json::wvalue result;
+      result["embed_preset"] = preset_str;
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/my-settings - update current user's personal settings
+  CROW_ROUTE(app, "/osu/api/my-settings").methods("POST"_method)
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      return crow::response(401, "Unauthorized");
+    }
+
+    if (!user_settings_service_) {
+      return crow::response(503, "Service unavailable");
+    }
+
+    try {
+      auto body = crow::json::load(req.body);
+      if (!body) {
+        return crow::response(400, "Invalid JSON");
+      }
+
+      if (body.has("embed_preset")) {
+        std::string preset_str = body["embed_preset"].s();
+        if (preset_str != "compact" && preset_str != "classic" && preset_str != "extended" && preset_str != "custom") {
+          return crow::response(400, "Invalid preset. Must be: compact, classic, extended, custom");
+        }
+
+        auto preset = services::embed_preset_from_string(preset_str);
+        user_settings_service_->set_preset(dpp::snowflake(std::stoull(session->discord_id)), preset);
+      }
+
+      // Return current settings after update
+      auto preset = user_settings_service_->get_preset(dpp::snowflake(std::stoull(session->discord_id)));
+      std::string preset_str = services::embed_preset_to_string(preset);
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["embed_preset"] = preset_str;
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // ============================================================================
+  // User Custom Template Endpoints
+  // ============================================================================
+
+  // GET /osu/api/my-templates - get all custom templates for current user
+  CROW_ROUTE(app, "/osu/api/my-templates")
+  ([this](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
+
+    try {
+      auto& db = db::Database::instance();
+      auto templates = db.get_user_custom_templates(dpp::snowflake(std::stoull(session->discord_id)));
+
+      // Check if user can edit custom templates
+      bool can_edit = session->role == "admin" ||
+        (config_ && can_edit_custom_templates(session->discord_id, config_->bot_token));
+
+      crow::json::wvalue result;
+      result["can_edit"] = can_edit;
+      crow::json::wvalue::object templates_obj;
+      for (const auto& [cmd_id, json_config] : templates) {
+        templates_obj[cmd_id] = crow::json::load(json_config);
+      }
+      result["templates"] = std::move(templates_obj);
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] my-templates error: {}", e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // GET /osu/api/my-templates/<command> - get custom template for a specific command
+  CROW_ROUTE(app, "/osu/api/my-templates/<string>")
+  ([this](const crow::request& req, const std::string& command_id) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
+
+    // Validate command_id
+    static const std::set<std::string> VALID_COMMANDS = {
+      "rs", "compare", "map", "lb", "sim", "top", "profile", "osc"
+    };
+    if (VALID_COMMANDS.find(command_id) == VALID_COMMANDS.end()) {
+      crow::json::wvalue error;
+      error["error"] = "Invalid command ID";
+      return crow::response(400, error);
+    }
+
+    try {
+      auto& db = db::Database::instance();
+      auto tmpl = db.get_user_custom_template(dpp::snowflake(std::stoull(session->discord_id)), command_id);
+
+      crow::json::wvalue result;
+      result["exists"] = tmpl.has_value();
+
+      if (tmpl) {
+        result["template"] = crow::json::load(*tmpl);
+      }
+
+      // Include allowed placeholders
+      auto placeholders = services::EmbedTemplateService::get_allowed_placeholders(command_id);
+      crow::json::wvalue::list ph_list;
+      for (const auto& ph : placeholders) {
+        ph_list.push_back(ph);
+      }
+      result["placeholders"] = std::move(ph_list);
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] my-templates/{} error: {}", command_id, e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/my-templates/<command> - save custom template for a command
+  CROW_ROUTE(app, "/osu/api/my-templates/<string>").methods("POST"_method)
+  ([this](const crow::request& req, const std::string& command_id) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
+
+    // Check if user has permission to edit custom templates
+    if (session->role != "admin" && config_ && !can_edit_custom_templates(session->discord_id, config_->bot_token)) {
+      crow::json::wvalue error;
+      error["error"] = "Permission denied. You need a specific role to edit custom templates.";
+      return crow::response(403, error);
+    }
+
+    // Rate limit: 10 saves per minute per user
+    if (!template_save_limiter_->allow(session->discord_id)) {
+      crow::json::wvalue error;
+      error["error"] = "Rate limit exceeded. Maximum 10 saves per minute.";
+      crow::response res(429, error);
+      res.set_header("Retry-After", "60");
+      return res;
+    }
+
+    // Validate command_id
+    static const std::set<std::string> VALID_COMMANDS = {
+      "rs", "compare", "map", "lb", "sim", "top", "profile", "osc"
+    };
+    if (VALID_COMMANDS.find(command_id) == VALID_COMMANDS.end()) {
+      crow::json::wvalue error;
+      error["error"] = "Invalid command ID";
+      return crow::response(400, error);
+    }
+
+    try {
+      auto body = nlohmann::json::parse(req.body);
+      if (!body.contains("template")) {
+        crow::json::wvalue error;
+        error["error"] = "Missing 'template' field";
+        return crow::response(400, error);
+      }
+
+      std::string json_config = body["template"].dump();
+
+      // Validate template
+      auto validation = services::EmbedTemplateService::validate_user_template(command_id, json_config);
+
+      crow::json::wvalue result;
+      result["ok"] = validation.valid;
+
+      if (!validation.errors.empty()) {
+        crow::json::wvalue::list errors_list;
+        for (const auto& err : validation.errors) {
+          errors_list.push_back(err);
+        }
+        result["errors"] = std::move(errors_list);
+      }
+
+      if (!validation.warnings.empty()) {
+        crow::json::wvalue::list warnings_list;
+        for (const auto& warn : validation.warnings) {
+          warnings_list.push_back(warn);
+        }
+        result["warnings"] = std::move(warnings_list);
+      }
+
+      // Only save if valid
+      if (validation.valid) {
+        auto& db = db::Database::instance();
+        db.set_user_custom_template(
+          dpp::snowflake(std::stoull(session->discord_id)),
+          command_id,
+          json_config
+        );
+        spdlog::info("[API] User {} saved custom template for {}", session->discord_id, command_id);
+      }
+
+      crow::response res(validation.valid ? 200 : 400, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const nlohmann::json::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Invalid JSON";
+      error["details"] = e.what();
+      return crow::response(400, error);
+    } catch (const std::exception& e) {
+      spdlog::error("[API] my-templates/{} POST error: {}", command_id, e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // DELETE /osu/api/my-templates/<command> - delete custom template for a command
+  CROW_ROUTE(app, "/osu/api/my-templates/<string>").methods("DELETE"_method)
+  ([this](const crow::request& req, const std::string& command_id) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
+
+    // Check if user has permission to edit custom templates
+    if (session->role != "admin" && config_ && !can_edit_custom_templates(session->discord_id, config_->bot_token)) {
+      crow::json::wvalue error;
+      error["error"] = "Permission denied. You need a specific role to edit custom templates.";
+      return crow::response(403, error);
+    }
+
+    // Validate command_id
+    static const std::set<std::string> VALID_COMMANDS = {
+      "rs", "compare", "map", "lb", "sim", "top", "profile", "osc"
+    };
+    if (VALID_COMMANDS.find(command_id) == VALID_COMMANDS.end()) {
+      crow::json::wvalue error;
+      error["error"] = "Invalid command ID";
+      return crow::response(400, error);
+    }
+
+    try {
+      auto& db = db::Database::instance();
+      db.delete_user_custom_template(dpp::snowflake(std::stoull(session->discord_id)), command_id);
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["message"] = "Template deleted";
+
+      spdlog::info("[API] User {} deleted custom template for {}", session->discord_id, command_id);
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const std::exception& e) {
+      spdlog::error("[API] my-templates/{} DELETE error: {}", command_id, e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // POST /osu/api/my-templates/<command>/init - initialize custom template from a preset
+  CROW_ROUTE(app, "/osu/api/my-templates/<string>/init").methods("POST"_method)
+  ([this](const crow::request& req, const std::string& command_id) {
+    auto session = get_session(req);
+    if (!session) {
+      crow::json::wvalue error;
+      error["error"] = "Authentication required";
+      return crow::response(401, error);
+    }
+
+    // Check if user has permission to edit custom templates
+    if (session->role != "admin" && config_ && !can_edit_custom_templates(session->discord_id, config_->bot_token)) {
+      crow::json::wvalue error;
+      error["error"] = "Permission denied. You need a specific role to edit custom templates.";
+      return crow::response(403, error);
+    }
+
+    // Validate command_id
+    static const std::set<std::string> VALID_COMMANDS = {
+      "rs", "compare", "map", "lb", "sim", "top", "profile", "osc"
+    };
+    if (VALID_COMMANDS.find(command_id) == VALID_COMMANDS.end()) {
+      crow::json::wvalue error;
+      error["error"] = "Invalid command ID";
+      return crow::response(400, error);
+    }
+
+    try {
+      std::string from_preset = "classic";  // Default
+
+      if (!req.body.empty()) {
+        auto body = nlohmann::json::parse(req.body);
+        if (body.contains("from_preset") && body["from_preset"].is_string()) {
+          from_preset = body["from_preset"].get<std::string>();
+        }
+      }
+
+      // Validate preset
+      static const std::set<std::string> VALID_PRESETS = {"compact", "classic", "extended"};
+      if (VALID_PRESETS.find(from_preset) == VALID_PRESETS.end()) {
+        from_preset = "classic";
+      }
+
+      // Get template from the service
+      if (!template_service_) {
+        crow::json::wvalue error;
+        error["error"] = "Template service not available";
+        return crow::response(503, error);
+      }
+
+      // Build template key
+      std::string tmpl_key = command_id;
+
+      // Check if command has presets
+      auto commands = services::EmbedTemplateService::get_all_commands();
+      bool has_presets = false;
+      for (const auto& cmd : commands) {
+        if (cmd.command_id == command_id) {
+          has_presets = cmd.has_presets;
+          break;
+        }
+      }
+
+      if (has_presets) {
+        tmpl_key = command_id + ":" + from_preset;
+      }
+
+      // Get the JSON template or convert from legacy
+      std::optional<std::string> json_tmpl = template_service_->get_json_template(tmpl_key);
+
+      if (!json_tmpl) {
+        // Fallback: get legacy fields and convert to simple flat JSON
+        auto fields = template_service_->get_fields(tmpl_key);
+        if (fields.empty()) {
+          fields = services::EmbedTemplateService::get_default_fields(tmpl_key);
+        }
+
+        // Create a flat JSON structure from fields (matching frontend format)
+        nlohmann::json j;
+        for (const auto& [key, value] : fields) {
+          j[key] = value;
+        }
+        json_tmpl = j.dump();
+      }
+
+      // Save as user's custom template
+      auto& db = db::Database::instance();
+      db.set_user_custom_template(
+        dpp::snowflake(std::stoull(session->discord_id)),
+        command_id,
+        *json_tmpl
+      );
+
+      spdlog::info("[API] User {} initialized custom template for {} from {}",
+        session->discord_id, command_id, from_preset);
+
+      crow::json::wvalue result;
+      result["ok"] = true;
+      result["message"] = "Template initialized from " + from_preset;
+      result["template"] = crow::json::load(*json_tmpl);
+
+      crow::response res(200, result.dump());
+      res.set_header("Content-Type", "application/json");
+      return res;
+    } catch (const nlohmann::json::exception& e) {
+      crow::json::wvalue error;
+      error["error"] = "Invalid JSON";
+      return crow::response(400, error);
+    } catch (const std::exception& e) {
+      spdlog::error("[API] my-templates/{}/init error: {}", command_id, e.what());
+      return crow::response(500, "Internal server error");
+    }
+  });
+
+  // ==========================================================================
+  // Music Player Endpoints (must be before catch-all /osu/<string>/<path>)
+  // ==========================================================================
+
+  // Helper: check if user is in music whitelist (captured by value in routes)
+  auto is_music_allowed = [this](const std::string& discord_id) -> bool {
+    if (!config_) return false;
+    // Admins always allowed
+    for (const auto& admin : config_->admin_users) {
+      if (admin == discord_id) return true;
+    }
+    // Anyone with the required role (or higher) on the guild
+    return can_edit_custom_templates(discord_id, config_->bot_token);
+  };
+
+  // Helper: check user is in the same voice channel as the bot.
+  // Returns empty string if OK, or error message if not.
+  auto check_voice_channel = [this](const std::string& discord_id, dpp::snowflake guild_id) -> std::string {
+    if (!music_service_) return "";
+    auto* guild = dpp::find_guild(guild_id);
+    if (!guild) return "";  // can't verify, allow
+
+    auto bot_id = music_service_->get_bot_id();
+    auto bot_it = guild->voice_members.find(bot_id);
+    if (bot_it == guild->voice_members.end() || bot_it->second.channel_id == 0) {
+      return "";  // bot not in voice, no restriction
+    }
+
+    auto user_id = dpp::snowflake(discord_id);
+    auto user_it = guild->voice_members.find(user_id);
+    if (user_it == guild->voice_members.end() || user_it->second.channel_id != bot_it->second.channel_id) {
+      return "You must be in the same voice channel as the bot";
+    }
+    return "";
+  };
+
+  // Serve music.html - server-rendered
+  CROW_ROUTE(app, "/osu/music")
+  ([serve_page](const crow::request& req) {
+    return serve_page(req, {
+      "static/music.html", "../static/music.html",
+      "/home/nisemonic/patchouli/bot/static/music.html"
+    }, "Music — Patchouli");
+  });
+
+  static const std::string MUSIC_ADMIN_ID = "249958340690575360";
+
+  // GET /osu/api/music/guilds — list guilds the user AND bot share
+  CROW_ROUTE(app, "/osu/api/music/guilds")
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+
+    // Collect bot's guild IDs
+    std::unordered_set<std::string> bot_guild_ids;
+    auto* guild_cache = dpp::get_guild_cache();
+    if (guild_cache) {
+      auto& container = guild_cache->get_container();
+      std::shared_lock lock(guild_cache->get_mutex());
+      for (auto& [id, guild_ptr] : container) {
+        if (guild_ptr) bot_guild_ids.insert(std::to_string(id));
+      }
+    }
+
+    // Fetch user's guilds via Discord API
+    std::vector<crow::json::wvalue> guilds;
+    if (!session->access_token.empty()) {
+      auto resp = cpr::Get(
+        cpr::Url{"https://discord.com/api/v10/users/@me/guilds"},
+        cpr::Header{{"Authorization", "Bearer " + session->access_token}},
+        cpr::Timeout{10000});
+
+      if (resp.status_code == 200) {
+        auto user_guilds = json::parse(resp.text, nullptr, false);
+        if (user_guilds.is_array()) {
+          for (auto& ug : user_guilds) {
+            std::string gid = ug.value("id", "");
+            if (bot_guild_ids.count(gid)) {
+              // Look up full guild info from bot's cache
+              auto* guild_ptr = dpp::find_guild(dpp::snowflake(gid));
+              if (!guild_ptr) continue;
+              crow::json::wvalue g;
+              g["id"] = gid;
+              g["name"] = guild_ptr->name;
+              g["icon"] = guild_ptr->get_icon_url(256);
+              guilds.push_back(std::move(g));
+            }
+          }
+        }
+      } else {
+        spdlog::warn("[MUSIC] Discord API /users/@me/guilds failed: {} {}", resp.status_code, resp.text);
+      }
+    }
+
+    // Fallback: if no guilds resolved (token missing, expired, or API error)
+    if (guilds.empty()) {
+      auto* guild_ptr = dpp::find_guild(1030424871173361704ULL);
+      if (guild_ptr) {
+        crow::json::wvalue g;
+        g["id"] = "1030424871173361704";
+        g["name"] = guild_ptr->name;
+        g["icon"] = guild_ptr->get_icon_url(256);
+        guilds.push_back(std::move(g));
+      }
+    }
+
+    crow::json::wvalue res;
+    res["guilds"] = std::move(guilds);
+    res["is_admin"] = (session->discord_id == MUSIC_ADMIN_ID);
+    return crow::response(200, res);
+  });
+
+  // GET /osu/api/music/state — current playback state
+  CROW_ROUTE(app, "/osu/api/music/state")
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+
+    if (!music_service_) {
+      return crow::response(503, R"({"error":"Music service unavailable"})");
+    }
+
+    auto* gid_param = req.url_params.get("guild_id");
+    if (!gid_param) return crow::response(400, R"({"error":"Missing guild_id"})");
+    auto guild_id = dpp::snowflake(std::string(gid_param));
+
+    auto payload = build_state_json(static_cast<uint64_t>(guild_id));
+    crow::response resp(200);
+    resp.set_header("Content-Type", "application/json");
+    resp.body = std::move(payload);
+    return resp;
+  });
+
+  // WebSocket /osu/api/music/ws — real-time state push
+  CROW_WEBSOCKET_ROUTE(app, "/osu/music-ws")
+  .onaccept([this, is_music_allowed](const crow::request& req, void** userdata) -> bool {
+    auto session = get_session(req);
+    if (!session) return false;
+    if (!is_music_allowed(session->discord_id)) return false;
+
+    auto* gid_param = req.url_params.get("guild_id");
+    if (!gid_param) return false;
+
+    auto* data = new WsConnectionData();
+    data->guild_id = std::stoull(std::string(gid_param));
+    data->discord_id = session->discord_id;
+    *userdata = data;
+    return true;
+  })
+  .onopen([this](crow::websocket::connection& conn) {
+    auto* data = static_cast<WsConnectionData*>(conn.userdata());
+    if (!data) return;
+    {
+      std::lock_guard lock(ws_mutex_);
+      ws_guild_connections_[data->guild_id].insert(&conn);
+    }
+    spdlog::info("[ws] Music WS opened for guild {} (user {})", data->guild_id, data->discord_id);
+    // Send initial state
+    try {
+      conn.send_text(build_state_json(data->guild_id));
+    } catch (const std::exception& e) {
+      spdlog::warn("[ws] Failed to send initial state: {}", e.what());
+    }
+  })
+  .onclose([this](crow::websocket::connection& conn, const std::string& reason) {
+    auto* data = static_cast<WsConnectionData*>(conn.userdata());
+    if (!data) return;
+    {
+      std::lock_guard lock(ws_mutex_);
+      auto it = ws_guild_connections_.find(data->guild_id);
+      if (it != ws_guild_connections_.end()) {
+        it->second.erase(&conn);
+        if (it->second.empty()) ws_guild_connections_.erase(it);
+      }
+    }
+    spdlog::info("[ws] Music WS closed for guild {} (reason: {})", data->guild_id, reason);
+    delete data;
+  })
+  .onmessage([](crow::websocket::connection&, const std::string&, bool) {
+    // Server-push only; ignore client messages
+  })
+  .onerror([](crow::websocket::connection& conn, const std::string& error) {
+    spdlog::warn("[ws] Music WS error: {}", error);
+  });
+
+  // POST /osu/api/music/play — add track to queue
+  CROW_ROUTE(app, "/osu/api/music/play").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+
+    if (!music_play_limiter_->allow(session->discord_id)) {
+      return crow::response(429, R"({"error":"Too many requests, slow down"})");
+    }
+
+    if (!music_service_) {
+      return crow::response(503, R"({"error":"Music service unavailable"})");
+    }
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("url") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    if (guild_id == 0) return crow::response(400, R"({"error":"Invalid guild_id"})");
+
+    // If bot is already in voice, user must be in the same channel
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    std::string url = body["url"].s();
+    if (url.empty()) {
+      return crow::response(400, R"({"error":"Empty URL"})");
+    }
+
+    auto user_id = dpp::snowflake(session->discord_id);
+
+    // Use explicit channel_id if provided, otherwise detect from user's voice state
+    dpp::snowflake voice_channel_id{0};
+    if (body.has("channel_id")) {
+      std::string ch_str = body["channel_id"].s();
+      if (!ch_str.empty()) {
+        voice_channel_id = dpp::snowflake(ch_str);
+      }
+    }
+
+    if (voice_channel_id == 0) {
+      auto* guild = dpp::find_guild(guild_id);
+      if (guild) {
+        auto it = guild->voice_members.find(user_id);
+        if (it != guild->voice_members.end()) {
+          voice_channel_id = it->second.channel_id;
+        }
+      }
+    }
+
+    if (voice_channel_id == 0) {
+      return crow::response(400, R"({"error":"Select a voice channel"})");
+    }
+
+    // Verify user is actually in the target voice channel
+    {
+      auto* guild = dpp::find_guild(guild_id);
+      if (guild) {
+        auto it = guild->voice_members.find(user_id);
+        if (it == guild->voice_members.end() || it->second.channel_id != voice_channel_id) {
+          return crow::response(403, R"({"error":"You must be in the voice channel to start playback"})");
+        }
+      }
+    }
+
+    std::string requester = session->username;
+
+    // Playlist support — detect and add all tracks
+    if (services::MusicPlayerService::is_playlist_url(url)) {
+      spdlog::info("[music-audit] {} ({}) play playlist url={} guild={}",
+                   session->username, session->discord_id, url, std::string(body["guild_id"].s()));
+
+      auto tracks = music_service_->fetch_playlist(url);
+      if (tracks.empty()) {
+        return crow::response(400, R"({"error":"Failed to load playlist or playlist is empty"})");
+      }
+
+      int added = 0;
+      std::string first_title;
+      for (auto& track : tracks) {
+        track.requester = requester;
+        auto r = music_service_->play(guild_id, voice_channel_id, track);
+        if (r.success) {
+          if (added == 0) first_title = r.title;
+          added++;
+        }
+      }
+
+      crow::json::wvalue res;
+      res["success"] = added > 0;
+      if (added > 0) {
+        res["title"] = first_title;
+        res["queue_position"] = added > 1 ? 1 : 0;
+        res["tracks_added"] = added;
+      } else {
+        res["error"] = "Failed to add any tracks from playlist";
+      }
+      return crow::response(200, res);
+    }
+
+    // Check for osu! beatmap URL — extract audio from .osz instead of yt-dlp
+    static const std::regex osu_set_regex(R"(https?://osu\.ppy\.sh/beatmapsets/(\d+))");
+    static const std::regex osu_bm_regex(R"(https?://osu\.ppy\.sh/(?:beatmaps|b)/(\d+))");
+    std::smatch osu_match;
+    services::MusicPlayerService::PlayResult result;
+    uint32_t beatmapset_id = 0;
+
+    if (std::regex_search(url, osu_match, osu_set_regex)) {
+      try { beatmapset_id = std::stoul(osu_match[1].str()); } catch (...) {}
+    } else if (std::regex_search(url, osu_match, osu_bm_regex)) {
+      uint32_t beatmap_id = 0;
+      try { beatmap_id = std::stoul(osu_match[1].str()); } catch (...) {}
+
+      if (beatmap_id > 0) {
+        try {
+          auto& db = db::Database::instance();
+          auto set_opt = db.get_beatmapset_id(beatmap_id);
+          if (set_opt) {
+            beatmapset_id = static_cast<uint32_t>(*set_opt);
+            spdlog::info("[music] Resolved beatmap {} -> beatmapset {} from DB", beatmap_id, beatmapset_id);
+          }
+        } catch (const std::exception& e) {
+          spdlog::warn("[music] DB lookup failed for beatmap {}: {}", beatmap_id, e.what());
+        }
+
+        if (beatmapset_id == 0) {
+          spdlog::info("[music] Resolving beatmap {} via HTTP redirect", beatmap_id);
+          auto r = cpr::Head(cpr::Url{fmt::format("https://osu.ppy.sh/beatmaps/{}", beatmap_id)},
+                             cpr::Timeout{10000});
+          std::smatch redirect_match;
+          std::string final_url = r.url.str();
+          if (std::regex_search(final_url, redirect_match, osu_set_regex)) {
+            try { beatmapset_id = std::stoul(redirect_match[1].str()); } catch (...) {}
+            spdlog::info("[music] Resolved beatmap {} -> beatmapset {} via redirect", beatmap_id, beatmapset_id);
+          }
+        }
+      }
+    }
+
+    if (beatmapset_id > 0) {
+      spdlog::info("[music-audit] {} ({}) play osu beatmapset={} guild={}",
+                   session->username, session->discord_id, beatmapset_id, std::string(body["guild_id"].s()));
+
+      auto audio = downloader_->get_or_extract_audio(beatmapset_id);
+      if (!audio) {
+        return crow::response(500, R"({"error":"Failed to extract audio from beatmap"})");
+      }
+
+      services::TrackInfo track;
+      track.url = url;
+      track.audio_path = audio->audio_path;
+      track.title = audio->title;
+      track.duration_seconds = audio->duration_seconds;
+      track.thumbnail = audio->thumbnail;
+      track.osu_beatmapset_id = audio->beatmapset_id;
+      track.requester = requester;
+
+      result = music_service_->play(guild_id, voice_channel_id, track);
+    } else {
+      result = music_service_->play(guild_id, voice_channel_id, url, requester);
+    }
+
+    spdlog::info("[music-audit] {} ({}) play url={} guild={} success={} title={}",
+                 session->username, session->discord_id, url, std::string(body["guild_id"].s()),
+                 result.success, result.success ? result.title : result.error);
+
+    crow::json::wvalue res;
+    res["success"] = result.success;
+    if (result.success) {
+      res["title"] = result.title;
+      res["queue_position"] = result.queue_position;
+    } else {
+      res["error"] = result.error;
+    }
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/skip
+  CROW_ROUTE(app, "/osu/api/music/skip").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("guild_id")) return crow::response(400, R"({"error":"Missing guild_id"})");
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    spdlog::info("[music-audit] {} ({}) skip guild={}", session->username, session->discord_id, std::string(body["guild_id"].s()));
+    bool ok = music_service_->skip(guild_id);
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/stop
+  CROW_ROUTE(app, "/osu/api/music/stop").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("guild_id")) return crow::response(400, R"({"error":"Missing guild_id"})");
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    spdlog::info("[music-audit] {} ({}) stop guild={}", session->username, session->discord_id, std::string(body["guild_id"].s()));
+    bool ok = music_service_->stop(guild_id);
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/pause
+  CROW_ROUTE(app, "/osu/api/music/pause").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("guild_id")) return crow::response(400, R"({"error":"Missing guild_id"})");
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    spdlog::info("[music-audit] {} ({}) pause/resume guild={}", session->username, session->discord_id, std::string(body["guild_id"].s()));
+    bool ok = music_service_->pause(guild_id);
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/volume
+  CROW_ROUTE(app, "/osu/api/music/volume").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("volume") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    int volume = static_cast<int>(body["volume"].i());
+    spdlog::info("[music-audit] {} ({}) volume={} guild={}", session->username, session->discord_id, volume, std::string(body["guild_id"].s()));
+    bool ok = music_service_->set_volume(guild_id, volume);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/speed
+  CROW_ROUTE(app, "/osu/api/music/speed").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("speed") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    float speed = static_cast<float>(body["speed"].d());
+    spdlog::info("[music-audit] {} ({}) speed={}x guild={}", session->username, session->discord_id, speed, std::string(body["guild_id"].s()));
+    bool ok = music_service_->set_speed(guild_id, speed);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    if (!ok) res["error"] = "Speed must be between 0.5 and 2.0";
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/nightcore
+  CROW_ROUTE(app, "/osu/api/music/nightcore").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("enabled") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    bool enabled = body["enabled"].b();
+    spdlog::info("[music-audit] {} ({}) nightcore={} guild={}", session->username, session->discord_id, enabled, std::string(body["guild_id"].s()));
+    bool ok = music_service_->set_nightcore(guild_id, enabled);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/reverb
+  CROW_ROUTE(app, "/osu/api/music/reverb").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("enabled") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    bool enabled = body["enabled"].b();
+    spdlog::info("[music-audit] {} ({}) reverb={} guild={}", session->username, session->discord_id, enabled, std::string(body["guild_id"].s()));
+    bool ok = music_service_->set_reverb(guild_id, enabled);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/echo
+  CROW_ROUTE(app, "/osu/api/music/echo").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("enabled") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    bool enabled = body["enabled"].b();
+    spdlog::info("[music-audit] {} ({}) echo={} guild={}", session->username, session->discord_id, enabled, std::string(body["guild_id"].s()));
+    bool ok = music_service_->set_echo(guild_id, enabled);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/seek
+  CROW_ROUTE(app, "/osu/api/music/seek").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("position") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    int position = static_cast<int>(body["position"].i());
+    spdlog::info("[music-audit] {} ({}) seek={}s guild={}", session->username, session->discord_id, position, std::string(body["guild_id"].s()));
+    bool ok = music_service_->seek(guild_id, position);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/remove
+  CROW_ROUTE(app, "/osu/api/music/remove").methods("POST"_method)
+  ([this, is_music_allowed, check_voice_channel](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("index") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    auto vc_err = check_voice_channel(session->discord_id, guild_id);
+    if (!vc_err.empty()) {
+      crow::json::wvalue err_res;
+      err_res["error"] = vc_err;
+      return crow::response(403, err_res);
+    }
+
+    size_t index = static_cast<size_t>(body["index"].i());
+    spdlog::info("[music-audit] {} ({}) remove index={} guild={}", session->username, session->discord_id, index, std::string(body["guild_id"].s()));
+    bool ok = music_service_->remove(guild_id, index);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/remove_history — remove a track from history (admin only)
+  CROW_ROUTE(app, "/osu/api/music/remove_history").methods("POST"_method)
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (session->discord_id != MUSIC_ADMIN_ID) {
+      return crow::response(403, R"({"error":"Admin only"})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("index") || !body.has("guild_id")) {
+      return crow::response(400, R"({"error":"Missing required fields"})");
+    }
+
+    auto guild_id = dpp::snowflake(std::string(body["guild_id"].s()));
+    size_t index = static_cast<size_t>(body["index"].i());
+    spdlog::info("[music-audit] {} ({}) remove_history index={} guild={}", session->username, session->discord_id, index, std::string(body["guild_id"].s()));
+    bool ok = music_service_->remove_history(guild_id, index);
+
+    crow::json::wvalue res;
+    res["success"] = ok;
+    return crow::response(200, res);
+  });
+
+  CROW_ROUTE(app, "/osu/api/music/search")
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (!music_search_limiter_->allow(session->discord_id)) {
+      return crow::response(429, R"({"error":"Too many searches, slow down"})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto q = req.url_params.get("q");
+    if (!q || std::string(q).empty()) {
+      return crow::response(400, R"({"error":"Missing query parameter 'q'"})");
+    }
+
+    std::string query(q);
+    spdlog::info("[music-audit] {} ({}) search q={}", session->username, session->discord_id, query);
+    auto results = music_service_->search(query, 5);
+
+    crow::json::wvalue res;
+    std::vector<crow::json::wvalue> items;
+    for (const auto& r : results) {
+      crow::json::wvalue item;
+      item["url"] = r.url;
+      item["title"] = r.title;
+      item["thumbnail"] = r.thumbnail;
+      item["duration"] = r.duration_seconds;
+      item["channel"] = r.channel;
+      items.push_back(std::move(item));
+    }
+    res["results"] = std::move(items);
+    return crow::response(200, res);
+  });
+
+  CROW_ROUTE(app, "/osu/api/music/cookies")
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (session->discord_id != MUSIC_ADMIN_ID) {
+      return crow::response(403, R"({"error":"Admin only"})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto path = music_service_->get_cookies_path();
+    crow::json::wvalue res;
+
+    if (path.empty() || !std::filesystem::exists(path)) {
+      res["active"] = false;
+      res["filename"] = "";
+      res["size"] = 0;
+    } else {
+      res["active"] = true;
+      res["filename"] = std::filesystem::path(path).filename().string();
+      res["size"] = static_cast<int64_t>(std::filesystem::file_size(path));
+    }
+    return crow::response(200, res);
+  });
+
+  // POST /osu/api/music/cookies — upload cookies.txt
+  CROW_ROUTE(app, "/osu/api/music/cookies").methods("POST"_method)
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (session->discord_id != MUSIC_ADMIN_ID) {
+      return crow::response(403, R"({"error":"Admin only"})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("content")) {
+      return crow::response(400, R"({"error":"Missing 'content' field"})");
+    }
+
+    std::string content = body["content"].s();
+    if (content.empty()) {
+      return crow::response(400, R"({"error":"Empty cookies content"})");
+    }
+
+    // Basic validation: Netscape cookies.txt should start with a comment or domain
+    bool looks_valid = false;
+    for (const char* p = content.c_str(); *p; ++p) {
+      if (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') continue;
+      if (*p == '#' || *p == '.') { looks_valid = true; }
+      break;
+    }
+    if (!looks_valid) {
+      // Also accept lines starting with domain names (no leading dot)
+      looks_valid = content.find('\t') != std::string::npos;
+    }
+    if (!looks_valid) {
+      return crow::response(400, R"({"error":"Invalid cookies.txt format. Export using a Netscape cookies.txt extension."})");
+    }
+
+    // Write to data/cookies.txt
+    std::filesystem::create_directories("data");
+    std::string cookies_path = "data/cookies.txt";
+
+    std::ofstream out(cookies_path, std::ios::binary);
+    if (!out) {
+      spdlog::error("[music] Failed to write cookies file: {}", cookies_path);
+      return crow::response(500, R"({"error":"Failed to save cookies file"})");
+    }
+    out << content;
+    out.close();
+
+    // Save a backup so we can restore if yt-dlp corrupts the original
+    try {
+      std::filesystem::copy_file(cookies_path, cookies_path + ".bak",
+          std::filesystem::copy_options::overwrite_existing);
+    } catch (...) {}
+
+    music_service_->set_cookies_path(cookies_path);
+    spdlog::info("[music-audit] {} ({}) cookies_upload size={}", session->username, session->discord_id, content.size());
+
+    crow::json::wvalue res;
+    res["success"] = true;
+    res["size"] = static_cast<int64_t>(content.size());
+    return crow::response(200, res);
+  });
+
+  // DELETE /osu/api/music/cookies — remove cookies
+  CROW_ROUTE(app, "/osu/api/music/cookies").methods("DELETE"_method)
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+    if (session->discord_id != MUSIC_ADMIN_ID) {
+      return crow::response(403, R"({"error":"Admin only"})");
+    }
+    if (!music_service_) return crow::response(503, R"({"error":"Service unavailable"})");
+
+    auto path = music_service_->get_cookies_path();
+    if (!path.empty() && std::filesystem::exists(path)) {
+      std::filesystem::remove(path);
+    }
+    music_service_->set_cookies_path("");
+    spdlog::info("[music-audit] {} ({}) cookies_delete", session->username, session->discord_id);
+
+    crow::json::wvalue res;
+    res["success"] = true;
+    return crow::response(200, res);
+  });
+
+  // GET /osu/api/music/channels — list voice channels
+  CROW_ROUTE(app, "/osu/api/music/channels")
+  ([this, is_music_allowed](const crow::request& req) {
+    auto session = get_session(req);
+    if (!session) return crow::response(401, R"({"error":"Unauthorized"})");
+    if (!is_music_allowed(session->discord_id)) {
+      return crow::response(403, R"({"error":"Access denied. Join https://discord.gg/MV8uVdubeN and ask for music player access."})");
+    }
+
+    auto* gid_param = req.url_params.get("guild_id");
+    if (!gid_param) return crow::response(400, R"({"error":"Missing guild_id"})");
+    auto guild_id = dpp::snowflake(std::string(gid_param));
+    auto* guild = dpp::find_guild(guild_id);
+    if (!guild) {
+      return crow::response(500, R"({"error":"Guild not found in cache"})");
+    }
+
+    std::vector<crow::json::wvalue> channels;
+    for (auto ch_id : guild->channels) {
+      auto* ch = dpp::find_channel(ch_id);
+      if (ch && (ch->get_type() == dpp::CHANNEL_VOICE || ch->get_type() == dpp::CHANNEL_STAGE)) {
+        crow::json::wvalue item;
+        item["id"] = std::to_string(ch_id);
+        item["name"] = ch->name;
+        item["type"] = ch->get_type() == dpp::CHANNEL_STAGE ? "stage" : "voice";
+        channels.push_back(std::move(item));
+      }
+    }
+
+    crow::json::wvalue res;
+    res["channels"] = std::move(channels);
+
+    // Also report which channel user is currently in
+    auto user_id = dpp::snowflake(session->discord_id);
+    auto vit = guild->voice_members.find(user_id);
+    if (vit != guild->voice_members.end() && vit->second.channel_id != 0) {
+      res["user_channel"] = std::to_string(vit->second.channel_id);
+    } else {
+      res["user_channel"] = nullptr;
+    }
+
+    return crow::response(200, res);
+  });
+
+  // ==========================================================================
+  // Catch-all routes (must be LAST)
+  // ==========================================================================
 
   // Serve files from beatmap extracts
   CROW_ROUTE(app, "/osu/<string>/<path>")
@@ -1475,6 +4244,107 @@ void HttpServer::set_crawler_service(services::MessageCrawlerService* service) {
   crawler_service_ = service;
 }
 
+void HttpServer::set_user_settings_service(services::UserSettingsService* service) {
+  user_settings_service_ = service;
+}
+
+void HttpServer::set_template_service(services::EmbedTemplateService* service) {
+  template_service_ = service;
+}
+
+void HttpServer::set_music_service(services::MusicPlayerService* service) {
+  music_service_ = service;
+  if (music_service_) {
+    music_service_->set_on_state_change([this](uint64_t gid) {
+      broadcast_music_state(gid);
+    });
+  }
+}
+
+std::string HttpServer::build_state_json(uint64_t guild_id) {
+  if (!music_service_) return R"({"error":"Music service unavailable"})";
+
+  auto state = music_service_->get_state(dpp::snowflake(guild_id));
+  json res;
+  res["state"] = services::playback_state_to_string(state.state);
+  res["volume"] = state.volume;
+  res["speed"] = state.speed;
+  res["nightcore"] = state.nightcore;
+  res["reverb"] = state.reverb;
+  res["echo"] = state.echo;
+  res["pipeline_pending"] = state.pipeline_pending;
+  res["error"] = state.error;
+  res["elapsed"] = state.elapsed_seconds;
+  res["bpm"] = state.detected_bpm;
+
+  if (state.now_playing) {
+    json np;
+    np["title"] = state.now_playing->title;
+    np["url"] = state.now_playing->url;
+    np["duration"] = state.now_playing->duration_seconds;
+    np["requester"] = state.now_playing->requester;
+    np["thumbnail"] = state.now_playing->thumbnail;
+    if (!state.now_playing->chapters.empty()) {
+      json chapters = json::array();
+      for (const auto& ch : state.now_playing->chapters) {
+        chapters.push_back({{"title", ch.title}, {"start", ch.start_time}, {"end", ch.end_time}});
+      }
+      np["chapters"] = std::move(chapters);
+    }
+    res["now_playing"] = std::move(np);
+  } else {
+    res["now_playing"] = nullptr;
+  }
+
+  json queue_items = json::array();
+  for (const auto& track : state.queue) {
+    json item;
+    item["title"] = track.title;
+    item["url"] = track.url;
+    item["duration"] = track.duration_seconds;
+    item["requester"] = track.requester;
+    item["thumbnail"] = track.thumbnail;
+    queue_items.push_back(std::move(item));
+  }
+  res["queue"] = std::move(queue_items);
+
+  json history_items = json::array();
+  for (const auto& track : state.history) {
+    json item;
+    item["title"] = track.title;
+    item["url"] = track.url;
+    item["duration"] = track.duration_seconds;
+    item["requester"] = track.requester;
+    item["thumbnail"] = track.thumbnail;
+    history_items.push_back(std::move(item));
+  }
+  res["history"] = std::move(history_items);
+
+  return res.dump();
+}
+
+void HttpServer::broadcast_music_state(uint64_t guild_id) {
+  std::string payload = build_state_json(guild_id);
+  std::lock_guard lock(ws_mutex_);
+  auto it = ws_guild_connections_.find(guild_id);
+  if (it == ws_guild_connections_.end()) {
+    spdlog::debug("[ws] No WS connections for guild {}", guild_id);
+    return;
+  }
+  spdlog::debug("[ws] Broadcasting to {} connection(s) for guild {}", it->second.size(), guild_id);
+  for (auto* conn : it->second) {
+    try {
+      conn->send_text(payload);
+    } catch (const std::exception& e) {
+      spdlog::warn("[ws] Failed to send to connection: {}", e.what());
+    }
+  }
+}
+
+void HttpServer::set_config(const Config* config) {
+  config_ = config;
+}
+
 HttpServer::~HttpServer() {
   stop();
 }
@@ -1496,6 +4366,22 @@ void HttpServer::start() {
 void HttpServer::stop() {
   if (!running_.exchange(false)) {
     return;
+  }
+
+  // Clear the callback to avoid dangling reference
+  if (music_service_) {
+    music_service_->set_on_state_change(nullptr);
+  }
+
+  // Close all WebSocket connections
+  {
+    std::lock_guard lock(ws_mutex_);
+    for (auto& [gid, conns] : ws_guild_connections_) {
+      for (auto* conn : conns) {
+        try { conn->close("server shutting down"); } catch (...) {}
+      }
+    }
+    ws_guild_connections_.clear();
   }
 
   if (app_) {
