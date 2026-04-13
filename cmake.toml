@@ -5,23 +5,34 @@ cmake-before = """
 set(DPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
 
-# gRPC settings
-set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
-set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
-set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "" FORCE)
-set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+# gRPC settings (only when USE_ROSU_PP_SERVICE is ON)
+if(USE_ROSU_PP_SERVICE)
+    set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+    set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "" FORCE)
+    set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+endif()
 """
 cmake-after = """
-# Setup gRPC proto generation
+# Fetch and setup gRPC only when needed
 if(USE_ROSU_PP_SERVICE)
+    include(FetchContent)
+    FetchContent_Declare(
+        grpc
+        GIT_REPOSITORY https://github.com/grpc/grpc.git
+        GIT_TAG v1.68.0
+    )
+    FetchContent_MakeAvailable(grpc)
+
+    # Setup gRPC proto generation
     set(PP_PROTO_PATH "${CMAKE_SOURCE_DIR}/proto")
     set(PP_PROTO_FILE "${PP_PROTO_PATH}/pp.proto")
     set(PP_PROTO_GEN_DIR "${CMAKE_BINARY_DIR}/proto_gen")
@@ -107,9 +118,8 @@ fmt = { git = "https://github.com/fmtlib/fmt.git", tag = "11.0.2" }
 spdlog = { git = "https://github.com/gabime/spdlog.git", tag = "v1.14.0" }
 dpp = { git = "https://github.com/brainboxdotcc/DPP.git", tag = "v10.0.35" }
 cpr = { git = "https://github.com/libcpr/cpr.git", tag = "3b15fa82ea74739b574d705fea44959b58142eb8" }
-crow = { git = "https://github.com/CrowCpp/Crow.git", tag = "v1.2.0" }
+crow = { git = "https://github.com/CrowCpp/Crow.git", tag = "master" }
 pqxx = { git = "https://github.com/jtv/libpqxx.git", tag = "7.9.2" }
-grpc = { git = "https://github.com/grpc/grpc.git", tag = "v1.68.0" }
 
 [find-package.Threads]
 required = true
