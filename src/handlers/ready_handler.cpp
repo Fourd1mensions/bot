@@ -95,6 +95,23 @@ void ReadyHandler::update_top_user_role() {
     static constexpr uint64_t TOP_ROLE_ID = 1474061397695529177ULL;
     static constexpr uint64_t GUILD_ID = 1030424871173361704ULL;
 
+    // On first run, sync current_top_users_ from Discord guild members
+    if (!top_role_initialized_) {
+        top_role_initialized_ = true;
+        auto* guild = dpp::find_guild(GUILD_ID);
+        if (guild) {
+            for (const auto& [user_id, member] : guild->members) {
+                for (auto role_id : member.get_roles()) {
+                    if (role_id == TOP_ROLE_ID) {
+                        current_top_users_.insert(user_id);
+                        break;
+                    }
+                }
+            }
+            spdlog::info("[TopRole] Initialized with {} current role holders", current_top_users_.size());
+        }
+    }
+
     try {
         auto& db = db::Database::instance();
 

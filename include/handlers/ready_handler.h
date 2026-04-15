@@ -85,6 +85,7 @@ private:
     std::atomic<bool> sync_in_progress_{false};
 
     // Top user role state
+    bool top_role_initialized_{false};
     std::set<dpp::snowflake> current_top_users_;
 
     // Minimum members required to run validation (safety threshold)

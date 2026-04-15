@@ -426,7 +426,7 @@ void LeaderboardService::create_leaderboard(
     // Reply with leaderboard
     event.reply(msg, false, [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) mutable {
         if (callback.is_error()) {
-            spdlog::error("Failed to send leaderboard message");
+            spdlog::error("Failed to send leaderboard message: {}", callback.get_error().message);
             return;
         }
         auto reply_msg = callback.get<dpp::message>();
@@ -705,7 +705,7 @@ void LeaderboardService::create_leaderboard(
     // Reply with leaderboard
     ctx.reply(std::move(msg), false, [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) mutable {
         if (callback.is_error()) {
-            spdlog::error("Failed to send leaderboard message");
+            spdlog::error("Failed to send leaderboard message: {}", callback.get_error().message);
             return;
         }
         auto reply_msg = callback.get<dpp::message>();
