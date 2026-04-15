@@ -3,9 +3,15 @@
 #include "services/recent_score_service.h"
 #include "services/pagination_service.h"
 #include "services/message_presenter_service.h"
+#include "services/beatmap_performance_service.h"
+#include "services/chat_context_service.h"
+#include "services/user_settings_service.h"
+#include "services/embed_template_service.h"
 #include <requests.h>
 #include <cache.h>
 #include <osu.h>
+#include <utils.h>
+#include <database.h>
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
@@ -19,12 +25,20 @@ ButtonHandler::ButtonHandler(
     services::LeaderboardService& leaderboard_service,
     services::RecentScoreService& recent_score_service,
     services::MessagePresenterService& message_presenter,
-    Request& request
+    Request& request,
+    services::BeatmapPerformanceService* performance_service,
+    services::ChatContextService* chat_context_service,
+    services::UserSettingsService* user_settings_service,
+    services::EmbedTemplateService* template_service
 )
     : leaderboard_service_(leaderboard_service)
     , recent_score_service_(recent_score_service)
     , message_presenter_(message_presenter)
     , request_(request)
+    , performance_service_(performance_service)
+    , chat_context_service_(chat_context_service)
+    , user_settings_service_(user_settings_service)
+    , template_service_(template_service)
 {}
 
 void ButtonHandler::handle_button_click(const dpp::button_click_t& event) {
@@ -589,6 +603,212 @@ void ButtonHandler::handle_top_pagination(const dpp::button_click_t& event, cons
     // Update the message
     spdlog::info("[BTN] Updating message with new page {}", state.current_page + 1);
     event.reply(dpp::ir_update_message, updated_msg);
+}
+
+void ButtonHandler::handle_select_click(const dpp::select_click_t& event) {
+    const std::string& menu_id = event.custom_id;
+
+    spdlog::info("[SELECT] user={} ({}) channel={} menu={} values={}",
+        event.command.usr.id.str(), event.command.usr.username,
+        event.command.channel_id.str(), menu_id,
+        event.values.empty() ? "(none)" : event.values[0]);
+
+    if (menu_id.starts_with("map_search_set:")) {
+        handle_map_search_set(event, menu_id.substr(15));
+        return;
+    }
+
+    if (menu_id.starts_with("map_search_diff:")) {
+        handle_map_search_diff(event);
+        return;
+    }
+}
+
+void ButtonHandler::show_beatmap_result(const dpp::select_click_t& event, uint32_t beatmap_id) {
+    std::string beatmap_id_str = std::to_string(beatmap_id);
+
+    if (!performance_service_) {
+        event.reply(dpp::ir_update_message,
+            dpp::message().set_content("Performance service unavailable."));
+        return;
+    }
+
+    // Acknowledge with deferred update
+    event.reply(dpp::ir_deferred_update_message, dpp::message());
+
+    // Get beatmap info from API
+    std::string beatmap_json = request_.get_beatmap(beatmap_id_str);
+    if (beatmap_json.empty()) {
+        event.edit_original_response(dpp::message().set_content("Failed to fetch beatmap information."));
+        return;
+    }
+
+    auto beatmap_data = json::parse(beatmap_json);
+    Beatmap beatmap(beatmap_data);
+    uint32_t beatmapset_id = beatmap.get_beatmapset_id();
+    std::string beatmap_mode = beatmap.get_mode();
+
+    // Cache beatmap mapping
+    try {
+        auto& db = db::Database::instance();
+        db.cache_beatmap_id(beatmap_id, beatmapset_id, beatmap_mode);
+    } catch (const std::exception& e) {
+        spdlog::debug("[MAP-SEARCH] Failed to cache beatmap mapping: {}", e.what());
+    }
+
+    // Calculate PP at multiple accuracy levels
+    std::vector<double> acc_levels = {0.90, 0.95, 0.99, 1.00};
+    services::BeatmapDifficultyAttrs perf_difficulty;
+
+    auto pp_values = performance_service_->calculate_pp_at_accuracies(
+        beatmap_id, beatmap_mode, "", acc_levels, &perf_difficulty
+    );
+
+    if (pp_values.empty()) {
+        event.edit_original_response(dpp::message().set_content("Failed to calculate PP values."));
+        return;
+    }
+
+    services::DifficultyInfo difficulty_info{
+        .approach_rate = perf_difficulty.approach_rate,
+        .overall_difficulty = perf_difficulty.overall_difficulty,
+        .circle_size = perf_difficulty.circle_size,
+        .hp_drain_rate = perf_difficulty.hp_drain_rate,
+        .star_rating = perf_difficulty.star_rating,
+        .aim_difficulty = perf_difficulty.aim_difficulty,
+        .speed_difficulty = perf_difficulty.speed_difficulty,
+        .max_combo = perf_difficulty.max_combo
+    };
+
+    float modded_bpm = beatmap.get_bpm();
+    uint32_t modded_length = beatmap.get_total_length();
+
+    auto user_preset = services::EmbedPreset::Classic;
+    if (user_settings_service_) {
+        user_preset = user_settings_service_->get_preset(event.command.usr.id);
+    }
+
+    auto strain_graph = performance_service_->get_strain_graph(beatmap_id, "", 900, 250);
+
+    dpp::message msg = message_presenter_.build_map_info(
+        beatmap, difficulty_info, pp_values, "",
+        beatmapset_id, modded_bpm, modded_length,
+        user_preset, event.command.usr.id
+    );
+
+    if (strain_graph && !strain_graph->empty()) {
+        std::string filename = fmt::format("strains_{}.png", beatmap_id);
+        msg.add_file(filename, std::string(strain_graph->begin(), strain_graph->end()));
+        if (!msg.embeds.empty()) {
+            msg.embeds[0].set_image("attachment://" + filename);
+        }
+    }
+
+    event.edit_original_response(msg);
+}
+
+void ButtonHandler::handle_map_search_set(const dpp::select_click_t& event, const std::string& search_key) {
+    if (event.values.empty()) return;
+
+    std::string beatmapset_id_str = event.values[0];
+
+    auto& cache = cache::MemcachedCache::instance();
+    auto cached = cache.get("map_search:" + search_key);
+    if (!cached) {
+        event.reply(dpp::ir_update_message,
+            dpp::message().set_content("Search results expired. Please search again."));
+        return;
+    }
+
+    try {
+        auto search_data = json::parse(*cached);
+
+        // Find selected beatmapset
+        json selected_set;
+        for (const auto& set : search_data) {
+            if (std::to_string(set.value("id", 0)) == beatmapset_id_str) {
+                selected_set = set;
+                break;
+            }
+        }
+
+        if (selected_set.empty()) {
+            event.reply(dpp::ir_update_message,
+                dpp::message().set_content("Beatmapset not found."));
+            return;
+        }
+
+        std::string artist = selected_set.value("artist", "");
+        std::string title = selected_set.value("title", "");
+        std::string creator = selected_set.value("creator", "");
+
+        auto beatmaps = selected_set.value("beatmaps", json::array());
+
+        // Sort by star rating
+        std::vector<json> sorted_beatmaps(beatmaps.begin(), beatmaps.end());
+        std::sort(sorted_beatmaps.begin(), sorted_beatmaps.end(), [](const json& a, const json& b) {
+            return a.value("difficulty_rating", 0.0) < b.value("difficulty_rating", 0.0);
+        });
+
+        if (sorted_beatmaps.size() > 25) {
+            sorted_beatmaps.resize(25);
+        }
+
+        // Single difficulty — skip second select, show map directly
+        if (sorted_beatmaps.size() == 1) {
+            uint32_t bm_id = sorted_beatmaps[0].value("id", 0);
+            show_beatmap_result(event, bm_id);
+            return;
+        }
+
+        // Build select menu
+        dpp::component select_menu;
+        select_menu.set_type(dpp::cot_selectmenu);
+        select_menu.set_placeholder("Select difficulty...");
+        select_menu.set_id("map_search_diff:" + beatmapset_id_str);
+
+        for (const auto& bm : sorted_beatmaps) {
+            uint32_t bm_id = bm.value("id", 0);
+            std::string diff_name = bm.value("version", "Unknown");
+            double sr = bm.value("difficulty_rating", 0.0);
+            std::string mode = bm.value("mode", "osu");
+
+            std::string label = fmt::format("[{:.2f}*] {}", sr, diff_name);
+            if (label.size() > 100) label = label.substr(0, 97) + "...";
+
+            std::string desc = fmt::format("Mode: {} | ID: {}", mode, bm_id);
+
+            select_menu.add_select_option(
+                dpp::select_option(label, std::to_string(bm_id), desc)
+            );
+        }
+
+        dpp::message msg;
+        msg.set_content(fmt::format("**{} - {}** by **{}**", artist, title, creator));
+        msg.add_component(dpp::component().add_component(select_menu));
+
+        event.reply(dpp::ir_update_message, msg);
+
+    } catch (const json::exception& e) {
+        spdlog::error("[SELECT] Failed to parse search cache: {}", e.what());
+        event.reply(dpp::ir_update_message,
+            dpp::message().set_content("Internal error processing search results."));
+    }
+}
+
+void ButtonHandler::handle_map_search_diff(const dpp::select_click_t& event) {
+    if (event.values.empty()) return;
+
+    uint32_t beatmap_id = 0;
+    try {
+        beatmap_id = std::stoul(event.values[0]);
+    } catch (...) {
+        event.reply(dpp::ir_update_message,
+            dpp::message().set_content("Invalid beatmap ID."));
+        return;
+    }
+
+    show_beatmap_result(event, beatmap_id);
 }
 
 } // namespace handlers

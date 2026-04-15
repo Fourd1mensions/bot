@@ -82,6 +82,7 @@ private:
                                    int limit = 100,
                                    int offset = 0);
   std::string get_weather(const std::string_view city);
+  std::string search_beatmapsets(const std::string& query, int limit = 25);
 
   // osustats.ppy.sh API
   struct OsuStatsCounts {

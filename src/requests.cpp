@@ -469,6 +469,38 @@ Request::OsuStatsCounts Request::get_osustats_counts(const std::string& username
   return counts;
 }
 
+std::string Request::search_beatmapsets(const std::string& query, int limit) {
+  if (!update_token()) {
+    spdlog::error("[API] Can't send requests, token is dead");
+    return "";
+  }
+
+  auto start = std::chrono::steady_clock::now();
+  std::string url = "https://osu.ppy.sh/api/v2/beatmapsets/search";
+
+  log_request("GET", fmt::format("{}?q={}&limit={}", url, query, limit));
+
+  cpr::Response r = execute_with_retry([&]() {
+    return cpr::Get(
+        cpr::Url{url},
+        cpr::Parameters{{"q", query}, {"limit", std::to_string(limit)}},
+        cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                    {"Content-Type", "application/json"},
+                    {"Accept", "application/json"}});
+  });
+
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now() - start).count();
+
+  if (r.status_code == 200) {
+    spdlog::info("[API] search_beatmapsets success query='{}' duration={}ms", query, duration);
+    return r.text;
+  }
+  spdlog::warn("[API] search_beatmapsets failed query='{}' status={} duration={}ms",
+    query, r.status_code, duration);
+  return "";
+}
+
 std::string Request::get_weather(const std::string_view city) {
   const std::string& key = config.weather_api_key;
   if (key.empty()) {

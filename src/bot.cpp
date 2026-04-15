@@ -99,7 +99,8 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   // Initialize handlers
   button_handler = std::make_unique<handlers::ButtonHandler>(
-      *leaderboard_service, *recent_score_service, message_presenter, request);
+      *leaderboard_service, *recent_score_service, message_presenter, request,
+      &performance_service, &chat_context_service, &user_settings_service, &embed_template_service);
 
   slash_command_handler = std::make_unique<handlers::SlashCommandHandler>(
       command_router, request, rand, config,
@@ -156,6 +157,10 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   bot.on_button_click([this](const dpp::button_click_t& event) {
     button_handler->handle_button_click(event);
+  });
+
+  bot.on_select_click([this](const dpp::select_click_t& event) {
+    button_handler->handle_select_click(event);
   });
 
   bot.on_form_submit([this](const dpp::form_submit_t& event) {

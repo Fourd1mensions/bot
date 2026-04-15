@@ -8,9 +8,11 @@
 #include <osu.h>
 #include <utils.h>
 #include <database.h>
+#include <cache.h>
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <random>
 
 using json = nlohmann::json;
 
@@ -20,12 +22,123 @@ std::vector<std::string> MapCommand::get_aliases() const {
     return {"map", "m"};
 }
 
+static std::string generate_search_key() {
+    static std::mt19937 rng(std::random_device{}());
+    static const char chars[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    std::string key(8, ' ');
+    for (auto& c : key) {
+        c = chars[rng() % (sizeof(chars) - 1)];
+    }
+    return key;
+}
+
 void MapCommand::execute_unified(const UnifiedContext& ctx) {
     auto* s = ctx.services;
     if (!s) {
         spdlog::error("[map] ServiceContainer is null");
         return;
     }
+
+    // Check for -? search flag
+    std::string content = ctx.content;
+    size_t search_flag_pos = content.find("-?");
+    if (search_flag_pos != std::string::npos) {
+        // Extract search query after -?
+        std::string query = content.substr(search_flag_pos + 2);
+
+        // Trim leading spaces
+        size_t start = query.find_first_not_of(' ');
+        if (start == std::string::npos || query.empty()) {
+            ctx.reply(s->message_presenter.build_error_message(
+                fmt::format("Usage: `{}map -? <search query>`", ctx.prefix)));
+            return;
+        }
+        query = query.substr(start);
+
+        // Trim trailing spaces
+        size_t end = query.find_last_not_of(' ');
+        if (end != std::string::npos) {
+            query = query.substr(0, end + 1);
+        }
+
+        if (!ctx.is_slash()) {
+            s->bot.channel_typing(ctx.channel_id());
+        }
+
+        spdlog::info("[map] Search query: '{}'", query);
+
+        // Search beatmapsets via API
+        std::string result = s->request.search_beatmapsets(query);
+        if (result.empty()) {
+            ctx.reply(s->message_presenter.build_error_message("Search failed. Please try again."));
+            return;
+        }
+
+        auto data = json::parse(result);
+        auto beatmapsets = data.value("beatmapsets", json::array());
+
+        if (beatmapsets.empty()) {
+            ctx.reply(s->message_presenter.build_error_message(
+                fmt::format("No results for \"{}\".", query)));
+            return;
+        }
+
+        // Limit to 25 (Discord select menu max)
+        if (beatmapsets.size() > 25) {
+            beatmapsets = json::array();
+            for (size_t i = 0; i < 25; ++i) {
+                beatmapsets.push_back(data["beatmapsets"][i]);
+            }
+        }
+
+        // Cache search results in memcached
+        std::string search_key = generate_search_key();
+        auto& cache = cache::MemcachedCache::instance();
+        cache.set("map_search:" + search_key, beatmapsets.dump(), std::chrono::seconds(300));
+
+        // Build select menu
+        dpp::component select_menu;
+        select_menu.set_type(dpp::cot_selectmenu);
+        select_menu.set_placeholder("Select beatmapset...");
+        select_menu.set_id("map_search_set:" + search_key);
+
+        for (const auto& set : beatmapsets) {
+            uint32_t set_id = set.value("id", 0);
+            std::string artist = set.value("artist", "Unknown");
+            std::string title = set.value("title", "Unknown");
+            std::string creator = set.value("creator", "Unknown");
+
+            std::string label = fmt::format("{} - {} by {}", artist, title, creator);
+            if (label.size() > 100) label = label.substr(0, 97) + "...";
+
+            // Build difficulty names list
+            auto beatmaps = set.value("beatmaps", json::array());
+            std::vector<std::string> diff_names;
+            for (const auto& bm : beatmaps) {
+                diff_names.push_back(bm.value("version", "?"));
+            }
+            std::string desc;
+            for (const auto& d : diff_names) {
+                if (!desc.empty()) desc += " | ";
+                desc += d;
+            }
+            if (desc.size() > 100) desc = desc.substr(0, 97) + "...";
+
+            select_menu.add_select_option(
+                dpp::select_option(label, std::to_string(set_id), desc)
+            );
+        }
+
+        dpp::message msg;
+        msg.set_content(fmt::format("Search results for **\"{}\"** ({} found):",
+            query, beatmapsets.size()));
+        msg.add_component(dpp::component().add_component(select_menu));
+
+        ctx.reply(msg);
+        return;
+    }
+
+    // --- Original map command logic below ---
 
     std::string mods_filter;
     std::vector<std::string> warnings;
