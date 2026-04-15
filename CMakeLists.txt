@@ -35,24 +35,35 @@ set(CMAKE_BUILD_TYPE Release)
 set(DPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
 
-# gRPC settings
-set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
-set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
-set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
-set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "" FORCE)
-set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+# gRPC settings (only when USE_ROSU_PP_SERVICE is ON)
+if(USE_ROSU_PP_SERVICE)
+    set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+    set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
+    set(gRPC_ZLIB_PROVIDER "package" CACHE STRING "" FORCE)
+    set(gRPC_SSL_PROVIDER "package" CACHE STRING "" FORCE)
+endif()
 
 project(bot)
 
-# Setup gRPC proto generation
+# Fetch and setup gRPC only when needed
 if(USE_ROSU_PP_SERVICE)
+    include(FetchContent)
+    FetchContent_Declare(
+        grpc
+        GIT_REPOSITORY https://github.com/grpc/grpc.git
+        GIT_TAG v1.68.0
+    )
+    FetchContent_MakeAvailable(grpc)
+
+    # Setup gRPC proto generation
     set(PP_PROTO_PATH "${CMAKE_SOURCE_DIR}/proto")
     set(PP_PROTO_FILE "${PP_PROTO_PATH}/pp.proto")
     set(PP_PROTO_GEN_DIR "${CMAKE_BINARY_DIR}/proto_gen")
@@ -175,12 +186,12 @@ FetchContent_Declare(cpr
 )
 FetchContent_MakeAvailable(cpr)
 
-message(STATUS "Fetching crow (v1.2.0)...")
+message(STATUS "Fetching crow (master)...")
 FetchContent_Declare(crow
 	GIT_REPOSITORY
 		"https://github.com/CrowCpp/Crow.git"
 	GIT_TAG
-		v1.2.0
+		master
 )
 FetchContent_MakeAvailable(crow)
 
@@ -192,15 +203,6 @@ FetchContent_Declare(pqxx
 		7.9.2
 )
 FetchContent_MakeAvailable(pqxx)
-
-message(STATUS "Fetching grpc (v1.68.0)...")
-FetchContent_Declare(grpc
-	GIT_REPOSITORY
-		"https://github.com/grpc/grpc.git"
-	GIT_TAG
-		v1.68.0
-)
-FetchContent_MakeAvailable(grpc)
 
 # Target: discord-bot
 set(CMKR_TARGET discord-bot)
