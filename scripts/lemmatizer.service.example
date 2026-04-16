@@ -4,9 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=nisemonic
-WorkingDirectory=/home/nisemonic/patchouli/bot/scripts
-ExecStart=/home/nisemonic/patchouli/bot/scripts/venv/bin/python3 /home/nisemonic/patchouli/bot/scripts/lemmatizer_service.py --socket /tmp/lemmatizer.sock
+# Replace YOUR_USER with your username, or use setup_lemmatizer.sh
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/patchouli/bot/scripts
+ExecStart=/home/YOUR_USER/patchouli/bot/scripts/venv/bin/python3 /home/YOUR_USER/patchouli/bot/scripts/lemmatizer_service.py --socket /tmp/lemmatizer.sock
 Restart=on-failure
 RestartSec=5
 
