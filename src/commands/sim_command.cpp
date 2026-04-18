@@ -4,8 +4,6 @@
 #include "services/beatmap_resolver_service.h"
 #include "services/message_presenter_service.h"
 #include "services/beatmap_performance_service.h"
-#include "services/embed_template_service.h"
-#include "services/user_settings_service.h"
 #include <requests.h>
 #include <osu.h>
 #include <database.h>
@@ -353,7 +351,7 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
   std::optional<services::PerformanceAttrs> result;
 
   if (parsed.target_pp > 0.0) {
-    double                                    lo = 0.0, hi = 1.0, best_acc = 1.0;
+    double                                    lo = 0.5, hi = 1.0, best_acc = 1.0;
     double                                    best_diff = std::numeric_limits<double>::max();
     std::optional<services::PerformanceAttrs> best_result;
 
@@ -406,86 +404,63 @@ void SimCommand::execute_unified(const UnifiedContext& ctx) {
     return;
   }
 
-  double star_rating = diff_opt->star_rating;
-  int    max_combo   = diff_opt->max_combo;
+  double      star_rating = diff_opt->star_rating;
+  int         max_combo   = diff_opt->max_combo;
 
-  // Build values map for template rendering
-  std::unordered_map<std::string, std::string> values;
-  values["title"] = title;
-  values["mode"]  = parsed.mode;
+  bool        is_reverse = parsed.target_pp > 0.0;
 
-  {
-    std::string mode_display = parsed.mode;
-    std::transform(mode_display.begin(), mode_display.end(), mode_display.begin(), ::toupper);
-    values["mode_line"] =
-        (!parsed.mode.empty() && parsed.mode != "osu") ? fmt::format(" [{}]", mode_display) : "";
+  std::string embed_title =
+      fmt::format("{} [{}] \u2605{:.2f}", beatmap.get_title(), beatmap.get_version(), star_rating);
+  std::string beatmap_url = beatmap.get_beatmap_url();
+
+  std::string description;
+
+  if (is_reverse) {
+    description += fmt::format("**{:.0f}pp** requires **{:.2f}%** accuracy", result->pp,
+                               parsed.accuracy * 100);
+    if (parsed.misses > 0)
+      description += fmt::format(" with **{}** miss", parsed.misses);
+  } else {
+    description +=
+        fmt::format("**{:.2f}%** accuracy \u2192 **{:.0f}pp**", parsed.accuracy * 100, result->pp);
   }
 
-  values["gamemode_string"] = utils::gamemode_to_string(parsed.mode);
-
-  values["sr"]          = fmt::format("{:.2f}", star_rating);
-  values["acc"]         = fmt::format("{:.2f}", parsed.accuracy * 100);
-  values["mods"]        = mods;
-  values["combo"]       = std::to_string(parsed.combo);
-  values["max_combo"]   = std::to_string(max_combo);
-  values["pp"]          = fmt::format("{:.0f}", result->pp);
-  values["aim_pp"]      = fmt::format("{:.0f}", result->aim_pp);
-  values["speed_pp"]    = fmt::format("{:.0f}", result->speed_pp);
-  values["accuracy_pp"] = fmt::format("{:.0f}", result->accuracy_pp);
-  values["aim_diff"]    = fmt::format("{:.2f}", diff_opt->aim_difficulty);
-  values["speed_diff"]  = fmt::format("{:.2f}", diff_opt->speed_difficulty);
-
-  // Pre-formatted lines
-  std::string hit_counts_line;
-  if (parsed.count_100 >= 0 || parsed.count_50 >= 0 || parsed.misses > 0) {
-    hit_counts_line = "\xe2\x80\xa2 Hit counts:";
-    if (parsed.count_100 >= 0) {
-      hit_counts_line += fmt::format(" **{}**x100", parsed.count_100);
-      values["count_100"] = std::to_string(parsed.count_100);
-    }
-    if (parsed.count_50 >= 0) {
-      hit_counts_line += fmt::format(" **{}**x50", parsed.count_50);
-      values["count_50"] = std::to_string(parsed.count_50);
-    }
-    if (parsed.misses > 0) {
-      hit_counts_line += fmt::format(" **{}**xMiss", parsed.misses);
-      values["misses"] = std::to_string(parsed.misses);
-    }
-    hit_counts_line += "\n";
+  if (mods != "NM") {
+    description += fmt::format(" +**{}**", mods);
   }
-  values["hit_counts_line"] = hit_counts_line;
 
   if (parsed.combo > 0) {
-    values["combo_line"] =
-        fmt::format("\xe2\x80\xa2 Combo: **{}x** (max: **{}x**)\n", parsed.combo, max_combo);
-  } else {
-    values["combo_line"] = fmt::format("\xe2\x80\xa2 Max Combo: **{}x**\n", max_combo);
+    description += fmt::format("\nCombo: **{}x**/{}x", parsed.combo, max_combo);
+  } else if (parsed.misses == 0) {
+    description += fmt::format("\nMax Combo: **{}x**", max_combo);
   }
 
-  if (parsed.mode == "mania" && parsed.ratio > 0.0) {
-    values["ratio"]      = fmt::format("{:.2f}", parsed.ratio);
-    values["ratio_line"] = fmt::format("\xe2\x80\xa2 Ratio: **{:.2f}**\n", parsed.ratio);
-  } else {
-    values["ratio_line"] = "";
+  uint32_t modded_length = utils::apply_speed_mods_to_length(beatmap.get_total_length(), mods);
+  float    modded_bpm    = utils::apply_speed_mods_to_bpm(beatmap.get_bpm(), mods);
+  description += fmt::format(" \u2022 {:.0f}bpm \u2022 {}:{:02d}", modded_bpm, modded_length / 60,
+                             modded_length % 60);
+
+  if (parsed.count_100 >= 0 || parsed.count_50 >= 0 || (parsed.misses > 0 && !is_reverse)) {
+    description += "\n";
+    if (parsed.count_100 >= 0)
+      description += fmt::format("**{}**x100 ", parsed.count_100);
+    if (parsed.count_50 >= 0)
+      description += fmt::format("**{}**x50 ", parsed.count_50);
+    if (parsed.misses > 0)
+      description += fmt::format("**{}**xMiss", parsed.misses);
   }
 
-  // Get template and render (supports custom preset)
-  services::TemplateFields tmpl_fields;
-  if (s->template_service) {
-    auto preset = s->user_settings_service.get_preset(ctx.author_id());
-    if (preset == services::EmbedPreset::Custom) {
-      tmpl_fields = s->template_service->get_user_fields(ctx.author_id(), "sim", "custom");
-    } else {
-      tmpl_fields = s->template_service->get_fields("sim");
-    }
-  } else {
-    tmpl_fields = services::EmbedTemplateService::get_default_fields("sim");
-  }
+  auto embed = dpp::embed()
+                   .set_title(embed_title)
+                   .set_url(beatmap_url)
+                   .set_description(description)
+                   .set_image(fmt::format("https://assets.ppy.sh/beatmaps/{}/covers/slimcover.jpg",
+                                          beatmapset_id))
+                   .set_color(s->message_presenter.get_star_rating_color(star_rating));
 
-  std::string body_tmpl = tmpl_fields.count("body") ? tmpl_fields.at("body") : "";
-  std::string content   = services::render_template(body_tmpl, values);
-
-  ctx.reply(content);
+  dpp::message msg;
+  msg.add_embed(embed);
+  ctx.reply(msg);
 }
 
 } // namespace commands
