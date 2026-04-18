@@ -783,6 +783,17 @@ std::optional<std::string> MemcachedCache::get_username(int64_t user_id) {
     return get(key);
 }
 
+// Beatmap API response cache
+bool MemcachedCache::cache_beatmap(uint32_t beatmap_id, const std::string& api_response_json) {
+    std::string key = std::format("beatmap:{}", beatmap_id);
+    return set(key, api_response_json, std::chrono::seconds(86400)); // 24 hours
+}
+
+std::optional<std::string> MemcachedCache::get_cached_beatmap(uint32_t beatmap_id) {
+    std::string key = std::format("beatmap:{}", beatmap_id);
+    return get(key);
+}
+
 // Health check
 bool MemcachedCache::is_connected() {
     try {

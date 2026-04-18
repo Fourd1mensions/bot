@@ -9,6 +9,18 @@
 #include <fmt/base.h>
 #include <spdlog/spdlog.h>
 
+cpr::Session& Request::get_osu_session() {
+    thread_local cpr::Session session;
+    thread_local bool initialized = false;
+    if (!initialized) {
+        session.SetVerifySsl(true);
+        initialized = true;
+    }
+    session.SetParameters(cpr::Parameters{});
+    session.SetBody(cpr::Body{});
+    return session;
+}
+
 bool Request::set_token() {
   spdlog::info("[API] Requesting new OAuth token");
   auto start = std::chrono::steady_clock::now();
@@ -120,11 +132,12 @@ std::string Request::get_user(const std::string_view user, const bool by_id, con
   log_request("GET", url);
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(
-        cpr::Url{url},
-        cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                    {"Content-Type", "application/json"},
-                    {"Accept", "application/json"}});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    return s.Get();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -152,10 +165,12 @@ std::string Request::get_user_beatmap_score(const std::string_view beatmap,
   log_request("GET", url);
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(cpr::Url{url},
-                    cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                                {"Content-Type", "application/json"},
-                                {"Accept", "application/json"}});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    return s.Get();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -202,10 +217,12 @@ std::string Request::get_beatmap(const std::string_view beatmap) {
   log_request("GET", url);
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(cpr::Url{url},
-                    cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                                {"Content-Type", "application/json"},
-                                {"Accept", "application/json"}});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    return s.Get();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -245,12 +262,13 @@ std::string Request::get_beatmap_attributes(const std::string_view beatmap, uint
   log_request("POST", url, body_str);
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Post(
-        cpr::Url{url},
-        cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                    {"Content-Type", "application/json"},
-                    {"Accept", "application/json"}},
-        cpr::Body{body_str});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    s.SetBody(cpr::Body{body_str});
+    return s.Post();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -298,12 +316,13 @@ std::string Request::get_user_recent_scores(const std::string_view user_id,
     url, include_fails ? "1" : "0", mode, limit, offset));
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(
-        cpr::Url{url},
-        params,
-        cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                    {"Content-Type", "application/json"},
-                    {"Accept", "application/json"}});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetParameters(params);
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    return s.Get();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -348,12 +367,13 @@ std::string Request::get_user_best_scores(const std::string_view user_id,
   log_request("GET", fmt::format("{}?mode={}&limit={}&offset={}", url, mode, limit, offset));
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(
-        cpr::Url{url},
-        params,
-        cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                    {"Content-Type", "application/json"},
-                    {"Accept", "application/json"}});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetParameters(params);
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    return s.Get();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -380,11 +400,12 @@ std::string Request::get_beatmap_id_from_set(const std::string_view beatmapset_i
 
   log_request("GET", url);
 
-  cpr::Response r =
-      cpr::Get(cpr::Url{url},
-               cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                           {"Content-Type", "application/json"},
-                           {"Accept", "application/json"}});
+  auto& s = get_osu_session();
+  s.SetUrl(cpr::Url{url});
+  s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+              {"Content-Type", "application/json"},
+              {"Accept", "application/json"}});
+  cpr::Response r = s.Get();
 
   log_response(r);
 
@@ -481,12 +502,13 @@ std::string Request::search_beatmapsets(const std::string& query, int limit) {
   log_request("GET", fmt::format("{}?q={}&limit={}", url, query, limit));
 
   cpr::Response r = execute_with_retry([&]() {
-    return cpr::Get(
-        cpr::Url{url},
-        cpr::Parameters{{"q", query}, {"limit", std::to_string(limit)}},
-        cpr::Header{{"Authorization", "Bearer " + config.access_token},
-                    {"Content-Type", "application/json"},
-                    {"Accept", "application/json"}});
+    auto& s = get_osu_session();
+    s.SetUrl(cpr::Url{url});
+    s.SetParameters(cpr::Parameters{{"q", query}, {"limit", std::to_string(limit)}});
+    s.SetHeader(cpr::Header{{"Authorization", "Bearer " + config.access_token},
+                {"Content-Type", "application/json"},
+                {"Accept", "application/json"}});
+    return s.Get();
   });
 
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(

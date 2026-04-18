@@ -19,6 +19,9 @@ private:
   Config config;
   bool set_token();
 
+  // Thread-local HTTP session for osu! API (connection keep-alive)
+  cpr::Session& get_osu_session();
+
   // Verbose logging helpers
   void log_request(const std::string& method, const std::string& url,
                    const std::string& body = "") const {

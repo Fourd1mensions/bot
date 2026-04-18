@@ -68,6 +68,10 @@ public:
     bool cache_username(int64_t user_id, const std::string& username);
     std::optional<std::string> get_username(int64_t user_id);
 
+    // Beatmap API response cache (24 hour TTL, ranked/loved/approved only)
+    bool cache_beatmap(uint32_t beatmap_id, const std::string& api_response_json);
+    std::optional<std::string> get_cached_beatmap(uint32_t beatmap_id);
+
     // Health check
     bool is_connected();
 
