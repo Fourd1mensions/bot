@@ -168,333 +168,6 @@ dpp::message LeaderboardService::build_page(const LeaderboardState& state,
                                                    state.current_page, state.caller_discord_id);
 }
 
-void LeaderboardService::create_leaderboard(const dpp::message_create_t&      event,
-                                            const std::string&                mods_filter,
-                                            const std::optional<std::string>& beatmap_id_override,
-                                            LbSortMethod                      sort_method) {
-  dpp::snowflake channel_id = event.msg.channel_id;
-
-  // Use override if provided, otherwise get from chat context
-  std::string beatmap_id;
-  if (beatmap_id_override.has_value()) {
-    beatmap_id = *beatmap_id_override;
-  } else {
-    std::string stored_id = chat_context_service_.get_beatmap_id(channel_id);
-    beatmap_id            = beatmap_resolver_service_.resolve_beatmap_id(stored_id);
-  }
-
-  if (beatmap_id.empty()) {
-    event.reply(message_presenter_.build_error_message(error_messages::NO_BEATMAP_IN_CHANNEL));
-    return;
-  }
-
-  // Show typing indicator
-  bot_.channel_typing(event.msg.channel_id);
-
-  auto     start = std::chrono::steady_clock::now();
-
-  bool     has_mods    = !mods_filter.empty() && mods_filter != "NM";
-  uint32_t mods_bitset = has_mods ? utils::mods_string_to_bitset(mods_filter) : 0;
-
-  auto     beatmap_future = std::async(std::launch::async, [this, &beatmap_id]() -> std::string {
-    try {
-      auto&    mc    = cache::MemcachedCache::instance();
-      uint32_t bm_id = std::stoul(beatmap_id);
-      if (auto cached = mc.get_cached_beatmap(bm_id)) {
-        spdlog::debug("[LB] Beatmap {} cache hit", bm_id);
-        return *cached;
-      }
-    } catch (...) {}
-    return request_.get_beatmap(beatmap_id);
-  });
-
-  std::future<std::string> attributes_future;
-  if (has_mods) {
-    attributes_future = std::async(std::launch::async, [this, &beatmap_id, mods_bitset]() {
-      return request_.get_beatmap_attributes(beatmap_id, mods_bitset);
-    });
-  }
-
-  std::string response_beatmap = beatmap_future.get();
-  if (response_beatmap.empty()) {
-    auto elapsed =
-        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start)
-            .count();
-
-    if (elapsed > 8) {
-      event.reply(message_presenter_.build_error_message(
-          fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
-    } else {
-      event.reply(message_presenter_.build_error_message(error_messages::API_NO_RESPONSE));
-    }
-    spdlog::error("Unable to send request");
-    return;
-  }
-
-  Beatmap beatmap(response_beatmap);
-
-  if (beatmap.is_ranked() || beatmap.is_loved()) {
-    try {
-      auto& mc = cache::MemcachedCache::instance();
-      mc.cache_beatmap(beatmap.get_beatmap_id(), response_beatmap);
-    } catch (...) {}
-  }
-
-  uint32_t beatmapset_id = beatmap.get_beatmapset_id();
-  std::jthread([this, beatmapset_id]() {
-    beatmap_downloader_.download_osz(beatmapset_id);
-  }).detach();
-
-  if (has_mods && attributes_future.valid()) {
-    std::string attributes_response = attributes_future.get();
-    if (!attributes_response.empty()) {
-      try {
-        json attributes_json = json::parse(attributes_response);
-        beatmap.set_modded_attributes(attributes_json);
-      } catch (const json::exception& e) {
-        spdlog::error("Failed to parse beatmap attributes: {}", e.what());
-      }
-    }
-  }
-
-  auto               user_mappings = user_mapping_service_.get_all_mappings();
-  std::vector<Score> scores(user_mappings.size());
-
-  // Create stable index mapping to avoid race condition
-  std::unordered_map<std::string, size_t> user_to_index;
-  size_t                                  idx = 0;
-  for (const auto& [dis_id, user_id] : user_mappings) {
-    user_to_index[user_id] = idx++;
-  }
-
-  // Parse required mods for filtering
-  std::vector<std::string> required_mods;
-  if (!mods_filter.empty()) {
-    for (size_t i = 0; i + 1 < mods_filter.length(); i += 2) {
-      required_mods.push_back(mods_filter.substr(i, 2));
-    }
-  }
-
-  spdlog::info("[!lb] Fetching scores and usernames for {} users", user_mappings.size());
-
-  // Use TBB for parallel score fetching
-  arena_.execute([&]() {
-    tbb::parallel_for_each(
-        std::begin(user_mappings), std::end(user_mappings), [&](const auto& pair) {
-          const auto& [dis_id, user_id] = pair;
-          auto&       score             = scores[user_to_index[user_id]];
-          std::string scores_j = request_.get_user_beatmap_score(beatmap_id, user_id, true);
-          if (!scores_j.empty()) {
-            json j = json::parse(scores_j);
-            j      = j["scores"];
-
-            // Filter scores by mods if filter is specified
-            if (!required_mods.empty()) {
-              auto filtered_scores = json::array();
-              for (const auto& score_json : j) {
-                // Parse mods from this score
-                std::string score_mods_str;
-                if (score_json.contains("mods") && score_json["mods"].is_array()) {
-                  for (const auto& mod : score_json["mods"]) {
-                    if (mod.is_string()) {
-                      score_mods_str += mod.get<std::string>();
-                    } else if (mod.is_object() && mod.contains("acronym")) {
-                      score_mods_str += mod.at("acronym").get<std::string>();
-                    }
-                  }
-                }
-                if (score_mods_str.empty())
-                  score_mods_str = "NM";
-
-                // Check if all required mods are present
-                bool has_all_mods = true;
-                for (const auto& required_mod : required_mods) {
-                  if (score_mods_str.find(required_mod) == std::string::npos) {
-                    has_all_mods = false;
-                    break;
-                  }
-                }
-
-                if (has_all_mods) {
-                  filtered_scores.push_back(score_json);
-                }
-              }
-              j = filtered_scores;
-            }
-
-            // If we have scores after filtering, take the best one
-            if (!j.empty()) {
-              // sort specific user's scores
-              std::sort(j.begin(), j.end(), [](const json& a, const json& b) {
-                return std::make_tuple(a["pp"], a["score"]) > std::make_tuple(b["pp"], b["score"]);
-              });
-              score.from_json(j.at(0));
-              std::string username =
-                  user_resolver_service_.get_username_cached(score.get_user_id());
-              score.set_username(username);
-            }
-          }
-        });
-  });
-
-  // Remove empty scores
-  for (auto it = scores.begin(); it != scores.end();) {
-    if (!it->is_empty)
-      ++it;
-    else
-      it = scores.erase(it);
-  }
-
-  auto elapsed =
-      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start)
-          .count();
-
-  if (scores.empty()) {
-    if (elapsed > 8) {
-      event.reply(message_presenter_.build_error_message(
-          fmt::format(error_messages::API_TIMEOUT_FORMAT, elapsed)));
-      spdlog::warn("[CMD] !lb took {}s and found no scores (slow API response)", elapsed);
-    } else {
-      event.reply(message_presenter_.build_error_message(
-          fmt::format(error_messages::NO_SCORES_ON_BEATMAP_FORMAT, beatmap.to_string())));
-    }
-    return;
-  }
-
-  bool needs_pp_calculation =
-      std::any_of(scores.begin(), scores.end(), [](const Score& s) { return s.get_pp() <= 0.01; });
-
-  if (needs_pp_calculation) {
-    uint32_t bm_id = beatmap.get_beatmap_id();
-    spdlog::info("[LB] Calculating PP for {} scores (Loved/unranked map)", scores.size());
-
-    std::vector<size_t>         pp_indices;
-    std::vector<SimulateParams> pp_params;
-
-    for (size_t i = 0; i < scores.size(); ++i) {
-      auto& score = scores[i];
-      if (score.get_pp() <= 0.01 && score.get_mode() == "osu") {
-        SimulateParams params;
-        params.accuracy  = score.get_accuracy();
-        params.mods      = score.get_mods();
-        params.lazer     = score.get_set_on_lazer();
-        params.combo     = score.get_max_combo();
-        params.misses    = score.get_count_miss();
-        params.count_300 = score.get_count_300();
-        params.count_100 = score.get_count_100();
-        params.count_50  = score.get_count_50();
-
-        pp_indices.push_back(i);
-        pp_params.push_back(params);
-      }
-    }
-
-    std::vector<std::optional<services::PerformanceAttrs>> pp_results(pp_indices.size());
-    arena_.execute([&]() {
-      tbb::parallel_for(size_t(0), pp_indices.size(), [&](size_t i) {
-        pp_results[i] =
-            performance_service_.calculate_pp(beatmapset_id, bm_id, "osu", pp_params[i]);
-      });
-    });
-
-    for (size_t i = 0; i < pp_indices.size(); ++i) {
-      if (pp_results[i].has_value()) {
-        scores[pp_indices[i]].set_pp(static_cast<float_t>(pp_results[i]->pp));
-      }
-    }
-  }
-
-  // Debug: log pp values before sort
-  spdlog::info("[LB] Before sort ({} scores):", scores.size());
-  for (size_t i = 0; i < scores.size(); ++i) {
-    spdlog::info("[LB]   {}: {} pp={:.2f} score={}", i, scores[i].get_username(),
-                 scores[i].get_pp(), scores[i].get_total_score());
-  }
-
-  // Sort scores based on selected method
-  if (scores.size() > 1) {
-    switch (sort_method) {
-      case LbSortMethod::Score:
-        stdr::sort(scores, [](const Score& a, const Score& b) {
-          return a.get_total_score() > b.get_total_score();
-        });
-        break;
-      case LbSortMethod::Acc:
-        stdr::sort(scores, [](const Score& a, const Score& b) {
-          return a.get_accuracy() > b.get_accuracy();
-        });
-        break;
-      case LbSortMethod::Combo:
-        stdr::sort(scores, [](const Score& a, const Score& b) {
-          return a.get_max_combo() > b.get_max_combo();
-        });
-        break;
-      case LbSortMethod::Date:
-        stdr::sort(scores, [](const Score& a, const Score& b) {
-          return a.get_created_at() > b.get_created_at();
-        });
-        break;
-      case LbSortMethod::PP:
-      default:
-        stdr::sort(scores, [](const Score& a, const Score& b) {
-          return std::make_tuple(a.get_pp(), a.get_total_score()) >
-              std::make_tuple(b.get_pp(), b.get_total_score());
-        });
-        break;
-    }
-  }
-
-  // Debug: log pp values after sort
-  spdlog::info("[LB] After sort:");
-  for (size_t i = 0; i < scores.size(); ++i) {
-    spdlog::info("[LB]   {}: {} pp={:.2f} score={}", i, scores[i].get_username(),
-                 scores[i].get_pp(), scores[i].get_total_score());
-  }
-
-  if (elapsed > 8) {
-    spdlog::warn("[CMD] !lb took {}s to complete (slow API response)", elapsed);
-  }
-
-  // Create leaderboard state and build first page
-  std::string      beatmap_mode = beatmap.get_mode();
-  LeaderboardState lb_state(std::move(scores), std::move(beatmap), 0, beatmap_mode, mods_filter,
-                            sort_method, event.msg.author.id);
-  dpp::message     msg = build_page(lb_state);
-
-  // Reply with leaderboard
-  event.reply(
-      msg, false,
-      [this, lb_state = std::move(lb_state)](const dpp::confirmation_callback_t& callback) mutable {
-        if (callback.is_error()) {
-          spdlog::error("Failed to send leaderboard message: {}", callback.get_error().message);
-          return;
-        }
-        auto reply_msg = callback.get<dpp::message>();
-
-        // Store state in Memcached with 5-minute TTL
-        bool cache_success = false;
-        try {
-          auto& cache = cache::MemcachedCache::instance();
-          cache.cache_leaderboard(reply_msg.id.str(), lb_state);
-          spdlog::debug("Stored leaderboard state for message {} in Memcached", reply_msg.id.str());
-          cache_success = true;
-        } catch (const std::exception& e) {
-          spdlog::error("Failed to cache leaderboard state - pagination will not work: {}",
-                        e.what());
-        }
-
-        // Schedule button removal only if there's more than one page
-        if (lb_state.total_pages > 1) {
-          dpp::snowflake msg_id  = reply_msg.id;
-          dpp::snowflake chan_id = reply_msg.channel_id;
-
-          // Remove buttons after 2 minutes
-          auto ttl = std::chrono::minutes(2);
-          schedule_button_removal(chan_id, msg_id, ttl);
-        }
-      });
-}
-
 void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ctx,
                                             const std::string&                mods_filter,
                                             const std::optional<std::string>& beatmap_id_override,
@@ -525,7 +198,7 @@ void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ct
   bool     has_mods    = !mods_filter.empty() && mods_filter != "NM";
   uint32_t mods_bitset = has_mods ? utils::mods_string_to_bitset(mods_filter) : 0;
 
-  auto     beatmap_future = std::async(std::launch::async, [this, &beatmap_id]() -> std::string {
+  auto     beatmap_future = std::async(std::launch::async, [this, beatmap_id]() -> std::string {
     try {
       auto&    mc    = cache::MemcachedCache::instance();
       uint32_t bm_id = std::stoul(beatmap_id);
@@ -533,13 +206,13 @@ void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ct
         spdlog::debug("[LB] Beatmap {} cache hit", bm_id);
         return *cached;
       }
-    } catch (...) {}
+    } catch (const std::exception& e) { spdlog::debug("cache error: {}", e.what()); }
     return request_.get_beatmap(beatmap_id);
   });
 
   std::future<std::string> attributes_future;
   if (has_mods) {
-    attributes_future = std::async(std::launch::async, [this, &beatmap_id, mods_bitset]() {
+    attributes_future = std::async(std::launch::async, [this, beatmap_id, mods_bitset]() {
       return request_.get_beatmap_attributes(beatmap_id, mods_bitset);
     });
   }
@@ -566,7 +239,7 @@ void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ct
     try {
       auto& mc = cache::MemcachedCache::instance();
       mc.cache_beatmap(beatmap.get_beatmap_id(), response_beatmap);
-    } catch (...) {}
+    } catch (const std::exception& e) { spdlog::debug("cache error: {}", e.what()); }
   }
 
   uint32_t beatmapset_id = beatmap.get_beatmapset_id();
