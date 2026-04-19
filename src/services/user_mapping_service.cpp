@@ -1,76 +1,67 @@
 #include "services/user_mapping_service.h"
 #include "database.h"
 #include <spdlog/spdlog.h>
-#include <nlohmann/json.hpp>
-#include <fstream>
 
 namespace services {
 
-bool UserMappingService::load_from_file(const std::string& filepath) {
-    // Note: We're now loading from database instead of file
-    // This method is kept for backward compatibility but delegates to database
-    try {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto& db = db::Database::instance();
-        auto mappings = db.get_all_user_mappings();
-
-        mappings_.clear();
-        for (const auto& [discord_id, osu_id] : mappings) {
-            mappings_[discord_id] = std::to_string(osu_id);
-        }
-
-        spdlog::info("Loaded {} user mappings from database", mappings_.size());
-        return true;
-    } catch (const std::exception& e) {
-        spdlog::error("Failed to load user mappings from database: {}", e.what());
-        return false;
-    }
+bool UserMappingService::load_from_file(const std::string&) {
+  return true;
 }
 
-bool UserMappingService::save_to_file(const std::string& filepath) {
-    // Note: Mappings are now automatically saved to database via set_mapping()
-    // This method is kept for backward compatibility but does nothing
-    return true;
+bool UserMappingService::save_to_file(const std::string&) {
+  return true;
 }
 
 void UserMappingService::set_mapping(dpp::snowflake discord_id, const std::string& osu_user_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    mappings_[discord_id] = osu_user_id;
+  try {
+    auto& db = db::Database::instance();
+    db.set_user_mapping(discord_id, std::stoll(osu_user_id));
+  } catch (const std::exception& e) {
+    spdlog::error("[UserMapping] Failed to set mapping: {}", e.what());
+  }
 }
 
 std::optional<std::string> UserMappingService::get_osu_id(dpp::snowflake discord_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = mappings_.find(discord_id);
-    if (it != mappings_.end()) {
-        return it->second;
+  try {
+    auto& db         = db::Database::instance();
+    auto  osu_id_opt = db.get_osu_user_id(discord_id);
+    if (osu_id_opt) {
+      return std::to_string(*osu_id_opt);
     }
-    return std::nullopt;
+  } catch (const std::exception& e) {
+    spdlog::error("[UserMapping] DB lookup failed: {}", e.what());
+  }
+  return std::nullopt;
 }
 
 bool UserMappingService::has_mapping(dpp::snowflake discord_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return mappings_.find(discord_id) != mappings_.end();
+  return get_osu_id(discord_id).has_value();
 }
 
 bool UserMappingService::remove_mapping(dpp::snowflake discord_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    // Remove from database first
-    try {
-        auto& db = db::Database::instance();
-        db.remove_user_mapping(discord_id);
-        spdlog::info("[UserMapping] Removed user {} from tracking (database)", discord_id.str());
-    } catch (const std::exception& e) {
-        spdlog::error("[UserMapping] Failed to remove user {} from database: {}", discord_id.str(), e.what());
-    }
-
-    // Remove from in-memory cache
-    return mappings_.erase(discord_id) > 0;
+  try {
+    auto& db = db::Database::instance();
+    return db.remove_user_mapping(discord_id);
+  } catch (const std::exception& e) {
+    spdlog::error("[UserMapping] Failed to remove mapping: {}", e.what());
+    return false;
+  }
 }
 
 std::unordered_map<dpp::snowflake, std::string> UserMappingService::get_all_mappings() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return mappings_;
+  try {
+    auto&                                           db          = db::Database::instance();
+    auto                                            db_mappings = db.get_all_user_mappings();
+
+    std::unordered_map<dpp::snowflake, std::string> result;
+    for (const auto& [discord_id, osu_id] : db_mappings) {
+      result[discord_id] = std::to_string(osu_id);
+    }
+    return result;
+  } catch (const std::exception& e) {
+    spdlog::error("[UserMapping] Failed to get mappings from DB: {}", e.what());
+    return {};
+  }
 }
 
 } // namespace services
