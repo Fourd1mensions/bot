@@ -4,14 +4,6 @@
 
 namespace services {
 
-bool UserMappingService::load_from_file(const std::string&) {
-  return true;
-}
-
-bool UserMappingService::save_to_file(const std::string&) {
-  return true;
-}
-
 void UserMappingService::set_mapping(dpp::snowflake discord_id, const std::string& osu_user_id) {
   try {
     auto& db = db::Database::instance();

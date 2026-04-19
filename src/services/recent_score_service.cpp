@@ -86,7 +86,7 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     if (auto cached = mc.get_cached_beatmap(beatmap_id)) {
       beatmap_response = *cached;
     }
-  } catch (...) {}
+  } catch (const std::exception& e) { spdlog::debug("cache error: {}", e.what()); }
   if (beatmap_response.empty()) {
     beatmap_response = request_.get_beatmap(beatmap_id_str);
   }
@@ -102,7 +102,7 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
     try {
       auto& mc = cache::MemcachedCache::instance();
       mc.cache_beatmap(beatmap_id, beatmap_response);
-    } catch (...) {}
+    } catch (const std::exception& e) { spdlog::debug("cache error: {}", e.what()); }
   }
 
   if (has_mods) {
@@ -112,7 +112,7 @@ dpp::message RecentScoreService::build_page(RecentScoreState& state) {
       try {
         json attributes_json = json::parse(attributes_response);
         beatmap.set_modded_attributes(attributes_json);
-      } catch (...) {}
+      } catch (const std::exception& e) { spdlog::debug("cache error: {}", e.what()); }
     }
   }
 

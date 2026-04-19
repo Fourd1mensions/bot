@@ -33,12 +33,6 @@ void ReadyHandler::handle(const dpp::ready_t& event, bool delete_commands) {
   member_handler_.set_guild_config(guild_id, autorole_id);
   target_guild_id_ = guild_id;
 
-  // Load user mappings from database via service
-  user_mapping_service_.load_from_file(""); // Empty path - loads from database
-
-  // Chat map loading is not needed - will be populated on-demand from database
-  spdlog::info("Chat map will be populated on-demand from database");
-
   // Process pending button removals from database (for persistence across restarts)
   process_pending_button_removals();
 
