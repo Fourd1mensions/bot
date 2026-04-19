@@ -198,7 +198,7 @@ void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ct
   bool     has_mods    = !mods_filter.empty() && mods_filter != "NM";
   uint32_t mods_bitset = has_mods ? utils::mods_string_to_bitset(mods_filter) : 0;
 
-  auto     beatmap_future = std::async(std::launch::async, [this, &beatmap_id]() -> std::string {
+  auto     beatmap_future = std::async(std::launch::async, [this, beatmap_id]() -> std::string {
     try {
       auto&    mc    = cache::MemcachedCache::instance();
       uint32_t bm_id = std::stoul(beatmap_id);
@@ -212,7 +212,7 @@ void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ct
 
   std::future<std::string> attributes_future;
   if (has_mods) {
-    attributes_future = std::async(std::launch::async, [this, &beatmap_id, mods_bitset]() {
+    attributes_future = std::async(std::launch::async, [this, beatmap_id, mods_bitset]() {
       return request_.get_beatmap_attributes(beatmap_id, mods_bitset);
     });
   }

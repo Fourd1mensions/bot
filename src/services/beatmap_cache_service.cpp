@@ -9,8 +9,9 @@ using json = nlohmann::json;
 
 namespace services {
 
-BeatmapCacheService::BeatmapCacheService(BeatmapDownloader& downloader, Request& request, dpp::cluster& bot)
-    : downloader_(downloader), request_(request), bot_(bot) {}
+BeatmapCacheService::BeatmapCacheService(BeatmapDownloader& downloader, Request& request,
+                                         dpp::cluster& bot) :
+    downloader_(downloader), request_(request), bot_(bot) {}
 
 BeatmapCacheService::~BeatmapCacheService() {
   stop();
@@ -43,7 +44,7 @@ void BeatmapCacheService::queue_download(uint32_t beatmapset_id) {
   queued_ids_.insert(beatmapset_id);
 
   spdlog::info("[CACHE] Queued beatmapset {} for background download (queue size: {})",
-    beatmapset_id, download_queue_.size());
+               beatmapset_id, download_queue_.size());
 
   queue_cv_.notify_one();
 }
@@ -51,10 +52,11 @@ void BeatmapCacheService::queue_download(uint32_t beatmapset_id) {
 void BeatmapCacheService::queue_download_by_beatmap_id(uint32_t beatmap_id) {
   // First check database cache
   try {
-    auto& db = db::Database::instance();
-    auto beatmapset_opt = db.get_beatmapset_id(beatmap_id);
+    auto& db             = db::Database::instance();
+    auto  beatmapset_opt = db.get_beatmapset_id(beatmap_id);
     if (beatmapset_opt) {
-      spdlog::info("[CACHE] Resolved beatmap {} -> beatmapset {} from DB", beatmap_id, *beatmapset_opt);
+      spdlog::info("[CACHE] Resolved beatmap {} -> beatmapset {} from DB", beatmap_id,
+                   *beatmapset_opt);
       queue_download(static_cast<uint32_t>(*beatmapset_opt));
       return;
     }
@@ -76,13 +78,14 @@ void BeatmapCacheService::queue_download_by_beatmap_id(uint32_t beatmap_id) {
       json j = json::parse(response);
       if (j.contains("beatmapset_id")) {
         uint32_t beatmapset_id = j["beatmapset_id"].get<uint32_t>();
-        spdlog::info("[CACHE] Resolved beatmap {} -> beatmapset {} from API", beatmap_id, beatmapset_id);
+        spdlog::info("[CACHE] Resolved beatmap {} -> beatmapset {} from API", beatmap_id,
+                     beatmapset_id);
 
         // Cache the mapping in database
         try {
           auto& db = db::Database::instance();
           db.cache_beatmap_id(beatmap_id, beatmapset_id);
-        } catch (...) {}
+        } catch (const std::exception& e) { spdlog::debug("error: {}", e.what()); }
 
         queue_download(beatmapset_id);
       }
@@ -127,13 +130,14 @@ void BeatmapCacheService::worker_thread() {
     {
       std::unique_lock<std::mutex> lock(queue_mutex_);
 
-      queue_cv_.wait_for(lock, std::chrono::seconds(5), [this] {
-        return !download_queue_.empty() || !running_;
-      });
+      queue_cv_.wait_for(lock, std::chrono::seconds(5),
+                         [this] { return !download_queue_.empty() || !running_; });
 
-      if (!running_) break;
+      if (!running_)
+        break;
 
-      if (download_queue_.empty()) continue;
+      if (download_queue_.empty())
+        continue;
 
       beatmapset_id = download_queue_.front();
       download_queue_.pop();
@@ -149,7 +153,7 @@ void BeatmapCacheService::worker_thread() {
 void BeatmapCacheService::process_download(uint32_t beatmapset_id) {
   spdlog::info("[CACHE] Processing background download for beatmapset {}", beatmapset_id);
 
-  auto start_time = std::chrono::steady_clock::now();
+  auto                             start_time = std::chrono::steady_clock::now();
   std::vector<MirrorAttemptResult> attempts;
 
   bool success = downloader_.download_osz_with_attempts(beatmapset_id, attempts);
@@ -160,8 +164,8 @@ void BeatmapCacheService::process_download(uint32_t beatmapset_id) {
   if (success) {
     total_downloaded_++;
     record_download(beatmapset_id);
-    spdlog::info("[CACHE] Successfully cached beatmapset {} in {}ms",
-      beatmapset_id, total_time.count());
+    spdlog::info("[CACHE] Successfully cached beatmapset {} in {}ms", beatmapset_id,
+                 total_time.count());
   } else {
     total_failed_++;
 
@@ -178,17 +182,17 @@ void BeatmapCacheService::process_download(uint32_t beatmapset_id) {
       recently_failed_.erase(beatmapset_id);
     }).detach();
 
-    spdlog::warn("[CACHE] Failed to cache beatmapset {} after {} attempts in {}ms",
-      beatmapset_id, attempts.size(), total_time.count());
+    spdlog::warn("[CACHE] Failed to cache beatmapset {} after {} attempts in {}ms", beatmapset_id,
+                 attempts.size(), total_time.count());
 
     // Send error report to Discord
     send_error_report(beatmapset_id, attempts, total_time);
   }
 }
 
-void BeatmapCacheService::send_error_report(uint32_t beatmapset_id,
-                                             const std::vector<::MirrorAttemptResult>& attempts,
-                                             std::chrono::milliseconds total_time) {
+void BeatmapCacheService::send_error_report(uint32_t                                  beatmapset_id,
+                                            const std::vector<::MirrorAttemptResult>& attempts,
+                                            std::chrono::milliseconds                 total_time) {
   if (error_channel_id_ == 0) {
     spdlog::warn("[CACHE] Error channel not set, skipping error report");
     return;
@@ -208,8 +212,8 @@ void BeatmapCacheService::send_error_report(uint32_t beatmapset_id,
   for (size_t i = 0; i < attempts.size(); i++) {
     const auto& attempt = attempts[i];
     attempts_detail += fmt::format("**{}. {}**\n", i + 1, attempt.mirror_url);
-    attempts_detail += fmt::format("  Status: {} | Time: {}ms\n",
-      attempt.status_code, attempt.duration.count());
+    attempts_detail +=
+        fmt::format("  Status: {} | Time: {}ms\n", attempt.status_code, attempt.duration.count());
     if (!attempt.error_message.empty()) {
       attempts_detail += fmt::format("  Error: {}\n", attempt.error_message);
     }
@@ -233,8 +237,8 @@ void BeatmapCacheService::send_error_report(uint32_t beatmapset_id,
 
   bot_.message_create(msg, [beatmapset_id](const dpp::confirmation_callback_t& callback) {
     if (callback.is_error()) {
-      spdlog::error("[CACHE] Failed to send error report for beatmapset {}: {}",
-        beatmapset_id, callback.get_error().message);
+      spdlog::error("[CACHE] Failed to send error report for beatmapset {}: {}", beatmapset_id,
+                    callback.get_error().message);
     }
   });
 }
@@ -252,7 +256,7 @@ void BeatmapCacheService::record_download(uint32_t beatmapset_id) {
 
 void BeatmapCacheService::cleanup_old_timestamps() const {
   // Cleanup in-memory fallback
-  auto now = std::chrono::steady_clock::now();
+  auto now        = std::chrono::steady_clock::now();
   auto cutoff_24h = now - std::chrono::hours(24);
   while (!download_timestamps_.empty() && download_timestamps_.front() < cutoff_24h) {
     download_timestamps_.pop_front();
@@ -264,7 +268,7 @@ void BeatmapCacheService::cleanup_old_timestamps() const {
     try {
       db::Database::instance().cleanup_old_downloads();
       last_db_cleanup = now;
-    } catch (...) {}
+    } catch (const std::exception& e) { spdlog::debug("error: {}", e.what()); }
   }
 }
 
@@ -276,10 +280,11 @@ size_t BeatmapCacheService::get_downloads_last_hour() const {
     // Fallback to in-memory
     std::lock_guard<std::mutex> lock(stats_mutex_);
     cleanup_old_timestamps();
-    auto cutoff = std::chrono::steady_clock::now() - std::chrono::hours(1);
-    size_t count = 0;
+    auto   cutoff = std::chrono::steady_clock::now() - std::chrono::hours(1);
+    size_t count  = 0;
     for (const auto& ts : download_timestamps_) {
-      if (ts >= cutoff) count++;
+      if (ts >= cutoff)
+        count++;
     }
     return count;
   }
@@ -299,16 +304,16 @@ size_t BeatmapCacheService::get_downloads_last_24h() const {
 
 std::string BeatmapCacheService::get_status_string() const {
   size_t hour = get_downloads_last_hour();
-  size_t day = get_downloads_last_24h();
+  size_t day  = get_downloads_last_24h();
 
   // Get total from database (actual cached files count)
   size_t total = 0;
   try {
     auto& db = db::Database::instance();
-    total = db.count_beatmap_files();
+    total    = db.count_beatmap_files();
   } catch (const std::exception& e) {
     spdlog::warn("[CACHE] Failed to get beatmap files count: {}", e.what());
-    total = total_downloaded_.load();  // Fallback to session count
+    total = total_downloaded_.load(); // Fallback to session count
   }
 
   // Get disk usage info
@@ -325,9 +330,9 @@ std::string BeatmapCacheService::get_status_string() const {
       }
 
       // Get free space on the filesystem
-      auto space_info = std::filesystem::space(osz_dir);
-      double used_gb = static_cast<double>(used_bytes) / (1024 * 1024 * 1024);
-      double free_gb = static_cast<double>(space_info.available) / (1024 * 1024 * 1024);
+      auto   space_info = std::filesystem::space(osz_dir);
+      double used_gb    = static_cast<double>(used_bytes) / (1024 * 1024 * 1024);
+      double free_gb    = static_cast<double>(space_info.available) / (1024 * 1024 * 1024);
 
       disk_info = fmt::format(" | {:.1f}G/{:.1f}G", used_gb, free_gb);
     }

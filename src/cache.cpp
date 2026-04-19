@@ -800,7 +800,7 @@ std::set<dpp::snowflake> MemcachedCache::get_top_role_users() {
     for (const auto& id : j) {
       result.insert(dpp::snowflake(id.get<uint64_t>()));
     }
-  } catch (...) {}
+  } catch (const std::exception& e) { spdlog::debug("error: {}", e.what()); }
   return result;
 }
 
