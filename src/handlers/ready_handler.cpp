@@ -240,17 +240,6 @@ void ReadyHandler::sync_guild_members() {
   sync_member_count_     = 0;
   expected_member_count_ = 0;
 
-  // Clear discord_users cache before re-syncing
-  // This ensures users who left the server are removed from cache
-  try {
-    db::Database::instance().clear_discord_users();
-    spdlog::info("[MemberSync] Cleared discord_users cache");
-  } catch (const std::exception& e) {
-    spdlog::error("[MemberSync] Failed to clear discord_users cache: {}", e.what());
-    sync_in_progress_ = false;
-    return;
-  }
-
   // Fetch guild info first to get expected member count, then start pagination
   bot_.guild_get(guild_id, [this, guild_id](const dpp::confirmation_callback_t& callback) {
     if (callback.is_error()) {
