@@ -311,7 +311,7 @@ void LeaderboardService::create_leaderboard(const commands::UnifiedContext&   ct
                 // Check if all required mods are present
                 bool has_all_mods = true;
                 for (const auto& required_mod : required_mods) {
-                  if (score_mods_str.find(required_mod) == std::string::npos) {
+                  if (!utils::has_mod(score_mods_str, required_mod)) {
                     has_all_mods = false;
                     break;
                   }
