@@ -41,12 +41,9 @@
 
 namespace stdr = std::ranges;
 
-Bot::Bot(const std::string& token, bool delete_commands)
-    : bot(token),
-      arena(tbb::task_arena(16)),
-      beatmap_resolver_service(request),
-      performance_service(beatmap_downloader),
-      user_resolver_service(request) {
+Bot::Bot(const std::string& token, bool delete_commands) :
+    bot(token), arena(tbb::task_arena(16)), beatmap_resolver_service(request),
+    performance_service(beatmap_downloader), user_resolver_service(request) {
   bot.intents = dpp::i_default_intents | dpp::i_message_content | dpp::i_guild_members;
 
   // Configure spdlog with structured logging pattern
@@ -60,19 +57,36 @@ Bot::Bot(const std::string& token, bool delete_commands)
   }
 
   // Configure webhook service
-  webhook_service.set_webhook(services::WebhookChannel::MirrorErrors, config.webhooks.mirror_errors);
+  webhook_service.set_webhook(services::WebhookChannel::MirrorErrors,
+                              config.webhooks.mirror_errors);
   webhook_service.set_webhook(services::WebhookChannel::General, config.webhooks.general);
   webhook_service.set_webhook(services::WebhookChannel::Debug, config.webhooks.debug);
+
+  static constexpr uint64_t ERROR_CHANNEL_ID = 1284189678035009670ULL;
+  db::Database::instance().set_alert_callback(
+      [this](const std::string& msg) {
+        dpp::message m(dpp::snowflake(ERROR_CHANNEL_ID), "");
+        dpp::embed   embed;
+        embed.set_title("Database Connection Lost");
+        embed.set_description(msg);
+        embed.set_color(0xE74C3C);
+        embed.set_timestamp(time(nullptr));
+        m.add_embed(embed);
+        bot.message_create(m);
+      },
+      std::chrono::seconds(300));
 
   // Configure beatmap downloader from config
   beatmap_downloader.set_mirrors(config.beatmap_mirrors);
   beatmap_downloader.set_webhook_service(&webhook_service);
 
   // Initialize HTTP server with config values
-  http_server = std::make_unique<HttpServer>(config.http_host, config.http_port, config.beatmap_mirrors);
+  http_server =
+      std::make_unique<HttpServer>(config.http_host, config.http_port, config.beatmap_mirrors);
 
   // Initialize beatmap cache service for proactive caching
-  beatmap_cache_service = std::make_unique<services::BeatmapCacheService>(beatmap_downloader, request, bot);
+  beatmap_cache_service =
+      std::make_unique<services::BeatmapCacheService>(beatmap_downloader, request, bot);
   beatmap_cache_service->set_error_channel(dpp::snowflake(1284189678035009670ULL));
 
   // Link performance service to cache service for background .osz downloads
@@ -89,7 +103,8 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   // Initialize beatmap extract service
   beatmap_extract_service = std::make_unique<services::BeatmapExtractService>(
-      beatmap_downloader, request, chat_context_service, beatmap_resolver_service, message_presenter);
+      beatmap_downloader, request, chat_context_service, beatmap_resolver_service,
+      message_presenter);
 
   // Initialize message crawler service
   message_crawler_service = std::make_unique<services::MessageCrawlerService>(bot);
@@ -99,28 +114,26 @@ Bot::Bot(const std::string& token, bool delete_commands)
 
   // Initialize handlers
   button_handler = std::make_unique<handlers::ButtonHandler>(
-      *leaderboard_service, *recent_score_service, message_presenter, request,
-      &performance_service, &chat_context_service, &user_settings_service, &embed_template_service);
+      *leaderboard_service, *recent_score_service, message_presenter, request, &performance_service,
+      &chat_context_service, &user_settings_service, &embed_template_service);
 
   slash_command_handler = std::make_unique<handlers::SlashCommandHandler>(
-      command_router, request, rand, config,
-      chat_context_service, user_mapping_service, beatmap_resolver_service,
-      message_presenter, beatmap_downloader, bot);
+      command_router, request, rand, config, chat_context_service, user_mapping_service,
+      beatmap_resolver_service, message_presenter, beatmap_downloader, bot);
 
-  message_handler = std::make_unique<handlers::MessageHandler>(
-      command_router, chat_context_service, bot);
+  message_handler =
+      std::make_unique<handlers::MessageHandler>(command_router, chat_context_service, bot);
 
-  member_handler = std::make_unique<handlers::MemberHandler>(
-      user_mapping_service, *slash_command_handler, bot);
+  member_handler =
+      std::make_unique<handlers::MemberHandler>(user_mapping_service, *slash_command_handler, bot);
 
   ready_handler = std::make_unique<handlers::ReadyHandler>(
       user_mapping_service, *leaderboard_service, beatmap_cache_service.get(),
       *slash_command_handler, *member_handler, bot);
 
   // Set up callbacks for proactive beatmap caching
-  chat_context_service.set_beatmapset_callback([this](uint32_t beatmapset_id) {
-    beatmap_cache_service->queue_download(beatmapset_id);
-  });
+  chat_context_service.set_beatmapset_callback(
+      [this](uint32_t beatmapset_id) { beatmap_cache_service->queue_download(beatmapset_id); });
   chat_context_service.set_beatmap_callback([this](uint32_t beatmap_id) {
     beatmap_cache_service->queue_download_by_beatmap_id(beatmap_id);
   });
@@ -131,41 +144,24 @@ Bot::Bot(const std::string& token, bool delete_commands)
   // Register event handlers - route DPP logs through spdlog
   bot.on_log([](const dpp::log_t& event) {
     switch (event.severity) {
-      case dpp::ll_trace:
-        spdlog::trace("[DPP] {}", event.message);
-        break;
-      case dpp::ll_debug:
-        spdlog::debug("[DPP] {}", event.message);
-        break;
-      case dpp::ll_info:
-        spdlog::info("[DPP] {}", event.message);
-        break;
-      case dpp::ll_warning:
-        spdlog::warn("[DPP] {}", event.message);
-        break;
-      case dpp::ll_error:
-        spdlog::error("[DPP] {}", event.message);
-        break;
-      case dpp::ll_critical:
-        spdlog::critical("[DPP] {}", event.message);
-        break;
-      default:
-        spdlog::info("[DPP] {}", event.message);
-        break;
+      case dpp::ll_trace: spdlog::trace("[DPP] {}", event.message); break;
+      case dpp::ll_debug: spdlog::debug("[DPP] {}", event.message); break;
+      case dpp::ll_info: spdlog::info("[DPP] {}", event.message); break;
+      case dpp::ll_warning: spdlog::warn("[DPP] {}", event.message); break;
+      case dpp::ll_error: spdlog::error("[DPP] {}", event.message); break;
+      case dpp::ll_critical: spdlog::critical("[DPP] {}", event.message); break;
+      default: spdlog::info("[DPP] {}", event.message); break;
     }
   });
 
-  bot.on_button_click([this](const dpp::button_click_t& event) {
-    button_handler->handle_button_click(event);
-  });
+  bot.on_button_click(
+      [this](const dpp::button_click_t& event) { button_handler->handle_button_click(event); });
 
-  bot.on_select_click([this](const dpp::select_click_t& event) {
-    button_handler->handle_select_click(event);
-  });
+  bot.on_select_click(
+      [this](const dpp::select_click_t& event) { button_handler->handle_select_click(event); });
 
-  bot.on_form_submit([this](const dpp::form_submit_t& event) {
-    button_handler->handle_form_submit(event);
-  });
+  bot.on_form_submit(
+      [this](const dpp::form_submit_t& event) { button_handler->handle_form_submit(event); });
 
   bot.on_message_create([this](const dpp::message_create_t& event) {
     message_handler->handle_create(event);
@@ -183,13 +179,11 @@ Bot::Bot(const std::string& token, bool delete_commands)
     }
   });
 
-  bot.on_guild_member_add([this](const dpp::guild_member_add_t& event) {
-    member_handler->handle_add(event);
-  });
+  bot.on_guild_member_add(
+      [this](const dpp::guild_member_add_t& event) { member_handler->handle_add(event); });
 
-  bot.on_guild_member_remove([this](const dpp::guild_member_remove_t& event) {
-    member_handler->handle_remove(event);
-  });
+  bot.on_guild_member_remove(
+      [this](const dpp::guild_member_remove_t& event) { member_handler->handle_remove(event); });
 
   bot.on_guild_member_update([](const dpp::guild_member_update_t& event) {
     auto uid = std::to_string(static_cast<uint64_t>(event.updated.user_id));
@@ -199,10 +193,10 @@ Bot::Bot(const std::string& token, bool delete_commands)
   bot.on_slashcommand([this](const dpp::slashcommand_t& event) {
     // Call thinking() immediately for commands that make API calls
     const std::string& cmd = event.command.get_command_name();
-    if (cmd == "score" || cmd == "weather" || cmd == "avatar" ||
-        cmd == "rs" || cmd == "bg" || cmd == "audio" || cmd == "map" ||
-        cmd == "compare" || cmd == "sim" || cmd == "lb" || cmd == "settings" || cmd == "osc" ||
-        cmd == "osu" || cmd == "taiko" || cmd == "mania" || cmd == "ctb" || cmd == "catch") {
+    if (cmd == "score" || cmd == "weather" || cmd == "avatar" || cmd == "rs" || cmd == "bg" ||
+        cmd == "audio" || cmd == "map" || cmd == "compare" || cmd == "sim" || cmd == "lb" ||
+        cmd == "settings" || cmd == "osc" || cmd == "osu" || cmd == "taiko" || cmd == "mania" ||
+        cmd == "ctb" || cmd == "catch") {
       event.thinking();
     }
     std::jthread([this, event = std::move(event)]() mutable {
@@ -234,25 +228,24 @@ Bot::Bot(const std::string& token, bool delete_commands)
   });
 
   // Create service container for command dependency injection
-  service_container = std::make_unique<ServiceContainer>(ServiceContainer{
-    .bot = bot,
-    .request = request,
-    .beatmap_downloader = beatmap_downloader,
-    .config = config,
-    .chat_context_service = chat_context_service,
-    .beatmap_resolver_service = beatmap_resolver_service,
-    .user_resolver_service = user_resolver_service,
-    .user_mapping_service = user_mapping_service,
-    .message_presenter = message_presenter,
-    .command_params_service = command_params_service,
-    .performance_service = performance_service,
-    .recent_score_service = *recent_score_service,
-    .leaderboard_service = *leaderboard_service,
-    .beatmap_extract_service = *beatmap_extract_service,
-    .user_settings_service = user_settings_service,
-    .beatmap_cache_service = beatmap_cache_service.get(),
-    .template_service = &embed_template_service
-  });
+  service_container = std::make_unique<ServiceContainer>(
+      ServiceContainer{.bot                      = bot,
+                       .request                  = request,
+                       .beatmap_downloader       = beatmap_downloader,
+                       .config                   = config,
+                       .chat_context_service     = chat_context_service,
+                       .beatmap_resolver_service = beatmap_resolver_service,
+                       .user_resolver_service    = user_resolver_service,
+                       .user_mapping_service     = user_mapping_service,
+                       .message_presenter        = message_presenter,
+                       .command_params_service   = command_params_service,
+                       .performance_service      = performance_service,
+                       .recent_score_service     = *recent_score_service,
+                       .leaderboard_service      = *leaderboard_service,
+                       .beatmap_extract_service  = *beatmap_extract_service,
+                       .user_settings_service    = user_settings_service,
+                       .beatmap_cache_service    = beatmap_cache_service.get(),
+                       .template_service         = &embed_template_service});
 
   // Load user settings from DB
   user_settings_service.load_from_db();
